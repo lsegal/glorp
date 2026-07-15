@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -87,12 +86,16 @@ func main() {
 	if ui != nil {
 		wOut = io.Discard
 	}
+	var agentOutput io.Writer
+	if ui != nil {
+		agentOutput = ui.Writer()
+	}
 	var quota func(context.Context) string
 	if *agent == "codex" {
 		quotaReader := &codexQuotaReader{Binary: binary}
 		quota = quotaReader.Read
 	}
-	w := &Watcher{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: ui, Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Output: output}, Out: wOut}
+	w := &Watcher{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: ui, Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Output: agentOutput}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		server = &http.Server{Addr: *listen, Handler: WebhookHandler{Events: events, Secret: *webhookSecret, WebhookPath: *webhookPath}}
@@ -467,10 +470,9 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
 	args := commandArgs(r, issue)
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
-	var output bytes.Buffer
-	var agentOutput io.Writer = &output
-	if r.Output != nil {
-		agentOutput = io.MultiWriter(&output, r.Output)
+	agentOutput := r.Output
+	if agentOutput == nil {
+		agentOutput = io.Discard
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	if err := cmd.Run(); err != nil {
@@ -478,7 +480,7 @@ func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
 		if issue.Target != "" {
 			repo = issueRepository(issue.Target, issue)
 		}
-		report, reportErr := bugReportURL(repo, issue, args, output.String())
+		report, reportErr := bugReportURL(repo, issue, args)
 		if reportErr != nil {
 			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", err, reportErr)
 		}
@@ -487,11 +489,7 @@ func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
 	return nil
 }
 
-func scrubRobotOutput(_ string) string {
-	return "[robot output omitted]"
-}
-
-func bugReportURL(repo string, issue Issue, args []string, output string) (string, error) {
+func bugReportURL(repo string, issue Issue, args []string) (string, error) {
 	target, err := parseTarget(repo)
 	if err != nil || target.isProject || target.repo == "" {
 		if err == nil {
@@ -502,7 +500,7 @@ func bugReportURL(repo string, issue Issue, args []string, output string) (strin
 	values := url.Values{}
 	values.Set("template", "bug_report.md")
 	values.Set("title", fmt.Sprintf("Agent failed while handling issue #%d", issue.Number))
-	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n%s\n", target.repo, issue.Number, strings.Join(args, " "), scrubRobotOutput(output)))
+	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n[robot output omitted]\n", target.repo, issue.Number, strings.Join(args, " ")))
 	return "https://github.com/" + target.repo + "/issues/new?" + values.Encode(), nil
 }
 func validRepo(repo string) bool {

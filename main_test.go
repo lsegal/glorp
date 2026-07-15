@@ -131,21 +131,8 @@ func TestIssueListArgsDisablesFilter(t *testing.T) {
 	}
 }
 
-func TestScrubRobotOutput(t *testing.T) {
-	robotOutput := "package private\nTOKEN=ghp_1234567890 secret:top-secret Authorization: Bearer abc.def"
-	got := scrubRobotOutput(robotOutput)
-	for _, leaked := range []string{"package private", "ghp_1234567890", "top-secret", "Bearer abc.def"} {
-		if strings.Contains(got, leaked) {
-			t.Fatalf("output leaked %q: %s", leaked, got)
-		}
-	}
-	if got != "[robot output omitted]" {
-		t.Fatalf("unexpected scrubbed output: %s", got)
-	}
-}
-
 func TestBugReportURL(t *testing.T) {
-	got, err := bugReportURL("owner/repo", Issue{Number: 12}, []string{"agent", "--flag"}, "private source code and token=secret\nfailed")
+	got, err := bugReportURL("owner/repo", Issue{Number: 12}, []string{"agent", "--flag"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +140,7 @@ func TestBugReportURL(t *testing.T) {
 	if err != nil || u.Path != "/owner/repo/issues/new" {
 		t.Fatalf("URL = %q, %v", got, err)
 	}
-	if strings.Contains(got, "private source code") || strings.Contains(got, "secret") || !strings.Contains(got, "bug_report.md") {
-		t.Fatalf("URL contains unsafe or missing data: %s", got)
+	if strings.Contains(got, "private source code") || strings.Contains(got, "secret") || !strings.Contains(got, "bug_report.md") || !strings.Contains(got, "robot+output+omitted") {
+		t.Fatalf("URL contains agent output or is missing the redacted placeholder: %s", got)
 	}
 }
