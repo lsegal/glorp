@@ -55,6 +55,7 @@ func (w *Watcher) logf(format string, args ...interface{}) {
 }
 
 func (w *Watcher) Run(ctx context.Context) error {
+	startedAt := time.Now()
 	if !validRepo(w.Repo) {
 		return fmt.Errorf("repository must be OWNER/REPO")
 	}
@@ -90,7 +91,13 @@ func (w *Watcher) Run(ctx context.Context) error {
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
 		newIssues := make([]Issue, 0)
 		for _, issue := range issues {
-			if issue.Number > 0 && !seen[issue.Number] {
+			// Issues that were already open when the watcher started are not
+			// part of this watcher's workload. In particular, don't add them to
+			// seen: the state file represents issues this process has observed,
+			// not a snapshot of all existing issues.
+			if issue.Number > 0 &&
+				(issue.CreatedAt.IsZero() || !issue.CreatedAt.Before(startedAt)) &&
+				!seen[issue.Number] {
 				seen[issue.Number] = true
 				newIssues = append(newIssues, issue)
 			}

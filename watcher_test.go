@@ -81,6 +81,33 @@ func TestWatcherSeedsThenRunsNewIssuesWithLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestWatcherDoesNotMarkIssuesCreatedBeforeStartupSeen(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().Add(-time.Hour)
+	src := &fakeSource{batches: [][]Issue{{{Number: 1, CreatedAt: old}}}}
+	w := &Watcher{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state"), Issues: src, Runner: &fakeRunner{release: make(chan struct{})},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	seen, err := loadState(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen[1] {
+		t.Fatalf("pre-existing issue was marked seen: %v", seen)
+	}
+}
 func TestInvalidRepo(t *testing.T) {
 	w := &Watcher{Repo: "bad", Interval: time.Second, Concurrency: 1}
 	if w.Run(context.Background()) == nil {
