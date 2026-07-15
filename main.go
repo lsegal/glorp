@@ -4,9 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -23,7 +25,7 @@ func main() {
 	allIssues := flag.Bool("all-issues", false, "disable the default issue filter")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: gh-watch [flags] OWNER/REPO")
+		fmt.Fprintln(os.Stderr, "usage: gh-watch [flags] OWNER/REPO or GitHub URL")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
@@ -70,8 +72,15 @@ var managedLabels = []managedLabel{
 }
 
 func (g GHCLI) EnsureLabels(ctx context.Context, repo string) error {
+	target, err := parseTarget(repo)
+	if err != nil {
+		return err
+	}
+	if target.isProject {
+		return nil
+	}
 	for _, label := range managedLabels {
-		cmd := exec.CommandContext(ctx, g.Binary, "label", "create", label.name, "--repo", repo, "--color", label.color, "--description", label.description, "--force")
+		cmd := exec.CommandContext(ctx, g.Binary, "label", "create", label.name, "--repo", target.repo, "--color", label.color, "--description", label.description, "--force")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("ensure %s label: %w: %s", label.name, err, strings.TrimSpace(string(output)))
 		}
@@ -80,17 +89,67 @@ func (g GHCLI) EnsureLabels(ctx context.Context, repo string) error {
 }
 
 func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
+	target, err := parseTarget(repo)
+	if err != nil {
+		return nil, err
+	}
 	args := issueListArgs(repo, g.Filter, g.AllIssues)
+	if target.isProject {
+		args = projectListArgs(target, g.Filter, g.AllIssues)
+	}
 	cmd := exec.CommandContext(ctx, g.Binary, args...)
-	return decodeIssues(cmd.Output())
+	output, err := cmd.Output()
+	if target.isProject {
+		return decodeProjectIssues(output, err)
+	}
+	return decodeIssues(output, err)
 }
 
 func issueListArgs(repo, filter string, allIssues bool) []string {
-	args := []string{"issue", "list", "--repo", repo, "--state", "open", "--limit", "1000"}
+	target, err := parseTarget(repo)
+	if err != nil || target.isProject {
+		return nil
+	}
+	args := []string{"issue", "list", "--repo", target.repo, "--state", "open", "--limit", "1000"}
 	if !allIssues && filter != "" {
 		args = append(args, "--search", filter)
 	}
 	return append(args, "--json", "number,title,state,createdAt")
+}
+
+type target struct {
+	repo, owner, projectID string
+	isProject              bool
+}
+
+func parseTarget(value string) (target, error) {
+	if validRepo(value) {
+		return target{repo: value}, nil
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.RawQuery != "" || u.Fragment != "" {
+		return target{}, fmt.Errorf("target must be OWNER/REPO or a GitHub repository/project URL")
+	}
+	parts := strings.Split(strings.Trim(path.Clean(u.Path), "/"), "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return target{repo: parts[0] + "/" + strings.TrimSuffix(parts[1], ".git")}, nil
+	}
+	if len(parts) == 4 && (parts[0] == "users" || parts[0] == "orgs") && parts[2] == "projects" && parts[1] != "" && parts[3] != "" {
+		return target{owner: parts[1], projectID: parts[3], isProject: true}, nil
+	}
+	if len(parts) == 4 && parts[2] == "projects" && parts[0] != "" && parts[1] != "" && parts[3] != "" {
+		return target{repo: parts[0] + "/" + parts[1], owner: parts[0], projectID: parts[3], isProject: true}, nil
+	}
+	return target{}, fmt.Errorf("target must be OWNER/REPO or a GitHub repository/project URL")
+}
+
+func projectListArgs(t target, filter string, allIssues bool) []string {
+	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
+	query := "is:issue is:open"
+	if !allIssues && filter != "" {
+		query += " " + strings.Replace(strings.TrimSpace(filter), "=", ":", 1)
+	}
+	return append(args, "--query", query)
 }
 func decodeIssues(data []byte, err error) ([]Issue, error) {
 	if err != nil {
