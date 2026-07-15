@@ -57,7 +57,7 @@ func TestParseIssues(t *testing.T) {
 		t.Fatalf("%v %#v", err, got)
 	}
 }
-func TestWatcherSeedsThenRunsNewIssuesWithLimit(t *testing.T) {
+func TestWatcherRunsUnseenIssuesWithLimit(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 1}, {Number: 2}}, {{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4}}}}
 	r := &fakeRunner{release: make(chan struct{})}
@@ -68,33 +68,35 @@ func TestWatcherSeedsThenRunsNewIssuesWithLimit(t *testing.T) {
 	go func() { done <- w.Run(ctx) }()
 	time.Sleep(20 * time.Millisecond)
 	close(r.release)
+	time.Sleep(20 * time.Millisecond)
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if len(r.got) != 2 || r.max > 2 {
+	if len(r.got) != 4 || r.max > 2 {
 		t.Fatalf("got=%v max=%d", r.got, r.max)
 	}
-	for _, want := range []string{"established the baseline", "discovered 2 new issue(s)", "tasks: 2 running", "shutdown requested"} {
+	for _, want := range []string{"discovered 2 new issue(s)", "tasks: 2 running", "shutdown requested"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("logs missing %q:\n%s", want, logs.String())
 		}
 	}
 }
-
-func TestWatcherDoesNotMarkIssuesCreatedBeforeStartupSeen(t *testing.T) {
+func TestWatcherTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().Add(-time.Hour)
 	src := &fakeSource{batches: [][]Issue{{{Number: 1, CreatedAt: old}}}}
+	r := &fakeRunner{release: make(chan struct{})}
 	w := &Watcher{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
-		StatePath: filepath.Join(dir, "state"), Issues: src, Runner: &fakeRunner{release: make(chan struct{})},
+		StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 	time.Sleep(20 * time.Millisecond)
+	close(r.release)
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -104,8 +106,8 @@ func TestWatcherDoesNotMarkIssuesCreatedBeforeStartupSeen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seen[1] {
-		t.Fatalf("pre-existing issue was marked seen: %v", seen)
+	if !seen[1] || len(r.got) != 1 || r.got[0] != 1 {
+		t.Fatalf("pre-existing unseen issue was not handled: seen=%v got=%v", seen, r.got)
 	}
 }
 func TestInvalidRepo(t *testing.T) {

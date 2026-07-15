@@ -55,7 +55,6 @@ func (w *Watcher) logf(format string, args ...interface{}) {
 }
 
 func (w *Watcher) Run(ctx context.Context) error {
-	startedAt := time.Now()
 	if !validRepo(w.Repo) {
 		return fmt.Errorf("repository must be OWNER/REPO")
 	}
@@ -73,7 +72,6 @@ func (w *Watcher) Run(ctx context.Context) error {
 		return err
 	}
 	w.logf("watching %s (poll every %s, concurrency %d; %d handled issue(s) loaded)", w.Repo, w.Interval, w.Concurrency, len(seen))
-	first := len(seen) == 0
 	sem := make(chan struct{}, w.Concurrency)
 	var wg sync.WaitGroup
 	var tasks taskState
@@ -91,13 +89,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
 		newIssues := make([]Issue, 0)
 		for _, issue := range issues {
-			// Issues that were already open when the watcher started are not
-			// part of this watcher's workload. In particular, don't add them to
-			// seen: the state file represents issues this process has observed,
-			// not a snapshot of all existing issues.
-			if issue.Number > 0 &&
-				(issue.CreatedAt.IsZero() || !issue.CreatedAt.Before(startedAt)) &&
-				!seen[issue.Number] {
+			if issue.Number > 0 && !seen[issue.Number] {
 				seen[issue.Number] = true
 				newIssues = append(newIssues, issue)
 			}
@@ -105,11 +97,6 @@ func (w *Watcher) Run(ctx context.Context) error {
 		if err := saveState(w.StatePath, seen); err != nil {
 			w.logf("poll #%d failed while saving state: %v", n, err)
 			return err
-		}
-		if first {
-			first = false
-			w.logf("poll #%d established the baseline; %d issue(s) marked handled", n, len(newIssues))
-			return nil
 		}
 		if len(newIssues) == 0 {
 			w.logf("poll #%d complete; no new issues (tasks: %d running, %d queued)", n, running, queued)
