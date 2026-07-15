@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Skip project-board issues that are already in progress or completed.
 - Avoid applying the `agent-started` label to issues watched through a project board.
 - Add a `--version` flag and promote changelog entries during releases.
 - Use the versioned changelog section as GitHub release notes.

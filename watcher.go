@@ -336,13 +336,28 @@ func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen boo
 	if isActive {
 		return false
 	}
-	if wasActive || !seen {
+	if wasActive {
 		return true
 	}
 	if isProjectTarget(repo) {
+		if !seen {
+			return projectStatusAllowsDispatch(issue.ProjectStatus)
+		}
 		return issue.ProjectStatus == "In Progress"
 	}
+	if !seen {
+		return true
+	}
 	return hasLabel(issue, agentStartedLabel)
+}
+
+func projectStatusAllowsDispatch(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "in progress", "done", "completed":
+		return false
+	default:
+		return true
+	}
 }
 
 func newSessionID() (string, error) {

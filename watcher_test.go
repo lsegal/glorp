@@ -329,6 +329,17 @@ func TestHasAgentStartedLabel(t *testing.T) {
 
 func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
 	project := "https://github.com/users/lsegal/projects/3"
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false) {
+		t.Fatal("new in-progress project issue was dispatched")
+	}
+	for _, status := range []string{"Done", "Completed"} {
+		if shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false) {
+			t.Fatalf("new %s project issue was dispatched", status)
+		}
+	}
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, false) {
+		t.Fatal("new todo project issue was not dispatched")
+	}
 	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, true) {
 		t.Fatal("in-progress project issue was not reclaimed")
 	}
