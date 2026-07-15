@@ -59,8 +59,8 @@ func (w *Watcher) logf(format string, args ...interface{}) {
 }
 
 func (w *Watcher) Run(ctx context.Context) error {
-	if !validRepo(w.Repo) {
-		return fmt.Errorf("repository must be OWNER/REPO")
+	if _, err := parseTarget(w.Repo); err != nil {
+		return err
 	}
 	if w.Interval <= 0 {
 		return fmt.Errorf("interval must be positive")
@@ -204,6 +204,36 @@ func parseIssues(data []byte) ([]Issue, error) {
 	var issues []Issue
 	if err := json.Unmarshal(data, &issues); err != nil {
 		return nil, fmt.Errorf("decode issues: %w", err)
+	}
+	return issues, nil
+}
+
+type projectItem struct {
+	Content *projectContent `json:"content"`
+}
+
+type projectContent struct {
+	Issue
+	Type string `json:"type"`
+}
+
+type projectList struct {
+	Items []projectItem `json:"items"`
+}
+
+func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
+	if err != nil {
+		return nil, fmt.Errorf("list project items: %w", err)
+	}
+	var result projectList
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode project items: %w", err)
+	}
+	issues := make([]Issue, 0, len(result.Items))
+	for _, item := range result.Items {
+		if item.Content != nil && item.Content.Type == "Issue" {
+			issues = append(issues, item.Content.Issue)
+		}
 	}
 	return issues, nil
 }
