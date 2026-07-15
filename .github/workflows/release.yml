@@ -24,13 +24,61 @@ jobs:
         id: release
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="v${{ inputs.version }}"
+            tag="${{ inputs.version }}"
+            tag="v${tag#v}"
           else
             tag="$GITHUB_REF_NAME"
           fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release version: $tag" >&2; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Promote changelog and create tag
+        id: tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          date="$(date -u +%Y-%m-%d)"
+          if ! grep -qF "## ${TAG} - " CHANGELOG.md; then
+            awk -v tag="$TAG" -v date="$date" '
+              BEGIN { in_unreleased=0; count=0; promoted=0 }
+              /^## Unreleased$/ { print; print ""; in_unreleased=1; next }
+              in_unreleased && /^## / {
+                print "## " tag " - " date; print ""
+                for (i = 1; i <= count; i++) print entries[i]
+                print ""; in_unreleased=0; promoted=1
+              }
+              in_unreleased && /^- / { entries[++count]=$0; next }
+              in_unreleased { next }
+              { print }
+              END {
+                if (in_unreleased) {
+                  print "## " tag " - " date; print ""
+                  for (i = 1; i <= count; i++) print entries[i]
+                  promoted=1
+                }
+                if (!promoted) exit 1
+              }
+            ' CHANGELOG.md > CHANGELOG.md.tmp
+            mv CHANGELOG.md.tmp CHANGELOG.md
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add CHANGELOG.md
+            git diff --cached --quiet || git commit -m "Prepare ${TAG} release"
+            git push origin HEAD:main
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build archives and installer
+        if: steps.tag.outputs.created != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -40,7 +88,7 @@ jobs:
           for target in "linux amd64 tar.gz" "linux arm64 tar.gz" "darwin amd64 tar.gz" "darwin arm64 tar.gz" "windows amd64 zip" "windows arm64 zip"; do
             read -r goos goarch extension <<< "$target"
             name="gh-watch_${version}_${goos}_${goarch}"
-            GOOS="$goos" GOARCH="$goarch" go build -o "dist/$name/gh-watch" .
+            GOOS="$goos" GOARCH="$goarch" go build -ldflags "-X main.version=$version" -o "dist/$name/gh-watch" .
             if [[ "$goos" == "windows" ]]; then
               mv "dist/$name/gh-watch" "dist/$name/gh-watch.exe"
               (cd "dist/$name" && zip -q -r "../${name}.${extension}" gh-watch.exe)
@@ -51,11 +99,13 @@ jobs:
           cp install.sh "dist/install.sh"
           cp install.ps1 "dist/install.ps1"
       - name: Validate and publish gh-fix skill
+        if: steps.tag.outputs.created != 'true'
         run: |
           if gh skill publish --help >/dev/null 2>&1; then gh skill publish --fix; else echo 'gh skill publish is unavailable; public GitHub skill source will be indexed by skills.sh'; fi
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Create GitHub release
+        if: steps.tag.outputs.created != 'true'
         run: gh release create "${{ steps.release.outputs.tag }}" dist/*.tar.gz dist/*.zip dist/install.sh dist/install.ps1 --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

@@ -18,7 +18,10 @@ import (
 	"time"
 )
 
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
@@ -30,6 +33,10 @@ func main() {
 	filter := flag.String("filter", defaultIssueFilter, "GitHub issue search filter")
 	allIssues := flag.Bool("all-issues", false, "disable the default issue filter")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: gh-watch [flags] OWNER/REPO or GitHub URL")
 		flag.PrintDefaults()
