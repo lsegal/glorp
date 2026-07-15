@@ -181,6 +181,56 @@ func TestWorkStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWatcherPersistsSessionIDAfterCompletion(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	w := &Watcher{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		StatePath: statePath, Issues: src, Runner: r,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	var active workState
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "active" {
+			active = state[7]
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if active.SessionID == "" {
+		cancel()
+		<-done
+		t.Fatal("active session ID was not persisted")
+	}
+	close(r.release)
+
+	var completed workState
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "completed" {
+			completed = state[7]
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if completed.SessionID != active.SessionID {
+		t.Fatalf("completed state session ID = %q, want %q", completed.SessionID, active.SessionID)
+	}
+}
+
 func TestHasAgentStartedLabel(t *testing.T) {
 	issue := Issue{Labels: []IssueLabel{{Name: "agent-ready"}, {Name: agentStartedLabel}}}
 	if !hasLabel(issue, agentStartedLabel) {
