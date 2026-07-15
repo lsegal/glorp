@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -297,22 +296,8 @@ func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
 	return nil
 }
 
-const maxBugReportOutput = 12000
-
-var robotSecretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:gh[pousr]|github_pat|xox[baprs])-?[A-Za-z0-9_\-]{8,}\b`),
-	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`),
-	regexp.MustCompile(`(?i)(\b(?:authorization|token|password|passwd|secret|api[_-]?key)\s*[:=]\s*)[^\s,]+`),
-}
-
-func scrubRobotOutput(output string) string {
-	for _, pattern := range robotSecretPatterns {
-		output = pattern.ReplaceAllString(output, `${1}[REDACTED]`)
-	}
-	if len(output) > maxBugReportOutput {
-		output = output[:maxBugReportOutput] + "\n[output truncated]"
-	}
-	return output
+func scrubRobotOutput(_ string) string {
+	return "[robot output omitted]"
 }
 
 func bugReportURL(repo string, issue Issue, args []string, output string) (string, error) {
@@ -326,7 +311,7 @@ func bugReportURL(repo string, issue Issue, args []string, output string) (strin
 	values := url.Values{}
 	values.Set("template", "bug_report.md")
 	values.Set("title", fmt.Sprintf("Agent failed while handling issue #%d", issue.Number))
-	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n```text\n%s\n```\n", target.repo, issue.Number, strings.Join(args, " "), scrubRobotOutput(output)))
+	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n%s\n", target.repo, issue.Number, strings.Join(args, " "), scrubRobotOutput(output)))
 	return "https://github.com/" + target.repo + "/issues/new?" + values.Encode(), nil
 }
 func validRepo(repo string) bool {

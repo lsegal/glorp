@@ -16,4 +16,4 @@ assignees: ""
 
 ## Agent output
 
-<!-- Remove credentials or other sensitive information before submitting. -->
+<!-- Robot output is intentionally omitted from autofilled reports. Add only gh-watch logs or other non-sensitive diagnostic context. -->
