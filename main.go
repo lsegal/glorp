@@ -23,7 +23,7 @@ func main() {
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
 	statePath := flag.String("state", ".gh-watch.json", "file used to remember handled issue numbers")
-	filter := flag.String("filter", "label=agent-ready", "GitHub issue search filter")
+	filter := flag.String("filter", defaultIssueFilter, "GitHub issue search filter")
 	allIssues := flag.Bool("all-issues", false, "disable the default issue filter")
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -63,6 +63,8 @@ type GHCLI struct {
 	Filter    string
 	AllIssues bool
 }
+
+const defaultIssueFilter = "label=agent-ready"
 
 type projectFieldOption struct {
 	ID   string `json:"id"`
@@ -167,7 +169,7 @@ func parseTarget(value string) (target, error) {
 func projectListArgs(t target, filter string, allIssues bool) []string {
 	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
 	query := "is:issue is:open"
-	if !allIssues && filter != "" {
+	if !allIssues && filter != "" && filter != defaultIssueFilter {
 		query += " " + searchQuery(filter)
 	}
 	return append(args, "--query", query)

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Omit the default `agent-ready` label filter when watching a project board.
 - Omit robot output from autofilled bug reports to prevent private data from being disclosed.
 - Parse `label=...` filter terms as GitHub label search queries.
 - Update project-board issue status as agents start and finish work.
