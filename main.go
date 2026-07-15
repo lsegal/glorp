@@ -43,8 +43,8 @@ func main() {
 		fmt.Println(version)
 		return
 	}
-	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: gh-watch [flags] OWNER/REPO or GitHub URL")
+	if flag.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: gh-watch [flags] TARGET [TARGET ...]")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
@@ -72,8 +72,9 @@ func main() {
 	defer stop()
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
+	targets := flag.Args()
 	events := make(chan struct{}, 1)
-	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: flag.Arg(0), Output: os.Stdout}, Out: os.Stdout}
+	w := &Watcher{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Output: os.Stdout}, Out: os.Stdout}
 	var server *http.Server
 	if !*poll {
 		server = &http.Server{Addr: *listen, Handler: WebhookHandler{Events: events, Secret: *webhookSecret, WebhookPath: *webhookPath}}
@@ -415,7 +416,11 @@ func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	if err := cmd.Run(); err != nil {
-		report, reportErr := bugReportURL(r.Repo, issue, args, output.String())
+		repo := r.Repo
+		if issue.Target != "" {
+			repo = issueRepository(issue.Target, issue)
+		}
+		report, reportErr := bugReportURL(repo, issue, args, output.String())
 		if reportErr != nil {
 			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", err, reportErr)
 		}

@@ -270,6 +270,31 @@ func TestWorkStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestScopedWorkStateKeepsTargetsSeparate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	targets := []string{"o/one", "o/two"}
+	want := map[string]workState{
+		"o/one#7": {Status: "completed", SessionID: "one"},
+		"o/two#7": {Status: "active", SessionID: "two"},
+	}
+	if err := saveScopedWorkState(path, want, targets); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadScopedWorkState(path, targets)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("scoped state error=%v value=%v, want %v", err, got, want)
+	}
+}
+
+func TestIssueKeyUsesTargetAndNumber(t *testing.T) {
+	if got := issueKey(Issue{Target: "o/one", Number: 7}); got != "o/one#7" {
+		t.Fatalf("issue key = %q", got)
+	}
+	if got := issueKey(Issue{Repository: "o/two", Number: 7}); got != "o/two#7" {
+		t.Fatalf("repository fallback issue key = %q", got)
+	}
+}
+
 func TestWatcherPersistsSessionIDAfterCompletion(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")

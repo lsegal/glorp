@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Watch multiple repository or project targets in one process.
 - Support GitHub webhooks as the default issue refresh mechanism, with polling available through `--poll`.
 
 ## v1.0.0 - 2026-07-15

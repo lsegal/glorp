@@ -9,8 +9,10 @@ to verify GitHub's HMAC signature. Use `--listen` and `--webhook-path` when the
 endpoint needs a different address.
 
 ```sh
-gh-watch --interval 30s --concurrency 3 --agent codex owner/repo
+gh-watch --interval 30s --concurrency 3 --agent codex owner/repo https://github.com/users/owner/projects/3
 ```
+
+One or more repository or project targets may be provided. Each target may be an `OWNER/REPO`, a GitHub repository URL, or a GitHub project URL, such as `https://github.com/users/owner/projects/3`. Targets are polled together, while the concurrency limit applies across all targets.
 
 For repositories where webhooks are not available, enable the previous polling
 mode explicitly:
@@ -19,7 +21,7 @@ mode explicitly:
 gh-watch --poll --interval 30s --concurrency 3 --agent codex owner/repo
 ```
 
-The repository argument may also be a GitHub repository URL or a GitHub project URL, such as `https://github.com/users/owner/projects/3`.
+Each target may also be a GitHub repository URL or a GitHub project URL.
 
 Watching a project requires a GitHub CLI token with the `read:project` scope. Because `gh-watch` updates each issue's project status while an agent runs, it also requires the `project` scope. If project polling reports a missing scope, run `gh auth refresh -s read:project`; if a project status update reports a missing scope, run `gh auth refresh -s project`, then restart `gh-watch`.
 

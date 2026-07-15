@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ type Issue struct {
 	Labels        []IssueLabel      `json:"labels,omitempty"`
 	DependsOn     []IssueDependency `json:"dependsOn,omitempty"`
 	ProjectStatus string            `json:"projectStatus,omitempty"`
+	Target        string            `json:"-"`
 }
 
 func issueRepository(target string, issue Issue) string {
@@ -59,6 +61,7 @@ type AgentRunner interface {
 }
 type Watcher struct {
 	Repo        string
+	Targets     []string
 	Interval    time.Duration
 	UseWebhooks bool
 	Events      <-chan struct{}
@@ -77,6 +80,14 @@ const agentStartedLabel = "agent-started"
 type workState struct {
 	Status    string `json:"status"`
 	SessionID string `json:"sessionId,omitempty"`
+}
+
+func issueKey(issue Issue) string {
+	target := issue.Target
+	if target == "" {
+		target = issue.Repository
+	}
+	return target + "#" + strconv.Itoa(issue.Number)
 }
 
 type taskState struct {
@@ -100,8 +111,17 @@ func (w *Watcher) logf(format string, args ...interface{}) {
 }
 
 func (w *Watcher) Run(ctx context.Context) error {
-	if _, err := parseTarget(w.Repo); err != nil {
-		return err
+	targets := append([]string(nil), w.Targets...)
+	if len(targets) == 0 && w.Repo != "" {
+		targets = []string{w.Repo}
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("at least one target is required")
+	}
+	for _, target := range targets {
+		if _, err := parseTarget(target); err != nil {
+			return err
+		}
 	}
 	if w.Interval <= 0 {
 		return fmt.Errorf("interval must be positive")
@@ -113,37 +133,48 @@ func (w *Watcher) Run(ctx context.Context) error {
 		w.Out = io.Discard
 	}
 	if w.Labels != nil {
-		if err := w.Labels.EnsureLabels(ctx, w.Repo); err != nil {
-			return err
+		for _, target := range targets {
+			if err := w.Labels.EnsureLabels(ctx, target); err != nil {
+				return err
+			}
 		}
 		w.logf("ensured agent labels exist")
 	}
-	work, err := loadWorkState(w.StatePath)
+	work, err := loadScopedWorkState(w.StatePath, targets)
 	if err != nil {
 		return err
 	}
-	seen := make(map[int]bool, len(work))
-	for number := range work {
-		seen[number] = true
+	seen := make(map[string]bool, len(work))
+	for key := range work {
+		seen[key] = true
 	}
-	w.logf("watching %s (poll every %s, concurrency %d; %d handled issue(s) loaded)", w.Repo, w.Interval, w.Concurrency, len(seen))
+	w.logf("watching %s (poll every %s, concurrency %d; %d handled issue(s) loaded)", strings.Join(targets, ", "), w.Interval, w.Concurrency, len(seen))
 	sem := make(chan struct{}, w.Concurrency)
 	var wg sync.WaitGroup
 	var tasks taskState
 	var workMu sync.Mutex
-	active := make(map[int]string)
+	active := make(map[string]string)
 	labeler, _ := w.Labels.(IssueLabeler)
-	projectTarget := isProjectTarget(w.Repo)
 	pollNumber := 0
 	poll := func() error {
 		pollNumber++
 		n := pollNumber
 		running, queued, completed, failed := tasks.snapshot()
 		w.logf("poll #%d started (tasks: %d running, %d queued, %d completed, %d failed)", n, running, queued, completed, failed)
-		issues, err := w.Issues.ListIssues(ctx, w.Repo)
-		if err != nil {
-			w.logf("poll #%d failed while listing issues: %v", n, err)
-			return err
+		issues := make([]Issue, 0)
+		for _, target := range targets {
+			batch, err := w.Issues.ListIssues(ctx, target)
+			if err != nil {
+				w.logf("poll #%d failed while listing %s: %v", n, target, err)
+				return err
+			}
+			for i := range batch {
+				batch[i].Target = target
+				if batch[i].Repository == "" {
+					batch[i].Repository = issueRepository(target, batch[i])
+				}
+				issues = append(issues, batch[i])
+			}
 		}
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
 		newIssues := make([]Issue, 0)
@@ -152,17 +183,18 @@ func (w *Watcher) Run(ctx context.Context) error {
 				w.logf("issue #%d not picked up: %s", issue.Number, reason)
 				continue
 			}
+			key := issueKey(issue)
 			workMu.Lock()
-			_, isActive := active[issue.Number]
-			wasActive := work[issue.Number].Status == "active"
+			_, isActive := active[key]
+			wasActive := work[key].Status == "active"
 			workMu.Unlock()
-			if issue.Number > 0 && shouldDispatchIssue(w.Repo, issue, isActive, wasActive, seen[issue.Number]) {
-				seen[issue.Number] = true
+			if issue.Number > 0 && shouldDispatchIssue(issue.Target, issue, isActive, wasActive, seen[key]) {
+				seen[key] = true
 				newIssues = append(newIssues, issue)
 			}
 		}
 		workMu.Lock()
-		err = saveWorkState(w.StatePath, work)
+		err = saveScopedWorkState(w.StatePath, work, targets)
 		workMu.Unlock()
 		if err != nil {
 			w.logf("poll #%d failed while saving state: %v", n, err)
@@ -178,20 +210,21 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if labeler != nil && !projectTarget {
-				if err := labeler.SetIssueLabel(ctx, issueRepository(w.Repo, issue), issue.Number, true); err != nil {
+			if labeler != nil && !isProjectTarget(issue.Target) {
+				if err := labeler.SetIssueLabel(ctx, issueRepository(issue.Target, issue), issue.Number, true); err != nil {
 					return err
 				}
 			}
 			if w.Status != nil {
-				if err := w.Status.SetIssueStatus(ctx, w.Repo, issue.Number, "In Progress"); err != nil {
+				if err := w.Status.SetIssueStatus(ctx, issue.Target, issue.Number, "In Progress"); err != nil {
 					return err
 				}
 			}
 			workMu.Lock()
-			active[issue.Number] = session
-			work[issue.Number] = workState{Status: "active", SessionID: session}
-			err = saveWorkState(w.StatePath, work)
+			key := issueKey(issue)
+			active[key] = session
+			work[key] = workState{Status: "active", SessionID: session}
+			err = saveScopedWorkState(w.StatePath, work, targets)
 			workMu.Unlock()
 			if err != nil {
 				return err
@@ -224,17 +257,18 @@ func (w *Watcher) Run(ctx context.Context) error {
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
 				if err := w.Runner.Run(ctx, i); err != nil {
 					if w.Status != nil {
-						if statusErr := w.Status.SetIssueStatus(context.Background(), w.Repo, i.Number, "Todo"); statusErr != nil {
+						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i.Number, "Todo"); statusErr != nil {
 							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
 						}
 					}
-					if labeler != nil && !projectTarget {
-						_ = labeler.SetIssueLabel(context.Background(), issueRepository(w.Repo, i), i.Number, false)
+					if labeler != nil && !isProjectTarget(i.Target) {
+						_ = labeler.SetIssueLabel(context.Background(), issueRepository(i.Target, i), i.Number, false)
 					}
 					workMu.Lock()
-					delete(active, i.Number)
-					work[i.Number] = workState{Status: "failed", SessionID: work[i.Number].SessionID}
-					_ = saveWorkState(w.StatePath, work)
+					key := issueKey(i)
+					delete(active, key)
+					work[key] = workState{Status: "failed", SessionID: work[key].SessionID}
+					_ = saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
 					tasks.mu.Lock()
 					tasks.running--
@@ -244,17 +278,18 @@ func (w *Watcher) Run(ctx context.Context) error {
 					w.logf("issue #%d failed: %v (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, err, running, queued, completed, failed)
 				} else {
 					if w.Status != nil {
-						if statusErr := w.Status.SetIssueStatus(context.Background(), w.Repo, i.Number, "Done"); statusErr != nil {
+						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i.Number, "Done"); statusErr != nil {
 							w.logf("issue #%d failed to update project status: %v", i.Number, statusErr)
 						}
 					}
-					if labeler != nil && !projectTarget {
-						_ = labeler.SetIssueLabel(context.Background(), issueRepository(w.Repo, i), i.Number, false)
+					if labeler != nil && !isProjectTarget(i.Target) {
+						_ = labeler.SetIssueLabel(context.Background(), issueRepository(i.Target, i), i.Number, false)
 					}
 					workMu.Lock()
-					delete(active, i.Number)
-					work[i.Number] = workState{Status: "completed", SessionID: work[i.Number].SessionID}
-					_ = saveWorkState(w.StatePath, work)
+					key := issueKey(i)
+					delete(active, key)
+					work[key] = workState{Status: "completed", SessionID: work[key].SessionID}
+					_ = saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
 					tasks.mu.Lock()
 					tasks.running--
@@ -551,6 +586,73 @@ func saveWorkState(path string, state map[int]workState) error {
 		return nil
 	}
 	b, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0600)
+}
+
+func loadScopedWorkState(path string, targets []string) (map[string]workState, error) {
+	result := make(map[string]workState)
+	if path == "" {
+		return result, nil
+	}
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return result, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("decode state: %w", err)
+	}
+	for key, value := range raw {
+		var state workState
+		if json.Unmarshal(value, &state) != nil {
+			var legacy bool
+			if err := json.Unmarshal(value, &legacy); err != nil {
+				return nil, fmt.Errorf("decode state issue %q: %w", key, err)
+			}
+			if legacy {
+				state = workState{Status: "completed"}
+			} else {
+				continue
+			}
+		}
+		if _, err := strconv.Atoi(key); err == nil {
+			if len(targets) > 0 {
+				result[targets[0]+"#"+key] = state
+			}
+		} else {
+			result[key] = state
+		}
+	}
+	return result, nil
+}
+
+func saveScopedWorkState(path string, state map[string]workState, targets []string) error {
+	if path == "" {
+		return nil
+	}
+	var value interface{} = state
+	if len(targets) == 1 {
+		legacy := make(map[int]workState, len(state))
+		prefix := targets[0] + "#"
+		for key, work := range state {
+			if strings.HasPrefix(key, prefix) {
+				number, err := strconv.Atoi(strings.TrimPrefix(key, prefix))
+				if err == nil {
+					legacy[number] = work
+					continue
+				}
+			}
+			return fmt.Errorf("invalid scoped state key %q", key)
+		}
+		value = legacy
+	}
+	b, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
