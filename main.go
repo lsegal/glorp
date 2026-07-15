@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
+	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +22,8 @@ func main() {
 	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
+	model := flag.String("model", "", "model to use for the agent")
+	modelLevel := flag.String("model-level", "", "model reasoning level: low, medium, or high")
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
 	statePath := flag.String("state", ".gh-watch.json", "file used to remember handled issue numbers")
@@ -39,6 +43,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "agent must be codex or claude")
 		os.Exit(2)
 	}
+	if *modelLevel != "" && *modelLevel != "low" && *modelLevel != "medium" && *modelLevel != "high" {
+		fmt.Fprintln(os.Stderr, "model-level must be low, medium, or high")
+		os.Exit(2)
+	}
 	limit := *concurrency
 	if limit == 0 {
 		limit = 3
@@ -51,7 +59,7 @@ func main() {
 	defer stop()
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
-	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Repo: flag.Arg(0)}, Out: os.Stdout}
+	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: flag.Arg(0)}, Out: os.Stdout}
 	if err := w.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -122,10 +130,21 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 	}
 	cmd := exec.CommandContext(ctx, g.Binary, args...)
 	output, err := cmd.CombinedOutput()
+	var issues []Issue
 	if target.isProject {
-		return decodeProjectIssues(output, err)
+		issues, err = decodeProjectIssues(output, err)
+	} else {
+		issues, err = decodeIssues(output, err)
 	}
-	return decodeIssues(output, err)
+	if err != nil {
+		return nil, err
+	}
+	for i := range issues {
+		if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+			return nil, err
+		}
+	}
+	return issues, nil
 }
 
 func issueListArgs(repo, filter string, allIssues bool) []string {
@@ -137,7 +156,7 @@ func issueListArgs(repo, filter string, allIssues bool) []string {
 	if !allIssues && filter != "" {
 		args = append(args, "--search", searchQuery(filter))
 	}
-	return append(args, "--json", "number,title,state,createdAt,labels")
+	return append(args, "--json", "number,title,body,state,createdAt,labels")
 }
 
 type target struct {
@@ -189,6 +208,53 @@ func decodeIssues(data []byte, err error) ([]Issue, error) {
 		return nil, fmt.Errorf("list issues: %w", err)
 	}
 	return parseIssues(data)
+}
+
+var dependencyPattern = regexp.MustCompile(`(?i)\bdepends\s+on\s+#(\d+)`)
+
+func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) error {
+	dependencies := make(map[int]IssueDependency)
+	for _, match := range dependencyPattern.FindAllStringSubmatch(issue.Body, -1) {
+		number := 0
+		if _, err := fmt.Sscanf(match[1], "%d", &number); err == nil && number > 0 {
+			dependency := IssueDependency{Number: number}
+			if repo != "" {
+				cmd := exec.CommandContext(ctx, g.Binary, "issue", "view", fmt.Sprint(number), "--repo", repo, "--json", "state")
+				output, viewErr := cmd.Output()
+				if viewErr != nil {
+					return fmt.Errorf("read dependency #%d for issue #%d: %w", number, issue.Number, viewErr)
+				}
+				var state struct {
+					State string `json:"state"`
+				}
+				if err := json.Unmarshal(output, &state); err != nil {
+					return fmt.Errorf("decode dependency #%d for issue #%d: %w", number, issue.Number, err)
+				}
+				dependency.State = state.State
+			}
+			dependencies[number] = dependency
+		}
+	}
+	if repo != "" {
+		cmd := exec.CommandContext(ctx, g.Binary, "api", "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("list dependencies for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
+		}
+		var related []IssueDependency
+		if err := json.Unmarshal(output, &related); err != nil {
+			return fmt.Errorf("decode dependencies for issue #%d: %w", issue.Number, err)
+		}
+		for _, dependency := range related {
+			dependencies[dependency.Number] = dependency
+		}
+	}
+	issue.DependsOn = issue.DependsOn[:0]
+	for _, dependency := range dependencies {
+		issue.DependsOn = append(issue.DependsOn, dependency)
+	}
+	slices.SortFunc(issue.DependsOn, func(a, b IssueDependency) int { return a.Number - b.Number })
+	return nil
 }
 
 func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add bool) error {
@@ -273,14 +339,28 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, stat
 	return nil
 }
 
-type CommandRunner struct{ Binary, Agent, Repo string }
+type CommandRunner struct{ Binary, Agent, Model, ModelLevel, Repo string }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
 	prompt := fmt.Sprintf("/gh-fix %d", issue.Number)
 	if r.Agent == "codex" {
-		return []string{"exec", "--dangerously-bypass-approvals-and-sandbox", prompt}
+		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox"}
+		if r.Model != "" {
+			args = append(args, "--model", r.Model)
+		}
+		if r.ModelLevel != "" {
+			args = append(args, "-c", "model_reasoning_effort="+r.ModelLevel)
+		}
+		return append(args, prompt)
 	}
-	return []string{"-p", "--dangerously-skip-permissions", prompt}
+	args := []string{"-p", "--dangerously-skip-permissions"}
+	if r.Model != "" {
+		args = append(args, "--model", r.Model)
+	}
+	if r.ModelLevel != "" {
+		args = append(args, "--effort", r.ModelLevel)
+	}
+	return append(args, prompt)
 }
 
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {

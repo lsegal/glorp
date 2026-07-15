@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -194,6 +195,15 @@ func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", "/gh-fix 12"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex args = %#v, want %#v", got, want)
+	}
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--model", "claude-sonnet", "--effort", "medium", "/gh-fix 12"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("claude args = %#v, want %#v", got, want)
+	}
+}
+
 func TestStateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	want := map[int]bool{3: true, 9: true}
@@ -272,5 +282,15 @@ func TestHasAgentStartedLabel(t *testing.T) {
 	issue := Issue{Labels: []IssueLabel{{Name: "agent-ready"}, {Name: agentStartedLabel}}}
 	if !hasLabel(issue, agentStartedLabel) {
 		t.Fatal("agent-started label was not found")
+	}
+}
+
+func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
+	blocked, reason := issueBlocked(Issue{DependsOn: []IssueDependency{{Number: 4, State: "open"}, {Number: 7, State: "CLOSED"}}})
+	if !blocked || reason != "depends on #4 (open)" {
+		t.Fatalf("blocked=%v reason=%q", blocked, reason)
+	}
+	if blocked, _ := issueBlocked(Issue{DependsOn: []IssueDependency{{Number: 7, State: "closed"}}}); blocked {
+		t.Fatal("closed dependency still blocks issue")
 	}
 }
