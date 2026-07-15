@@ -21,7 +21,7 @@ func TestValidRepo(t *testing.T) {
 
 func TestIssueListArgsUsesDefaultFilter(t *testing.T) {
 	got := issueListArgs("owner/repo", "label=agent-ready", false)
-	want := []string{"issue", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--search", "label=agent-ready", "--json", "number,title,state,createdAt"}
+	want := []string{"issue", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--search", "label=agent-ready", "--json", "number,title,state,createdAt,labels"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
 	}

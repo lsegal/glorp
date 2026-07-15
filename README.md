@@ -10,6 +10,8 @@ gh-watch --interval 30s --concurrency 3 --agent codex owner/repo
 
 Runtime progress is written to stdout with timestamps. It reports each poll's open-issue count, baseline/new-issue detection, queued and running task counts, agent completion/failure totals, poll retries, and shutdown progress.
 
+While an agent is running, gh-watch applies the `agent-started` label to its issue and removes it when the agent exits. Persisted session state lets a restarted watcher reclaim issues whose label was left behind by an interrupted process.
+
 The installer checks for `gh`, downloads the matching GitHub release, and installs the `gh-fix` skill globally through skills.sh:
 
 ```sh
