@@ -29,6 +29,8 @@ func main() {
 	listen := flag.String("listen", ":8080", "address for the GitHub webhook server")
 	webhookPath := flag.String("webhook-path", "/webhook", "path for GitHub webhook deliveries")
 	webhookSecret := flag.String("webhook-secret", "", "optional GitHub webhook secret")
+	ngrokBinary := flag.String("ngrok-binary", "ngrok", "ngrok executable")
+	ngrokAPI := flag.String("ngrok-api", "http://127.0.0.1:4040", "ngrok local API URL")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
 	model := flag.String("model", "", "model to use for the agent")
@@ -85,6 +87,35 @@ func main() {
 		}()
 		defer server.Close()
 		fmt.Fprintf(os.Stdout, "webhook server listening on %s%s\n", *listen, *webhookPath)
+		fmt.Fprintf(os.Stdout, "starting ngrok tunnel for %s\n", *listen)
+		tunnel, err := startNgrok(ctx, *ngrokBinary, *listen, *ngrokAPI, os.Stdout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer tunnel.Close()
+		endpoint, err := webhookURL(tunnel.URL(), *webhookPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stdout, "ngrok tunnel ready at %s\n", tunnel.URL())
+		configured := 0
+		for _, target := range targets {
+			parsed, parseErr := parseTarget(target)
+			if parseErr != nil || parsed.repo == "" {
+				continue
+			}
+			if err := gh.ConfigureWebhook(ctx, parsed.repo, endpoint, *webhookSecret); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			configured++
+			fmt.Fprintf(os.Stdout, "configured GitHub webhook for %s\n", parsed.repo)
+		}
+		if configured == 0 {
+			fmt.Fprintln(os.Stdout, "no repository targets available for webhook configuration")
+		}
 	}
 	if err := w.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -4,6 +4,7 @@
 
 - Watch multiple repository or project targets in one process.
 - Support GitHub webhooks as the default issue refresh mechanism, with polling available through `--poll`.
+- Manage an ngrok tunnel and synchronize GitHub webhooks for watched repositories.
 
 ## v1.0.0 - 2026-07-15
 

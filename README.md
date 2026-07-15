@@ -2,11 +2,13 @@
 
 Watch a GitHub repository and start an agent for each newly discovered open issue.
 
-By default, `gh-watch` listens for GitHub `issues`, `push`, and `ping` webhook
-deliveries on `:8080/webhook` and refreshes the issue list after each delivery.
-Configure that URL as a repository webhook, optionally using `--webhook-secret`
-to verify GitHub's HMAC signature. Use `--listen` and `--webhook-path` when the
-endpoint needs a different address.
+By default, `gh-watch` starts an ngrok tunnel, configures its public URL as a
+GitHub webhook for every watched repository, and listens for `issues`, `push`,
+and `ping` deliveries on `:8080/webhook`. Old ngrok webhook URLs are removed
+when the tunnel host changes. Use `--ngrok-binary` and `--ngrok-api` to locate
+ngrok, or use `--webhook-secret` to verify GitHub's HMAC signature. Use
+`--listen` and `--webhook-path` when the local endpoint needs a different
+address.
 
 ```sh
 gh-watch --interval 30s --concurrency 3 --agent codex owner/repo https://github.com/users/owner/projects/3
