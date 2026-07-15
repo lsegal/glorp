@@ -75,7 +75,7 @@ func main() {
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
 	targets := flag.Args()
-	events := make(chan struct{}, 1)
+	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
 	if isTerminal(os.Stdout) {

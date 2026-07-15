@@ -69,7 +69,7 @@ type Watcher struct {
 	Targets     []string
 	Interval    time.Duration
 	UseWebhooks bool
-	Events      <-chan struct{}
+	Events      <-chan WebhookEvent
 	Concurrency int
 	StatePath   string
 	Issues      IssueSource
@@ -371,6 +371,8 @@ func (w *Watcher) Run(ctx context.Context) error {
 	publish()
 	var ticker *time.Ticker
 	var tick <-chan time.Time
+	var retryTimer *time.Timer
+	var retry <-chan time.Time
 	if !w.UseWebhooks {
 		ticker = time.NewTicker(w.Interval)
 		defer ticker.Stop()
@@ -394,7 +396,8 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, w.Interval)
 			}
-		case <-w.Events:
+		case event := <-w.Events:
+			w.logWebhookEvent(event)
 			if err := poll(); err != nil {
 				if ctx.Err() != nil {
 					wg.Wait()
@@ -402,7 +405,29 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 				w.logf("webhook-triggered poll #%d error: %v", pollNumber, err)
 			}
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
+			retryTimer = time.NewTimer(w.Interval)
+			retry = retryTimer.C
+		case <-retry:
+			w.logf("webhook follow-up refresh started")
+			if err := poll(); err != nil && ctx.Err() == nil {
+				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
+			}
+			retry = nil
 		}
+	}
+}
+
+func (w *Watcher) logWebhookEvent(event WebhookEvent) {
+	switch event.Kind {
+	case "push":
+		w.logf("webhook push received (repository: %s, ref: %s, before: %s, after: %s, commits: %d)", event.Repository, event.Ref, event.Before, event.After, event.CommitCount)
+	case "issues":
+		w.logf("webhook issues received (repository: %s, action: %s, issue: #%d %q)", event.Repository, event.Action, event.IssueNumber, event.IssueTitle)
+	default:
+		w.logf("webhook %s received", event.Kind)
 	}
 }
 

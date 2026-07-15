@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Log webhook delivery details and retry webhook-triggered issue refreshes after GitHub indexing catches up.
 - Watch multiple repository or project targets in one process.
 - Support GitHub webhooks as the default issue refresh mechanism, with polling available through `--poll`.
 - Manage an ngrok tunnel and synchronize GitHub webhooks for watched repositories.
