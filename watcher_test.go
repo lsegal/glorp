@@ -40,6 +40,19 @@ type fakeLabelEnsurer struct {
 	err    error
 }
 
+type fakeIssueLabeler struct {
+	labels []bool
+}
+
+func (f *fakeIssueLabeler) EnsureLabels(_ context.Context, _ string) error {
+	return nil
+}
+
+func (f *fakeIssueLabeler) SetIssueLabel(_ context.Context, _ string, _ int, add bool) error {
+	f.labels = append(f.labels, add)
+	return nil
+}
+
 type fakeIssueStatuser struct {
 	mu       sync.Mutex
 	statuses []string
@@ -155,6 +168,35 @@ func TestWatcherUpdatesProjectStatus(t *testing.T) {
 	status.mu.Lock()
 	defer status.mu.Unlock()
 	if got, want := status.statuses, []string{"In Progress", "Done"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("project statuses = %v, want %v", got, want)
+	}
+}
+
+func TestWatcherDoesNotLabelProjectIssues(t *testing.T) {
+	r := &fakeRunner{release: make(chan struct{})}
+	labels := &fakeIssueLabeler{}
+	status := &fakeIssueStatuser{}
+	w := &Watcher{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Labels: labels, Status: status,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	close(r.release)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(labels.labels) != 0 {
+		t.Fatalf("project issue labels = %v, want no label changes", labels.labels)
+	}
+	status.mu.Lock()
+	defer status.mu.Unlock()
+	if got, want := status.statuses, []string{"In Progress", "Done"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("project statuses = %v, want %v", got, want)
 	}
 }
