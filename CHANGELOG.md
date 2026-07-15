@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Parse `label=...` filter terms as GitHub label search queries.
 - Update project-board issue status as agents start and finish work.
 - Report the required `read:project` scope when project-board polling cannot access project items.
 - Preserve agent session IDs after an issue is completed.

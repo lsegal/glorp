@@ -132,7 +132,7 @@ func issueListArgs(repo, filter string, allIssues bool) []string {
 	}
 	args := []string{"issue", "list", "--repo", target.repo, "--state", "open", "--limit", "1000"}
 	if !allIssues && filter != "" {
-		args = append(args, "--search", filter)
+		args = append(args, "--search", searchQuery(filter))
 	}
 	return append(args, "--json", "number,title,state,createdAt,labels")
 }
@@ -167,9 +167,19 @@ func projectListArgs(t target, filter string, allIssues bool) []string {
 	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
 	query := "is:issue is:open"
 	if !allIssues && filter != "" {
-		query += " " + strings.Replace(strings.TrimSpace(filter), "=", ":", 1)
+		query += " " + searchQuery(filter)
 	}
 	return append(args, "--query", query)
+}
+
+func searchQuery(filter string) string {
+	terms := strings.Fields(filter)
+	for i, term := range terms {
+		if strings.HasPrefix(term, "label=") {
+			terms[i] = "label:" + strings.TrimPrefix(term, "label=")
+		}
+	}
+	return strings.Join(terms, " ")
 }
 func decodeIssues(data []byte, err error) ([]Issue, error) {
 	if err != nil {
