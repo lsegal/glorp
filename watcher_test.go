@@ -39,6 +39,18 @@ type fakeLabelEnsurer struct {
 	err    error
 }
 
+type fakeIssueStatuser struct {
+	mu       sync.Mutex
+	statuses []string
+}
+
+func (f *fakeIssueStatuser) SetIssueStatus(_ context.Context, _ string, _ int, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statuses = append(f.statuses, status)
+	return nil
+}
+
 func (f *fakeLabelEnsurer) EnsureLabels(_ context.Context, _ string) error {
 	f.called = true
 	return f.err
@@ -118,6 +130,31 @@ func TestWatcherTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	}
 	if !seen[1] || len(r.got) != 1 || r.got[0] != 1 {
 		t.Fatalf("pre-existing unseen issue was not handled: seen=%v got=%v", seen, r.got)
+	}
+}
+
+func TestWatcherUpdatesProjectStatus(t *testing.T) {
+	r := &fakeRunner{release: make(chan struct{})}
+	status := &fakeIssueStatuser{}
+	w := &Watcher{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Status: status,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	close(r.release)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	status.mu.Lock()
+	defer status.mu.Unlock()
+	if got, want := status.statuses, []string{"In Progress", "Done"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("project statuses = %v, want %v", got, want)
 	}
 }
 func TestInvalidRepo(t *testing.T) {

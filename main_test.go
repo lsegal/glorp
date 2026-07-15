@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/url"
 	"reflect"
 	"slices"
@@ -49,6 +50,27 @@ func TestDecodeProjectIssues(t *testing.T) {
 	got, err := decodeProjectIssues([]byte(`{"items":[{"content":{"number":7,"title":"bug","type":"Issue"}},{"content":{"number":8,"type":"PullRequest"}}]}`), nil)
 	if err != nil || len(got) != 1 || got[0].Number != 7 {
 		t.Fatalf("decode project issues = %#v, %v", got, err)
+	}
+}
+
+func TestDecodeProjectItemsArray(t *testing.T) {
+	items, err := decodeProjectItems([]byte(`[{"id":"PVTI_item","content":{"number":7,"type":"Issue"}}]`), nil)
+	if err != nil || len(items) != 1 || items[0].ID != "PVTI_item" || items[0].Content.Number != 7 {
+		t.Fatalf("decode project items = %#v, %v", items, err)
+	}
+}
+
+func TestDecodeProjectFields(t *testing.T) {
+	fields, err := decodeProjectFields([]byte(`{"fields":[{"id":"PVTF_status","name":"Status","options":[{"id":"opt_progress","name":"In Progress"}]}]}`), nil)
+	if err != nil || len(fields) != 1 || fields[0].ID != "PVTF_status" || fields[0].Options[0].ID != "opt_progress" {
+		t.Fatalf("decode project fields = %#v, %v", fields, err)
+	}
+}
+
+func TestDecodeProjectIssuesReportsMissingScope(t *testing.T) {
+	_, err := decodeProjectIssues([]byte("error: your authentication token is missing required scopes [read:project]"), errors.New("exit status 1"))
+	if err == nil || !strings.Contains(err.Error(), "gh auth refresh -s read:project") {
+		t.Fatalf("missing scope error = %v", err)
 	}
 }
 
