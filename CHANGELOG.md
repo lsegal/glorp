@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix labeling issues discovered while watching GitHub project boards.
 - Omit the default `agent-ready` label filter when watching a project board.
 - Allow selecting the agent model and reasoning level with `--model` and `--model-level`.
 - Omit robot output from autofilled bug reports to prevent private data from being disclosed.

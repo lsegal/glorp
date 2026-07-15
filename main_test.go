@@ -38,6 +38,20 @@ func TestParseTargetURLs(t *testing.T) {
 	}
 }
 
+func TestIssueRepositoryUsesProjectItemRepository(t *testing.T) {
+	issue := Issue{Number: 32, Repository: "lsegal/gh-watch"}
+	if got := issueRepository("https://github.com/users/lsegal/projects/3", issue); got != "lsegal/gh-watch" {
+		t.Fatalf("issue repository = %q", got)
+	}
+}
+
+func TestIssueRepositoryNormalizesRepositoryURL(t *testing.T) {
+	issue := Issue{Number: 32}
+	if got := issueRepository("https://github.com/lsegal/gh-watch", issue); got != "lsegal/gh-watch" {
+		t.Fatalf("issue repository = %q", got)
+	}
+}
+
 func TestProjectListArgs(t *testing.T) {
 	got := projectListArgs(target{owner: "lsegal", projectID: "3", isProject: true}, "label=other status=closed", false)
 	want := []string{"project", "item-list", "3", "--owner", "lsegal", "--format", "json", "--limit", "1000", "--query", "is:issue is:open label:other status=closed"}
@@ -55,8 +69,8 @@ func TestProjectListArgsOmitsDefaultFilter(t *testing.T) {
 }
 
 func TestDecodeProjectIssues(t *testing.T) {
-	got, err := decodeProjectIssues([]byte(`{"items":[{"content":{"number":7,"title":"bug","type":"Issue"}},{"content":{"number":8,"type":"PullRequest"}}]}`), nil)
-	if err != nil || len(got) != 1 || got[0].Number != 7 {
+	got, err := decodeProjectIssues([]byte(`{"items":[{"content":{"number":7,"title":"bug","repository":"owner/repo","type":"Issue"}},{"content":{"number":8,"type":"PullRequest"}}]}`), nil)
+	if err != nil || len(got) != 1 || got[0].Number != 7 || got[0].Repository != "owner/repo" {
 		t.Fatalf("decode project issues = %#v, %v", got, err)
 	}
 }
