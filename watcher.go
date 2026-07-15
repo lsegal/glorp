@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,16 +13,23 @@ import (
 )
 
 type Issue struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title,omitempty"`
-	State     string    `json:"state,omitempty"`
-	CreatedAt time.Time `json:"createdAt,omitempty"`
+	Number    int          `json:"number"`
+	Title     string       `json:"title,omitempty"`
+	State     string       `json:"state,omitempty"`
+	CreatedAt time.Time    `json:"createdAt,omitempty"`
+	Labels    []IssueLabel `json:"labels,omitempty"`
+}
+type IssueLabel struct {
+	Name string `json:"name"`
 }
 type IssueSource interface {
 	ListIssues(context.Context, string) ([]Issue, error)
 }
 type LabelEnsurer interface {
 	EnsureLabels(context.Context, string) error
+}
+type IssueLabeler interface {
+	SetIssueLabel(context.Context, string, int, bool) error
 }
 type AgentRunner interface {
 	Run(context.Context, Issue) error
@@ -32,10 +40,17 @@ type Watcher struct {
 	Concurrency int
 	StatePath   string
 	Issues      IssueSource
-	Labels      LabelEnsurer
 	Runner      AgentRunner
 	Out         io.Writer
+	Labels      LabelEnsurer
 	logMu       sync.Mutex
+}
+
+const agentStartedLabel = "agent-started"
+
+type workState struct {
+	Status    string `json:"status"`
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 type taskState struct {
@@ -77,14 +92,21 @@ func (w *Watcher) Run(ctx context.Context) error {
 		}
 		w.logf("ensured agent labels exist")
 	}
-	seen, err := loadState(w.StatePath)
+	work, err := loadWorkState(w.StatePath)
 	if err != nil {
 		return err
+	}
+	seen := make(map[int]bool, len(work))
+	for number := range work {
+		seen[number] = true
 	}
 	w.logf("watching %s (poll every %s, concurrency %d; %d handled issue(s) loaded)", w.Repo, w.Interval, w.Concurrency, len(seen))
 	sem := make(chan struct{}, w.Concurrency)
 	var wg sync.WaitGroup
 	var tasks taskState
+	var workMu sync.Mutex
+	active := make(map[int]string)
+	labeler, _ := w.Labels.(IssueLabeler)
 	pollNumber := 0
 	poll := func() error {
 		pollNumber++
@@ -99,12 +121,19 @@ func (w *Watcher) Run(ctx context.Context) error {
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
 		newIssues := make([]Issue, 0)
 		for _, issue := range issues {
-			if issue.Number > 0 && !seen[issue.Number] {
+			workMu.Lock()
+			_, isActive := active[issue.Number]
+			wasActive := work[issue.Number].Status == "active"
+			workMu.Unlock()
+			if issue.Number > 0 && ((hasLabel(issue, agentStartedLabel) && !isActive) || (wasActive && !isActive) || !seen[issue.Number]) {
 				seen[issue.Number] = true
 				newIssues = append(newIssues, issue)
 			}
 		}
-		if err := saveState(w.StatePath, seen); err != nil {
+		workMu.Lock()
+		err = saveWorkState(w.StatePath, work)
+		workMu.Unlock()
+		if err != nil {
 			w.logf("poll #%d failed while saving state: %v", n, err)
 			return err
 		}
@@ -114,6 +143,23 @@ func (w *Watcher) Run(ctx context.Context) error {
 		}
 		w.logf("poll #%d discovered %d new issue(s): %s", n, len(newIssues), issueNumbers(newIssues))
 		for _, issue := range newIssues {
+			session, err := newSessionID()
+			if err != nil {
+				return err
+			}
+			if labeler != nil {
+				if err := labeler.SetIssueLabel(ctx, w.Repo, issue.Number, true); err != nil {
+					return err
+				}
+			}
+			workMu.Lock()
+			active[issue.Number] = session
+			work[issue.Number] = workState{Status: "active", SessionID: session}
+			err = saveWorkState(w.StatePath, work)
+			workMu.Unlock()
+			if err != nil {
+				return err
+			}
 			tasks.mu.Lock()
 			tasks.queued++
 			queued = tasks.queued
@@ -141,6 +187,14 @@ func (w *Watcher) Run(ctx context.Context) error {
 				defer func() { <-sem }()
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
 				if err := w.Runner.Run(ctx, i); err != nil {
+					if labeler != nil {
+						_ = labeler.SetIssueLabel(context.Background(), w.Repo, i.Number, false)
+					}
+					workMu.Lock()
+					delete(active, i.Number)
+					work[i.Number] = workState{Status: "failed"}
+					_ = saveWorkState(w.StatePath, work)
+					workMu.Unlock()
 					tasks.mu.Lock()
 					tasks.running--
 					tasks.failed++
@@ -148,6 +202,14 @@ func (w *Watcher) Run(ctx context.Context) error {
 					tasks.mu.Unlock()
 					w.logf("issue #%d failed: %v (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, err, running, queued, completed, failed)
 				} else {
+					if labeler != nil {
+						_ = labeler.SetIssueLabel(context.Background(), w.Repo, i.Number, false)
+					}
+					workMu.Lock()
+					delete(active, i.Number)
+					work[i.Number] = workState{Status: "completed"}
+					_ = saveWorkState(w.StatePath, work)
+					workMu.Unlock()
 					tasks.mu.Lock()
 					tasks.running--
 					tasks.completed++
@@ -200,6 +262,24 @@ func issueNumbers(issues []Issue) string {
 	}
 	return strings.Join(numbers, ", ")
 }
+func hasLabel(issue Issue, name string) bool {
+	for _, label := range issue.Labels {
+		if label.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func newSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("create agent session: %w", err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
 func parseIssues(data []byte) ([]Issue, error) {
 	var issues []Issue
 	if err := json.Unmarshal(data, &issues); err != nil {
@@ -248,12 +328,26 @@ func loadState(path string) (map[int]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	var s map[int]bool
-	if err := json.Unmarshal(b, &s); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("decode state: %w", err)
 	}
-	if s == nil {
-		s = map[int]bool{}
+	s := make(map[int]bool, len(raw))
+	for key, value := range raw {
+		var number int
+		if _, err := fmt.Sscanf(key, "%d", &number); err != nil {
+			return nil, fmt.Errorf("decode state issue %q: %w", key, err)
+		}
+		var present bool
+		if err := json.Unmarshal(value, &present); err == nil {
+			s[number] = present
+			continue
+		}
+		var state workState
+		if err := json.Unmarshal(value, &state); err != nil {
+			return nil, fmt.Errorf("decode state issue %q: %w", key, err)
+		}
+		s[number] = state.Status != ""
 	}
 	return s, nil
 }
@@ -262,6 +356,54 @@ func saveState(path string, seen map[int]bool) error {
 		return nil
 	}
 	b, err := json.MarshalIndent(seen, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0600)
+}
+
+func loadWorkState(path string) (map[int]workState, error) {
+	result := make(map[int]workState)
+	if path == "" {
+		return result, nil
+	}
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return result, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("decode state: %w", err)
+	}
+	for key, value := range raw {
+		var number int
+		if _, err := fmt.Sscanf(key, "%d", &number); err != nil {
+			return nil, fmt.Errorf("decode state issue %q: %w", key, err)
+		}
+		var legacy bool
+		if json.Unmarshal(value, &legacy) == nil {
+			if legacy {
+				result[number] = workState{Status: "completed"}
+			}
+			continue
+		}
+		var state workState
+		if err := json.Unmarshal(value, &state); err != nil {
+			return nil, fmt.Errorf("decode state issue %q: %w", key, err)
+		}
+		result[number] = state
+	}
+	return result, nil
+}
+
+func saveWorkState(path string, state map[int]workState) error {
+	if path == "" {
+		return nil
+	}
+	b, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}

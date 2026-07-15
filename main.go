@@ -114,7 +114,7 @@ func issueListArgs(repo, filter string, allIssues bool) []string {
 	if !allIssues && filter != "" {
 		args = append(args, "--search", filter)
 	}
-	return append(args, "--json", "number,title,state,createdAt")
+	return append(args, "--json", "number,title,state,createdAt,labels")
 }
 
 type target struct {
@@ -156,6 +156,18 @@ func decodeIssues(data []byte, err error) ([]Issue, error) {
 		return nil, fmt.Errorf("list issues: %w", err)
 	}
 	return parseIssues(data)
+}
+
+func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add bool) error {
+	action := "--remove-label"
+	if add {
+		action = "--add-label"
+	}
+	cmd := exec.CommandContext(ctx, g.Binary, "issue", "edit", fmt.Sprintf("%d", number), "--repo", repo, action, "agent-started")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s agent-started label on issue #%d: %w: %s", strings.TrimPrefix(action, "--"), number, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 type CommandRunner struct{ Binary, Agent string }

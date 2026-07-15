@@ -168,3 +168,22 @@ func TestStateRoundTrip(t *testing.T) {
 		t.Fatalf("state error=%v value=%v", err, got)
 	}
 }
+
+func TestWorkStateRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	want := map[int]workState{7: {Status: "active", SessionID: "session-7"}}
+	if err := saveWorkState(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadWorkState(path)
+	if err != nil || got[7] != want[7] {
+		t.Fatalf("state error=%v value=%v", err, got)
+	}
+}
+
+func TestHasAgentStartedLabel(t *testing.T) {
+	issue := Issue{Labels: []IssueLabel{{Name: "agent-ready"}, {Name: agentStartedLabel}}}
+	if !hasLabel(issue, agentStartedLabel) {
+		t.Fatal("agent-started label was not found")
+	}
+}
