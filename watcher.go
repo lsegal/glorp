@@ -31,6 +31,9 @@ type LabelEnsurer interface {
 type IssueLabeler interface {
 	SetIssueLabel(context.Context, string, int, bool) error
 }
+type IssueStatuser interface {
+	SetIssueStatus(context.Context, string, int, string) error
+}
 type AgentRunner interface {
 	Run(context.Context, Issue) error
 }
@@ -43,6 +46,7 @@ type Watcher struct {
 	Runner      AgentRunner
 	Out         io.Writer
 	Labels      LabelEnsurer
+	Status      IssueStatuser
 	logMu       sync.Mutex
 }
 
@@ -152,6 +156,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 					return err
 				}
 			}
+			if w.Status != nil {
+				if err := w.Status.SetIssueStatus(ctx, w.Repo, issue.Number, "In Progress"); err != nil {
+					return err
+				}
+			}
 			workMu.Lock()
 			active[issue.Number] = session
 			work[issue.Number] = workState{Status: "active", SessionID: session}
@@ -187,6 +196,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 				defer func() { <-sem }()
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
 				if err := w.Runner.Run(ctx, i); err != nil {
+					if w.Status != nil {
+						if statusErr := w.Status.SetIssueStatus(context.Background(), w.Repo, i.Number, "Todo"); statusErr != nil {
+							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
+						}
+					}
 					if labeler != nil {
 						_ = labeler.SetIssueLabel(context.Background(), w.Repo, i.Number, false)
 					}
@@ -202,6 +216,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 					tasks.mu.Unlock()
 					w.logf("issue #%d failed: %v (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, err, running, queued, completed, failed)
 				} else {
+					if w.Status != nil {
+						if statusErr := w.Status.SetIssueStatus(context.Background(), w.Repo, i.Number, "Done"); statusErr != nil {
+							w.logf("issue #%d failed to update project status: %v", i.Number, statusErr)
+						}
+					}
 					if labeler != nil {
 						_ = labeler.SetIssueLabel(context.Background(), w.Repo, i.Number, false)
 					}
@@ -289,6 +308,7 @@ func parseIssues(data []byte) ([]Issue, error) {
 }
 
 type projectItem struct {
+	ID      string          `json:"id"`
 	Content *projectContent `json:"content"`
 }
 
@@ -302,6 +322,20 @@ type projectList struct {
 }
 
 func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
+	items, decodeErr := decodeProjectItems(data, err)
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	issues := make([]Issue, 0, len(items))
+	for _, item := range items {
+		if item.Content != nil && item.Content.Type == "Issue" {
+			issues = append(issues, item.Content.Issue)
+		}
+	}
+	return issues, nil
+}
+
+func decodeProjectItems(data []byte, err error) ([]projectItem, error) {
 	if err != nil {
 		detail := strings.TrimSpace(string(data))
 		if strings.Contains(detail, "missing required scopes") && strings.Contains(detail, "read:project") {
@@ -313,16 +347,29 @@ func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
 		return nil, fmt.Errorf("list project items: %w", err)
 	}
 	var result projectList
-	if err := json.Unmarshal(data, &result); err != nil {
+	if err := json.Unmarshal(data, &result); err == nil && result.Items != nil {
+		return result.Items, nil
+	}
+	var items []projectItem
+	if err := json.Unmarshal(data, &items); err != nil {
 		return nil, fmt.Errorf("decode project items: %w", err)
 	}
-	issues := make([]Issue, 0, len(result.Items))
-	for _, item := range result.Items {
-		if item.Content != nil && item.Content.Type == "Issue" {
-			issues = append(issues, item.Content.Issue)
-		}
+	return items, nil
+}
+
+func decodeProjectFields(data []byte, err error) ([]projectField, error) {
+	if err != nil {
+		return nil, fmt.Errorf("list project fields: %w", err)
 	}
-	return issues, nil
+	var result projectFields
+	if decodeErr := json.Unmarshal(data, &result); decodeErr == nil && result.Fields != nil {
+		return result.Fields, nil
+	}
+	var fields []projectField
+	if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+		return nil, fmt.Errorf("decode project fields: %w", decodeErr)
+	}
+	return fields, nil
 }
 func loadState(path string) (map[int]bool, error) {
 	if path == "" {

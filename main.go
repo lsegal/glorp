@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/url"
@@ -49,7 +50,7 @@ func main() {
 	defer stop()
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
-	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Runner: CommandRunner{Binary: binary, Agent: *agent}, Out: os.Stdout}
+	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent}, Out: os.Stdout}
 	if err := w.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -60,6 +61,25 @@ type GHCLI struct {
 	Binary    string
 	Filter    string
 	AllIssues bool
+}
+
+type projectFieldOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type projectField struct {
+	ID      string               `json:"id"`
+	Name    string               `json:"name"`
+	Options []projectFieldOption `json:"options"`
+}
+
+type projectFields struct {
+	Fields []projectField `json:"fields"`
+}
+
+type projectView struct {
+	ID string `json:"id"`
 }
 
 type managedLabel struct {
@@ -176,6 +196,76 @@ func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add b
 	cmd := exec.CommandContext(ctx, g.Binary, "issue", "edit", fmt.Sprintf("%d", number), "--repo", repo, action, "agent-started")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s agent-started label on issue #%d: %w: %s", strings.TrimPrefix(action, "--"), number, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, status string) error {
+	target, err := parseTarget(repo)
+	if err != nil {
+		return err
+	}
+	if !target.isProject {
+		return nil
+	}
+
+	list := exec.CommandContext(ctx, g.Binary, projectListArgs(target, "", true)...)
+	output, err := list.Output()
+	items, err := decodeProjectItems(output, err)
+	if err != nil {
+		return err
+	}
+	var itemID string
+	for _, item := range items {
+		if item.Content != nil && item.Content.Number == number {
+			itemID = item.ID
+			break
+		}
+	}
+	if itemID == "" {
+		return fmt.Errorf("issue #%d is not in project %s", number, target.projectID)
+	}
+
+	viewCmd := exec.CommandContext(ctx, g.Binary, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
+	viewOutput, err := viewCmd.Output()
+	if err != nil {
+		return fmt.Errorf("view project: %w", err)
+	}
+	var view projectView
+	if err := json.Unmarshal(viewOutput, &view); err != nil {
+		return fmt.Errorf("decode project: %w", err)
+	}
+	if view.ID == "" {
+		return fmt.Errorf("project %s has no ID", target.projectID)
+	}
+
+	fieldsCmd := exec.CommandContext(ctx, g.Binary, "project", "field-list", target.projectID, "--owner", target.owner, "--format", "json", "--limit", "1000")
+	fieldsOutput, err := fieldsCmd.Output()
+	fields, err := decodeProjectFields(fieldsOutput, err)
+	if err != nil {
+		return err
+	}
+	var fieldID, optionID string
+	for _, field := range fields {
+		if field.Name != "Status" {
+			continue
+		}
+		fieldID = field.ID
+		for _, option := range field.Options {
+			if option.Name == status {
+				optionID = option.ID
+				break
+			}
+		}
+		break
+	}
+	if fieldID == "" || optionID == "" {
+		return fmt.Errorf("project %s has no Status option %q", target.projectID, status)
+	}
+
+	edit := exec.CommandContext(ctx, g.Binary, "project", "item-edit", "--id", itemID, "--field-id", fieldID, "--project-id", view.ID, "--single-select-option-id", optionID)
+	if output, err := edit.CombinedOutput(); err != nil {
+		return fmt.Errorf("update project status for issue #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
