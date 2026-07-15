@@ -13,15 +13,21 @@ import (
 )
 
 type Issue struct {
-	Number        int          `json:"number"`
-	Title         string       `json:"title,omitempty"`
-	State         string       `json:"state,omitempty"`
-	CreatedAt     time.Time    `json:"createdAt,omitempty"`
-	Labels        []IssueLabel `json:"labels,omitempty"`
-	ProjectStatus string       `json:"projectStatus,omitempty"`
+	Number        int               `json:"number"`
+	Title         string            `json:"title,omitempty"`
+	Body          string            `json:"body,omitempty"`
+	State         string            `json:"state,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt,omitempty"`
+	Labels        []IssueLabel      `json:"labels,omitempty"`
+	DependsOn     []IssueDependency `json:"dependsOn,omitempty"`
+	ProjectStatus string            `json:"projectStatus,omitempty"`
 }
 type IssueLabel struct {
 	Name string `json:"name"`
+}
+type IssueDependency struct {
+	Number int    `json:"number"`
+	State  string `json:"state"`
 }
 type IssueSource interface {
 	ListIssues(context.Context, string) ([]Issue, error)
@@ -126,6 +132,10 @@ func (w *Watcher) Run(ctx context.Context) error {
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
 		newIssues := make([]Issue, 0)
 		for _, issue := range issues {
+			if blocked, reason := issueBlocked(issue); blocked {
+				w.logf("issue #%d not picked up: %s", issue.Number, reason)
+				continue
+			}
 			workMu.Lock()
 			_, isActive := active[issue.Number]
 			wasActive := work[issue.Number].Status == "active"
@@ -273,6 +283,23 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func issueBlocked(issue Issue) (bool, string) {
+	blocked := make([]string, 0)
+	for _, dependency := range issue.DependsOn {
+		if !strings.EqualFold(dependency.State, "closed") {
+			if dependency.State == "" {
+				blocked = append(blocked, fmt.Sprintf("depends on #%d", dependency.Number))
+			} else {
+				blocked = append(blocked, fmt.Sprintf("depends on #%d (%s)", dependency.Number, strings.ToLower(dependency.State)))
+			}
+		}
+	}
+	if len(blocked) == 0 {
+		return false, ""
+	}
+	return true, strings.Join(blocked, ", ")
 }
 
 func issueNumbers(issues []Issue) string {

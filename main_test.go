@@ -39,8 +39,16 @@ func TestParseTargetURLs(t *testing.T) {
 }
 
 func TestProjectListArgs(t *testing.T) {
-	got := projectListArgs(target{owner: "lsegal", projectID: "3", isProject: true}, "label=agent-ready label=other status=closed", false)
-	want := []string{"project", "item-list", "3", "--owner", "lsegal", "--format", "json", "--limit", "1000", "--query", "is:issue is:open label:agent-ready label:other status=closed"}
+	got := projectListArgs(target{owner: "lsegal", projectID: "3", isProject: true}, "label=other status=closed", false)
+	want := []string{"project", "item-list", "3", "--owner", "lsegal", "--format", "json", "--limit", "1000", "--query", "is:issue is:open label:other status=closed"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %#v, want %#v", got, want)
+	}
+}
+
+func TestProjectListArgsOmitsDefaultFilter(t *testing.T) {
+	got := projectListArgs(target{owner: "lsegal", projectID: "3", isProject: true}, defaultIssueFilter, false)
+	want := []string{"project", "item-list", "3", "--owner", "lsegal", "--format", "json", "--limit", "1000", "--query", "is:issue is:open"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
 	}
@@ -76,7 +84,7 @@ func TestDecodeProjectIssuesReportsMissingScope(t *testing.T) {
 
 func TestIssueListArgsUsesDefaultFilter(t *testing.T) {
 	got := issueListArgs("owner/repo", "label=agent-ready label=other status=closed", false)
-	want := []string{"issue", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--search", "label:agent-ready label:other status=closed", "--json", "number,title,state,createdAt,labels"}
+	want := []string{"issue", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--search", "label:agent-ready label:other status=closed", "--json", "number,title,body,state,createdAt,labels"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
 	}

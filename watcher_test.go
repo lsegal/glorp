@@ -297,3 +297,13 @@ func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
 		t.Fatal("agent-started repository issue was not reclaimed")
 	}
 }
+
+func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
+	blocked, reason := issueBlocked(Issue{DependsOn: []IssueDependency{{Number: 4, State: "open"}, {Number: 7, State: "CLOSED"}}})
+	if !blocked || reason != "depends on #4 (open)" {
+		t.Fatalf("blocked=%v reason=%q", blocked, reason)
+	}
+	if blocked, _ := issueBlocked(Issue{DependsOn: []IssueDependency{{Number: 7, State: "closed"}}}); blocked {
+		t.Fatal("closed dependency still blocks issue")
+	}
+}

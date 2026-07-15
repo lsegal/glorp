@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
+	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -25,7 +27,7 @@ func main() {
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
 	statePath := flag.String("state", ".gh-watch.json", "file used to remember handled issue numbers")
-	filter := flag.String("filter", "label=agent-ready", "GitHub issue search filter")
+	filter := flag.String("filter", defaultIssueFilter, "GitHub issue search filter")
 	allIssues := flag.Bool("all-issues", false, "disable the default issue filter")
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -69,6 +71,8 @@ type GHCLI struct {
 	Filter    string
 	AllIssues bool
 }
+
+const defaultIssueFilter = "label=agent-ready"
 
 type projectFieldOption struct {
 	ID   string `json:"id"`
@@ -126,10 +130,21 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 	}
 	cmd := exec.CommandContext(ctx, g.Binary, args...)
 	output, err := cmd.CombinedOutput()
+	var issues []Issue
 	if target.isProject {
-		return decodeProjectIssues(output, err)
+		issues, err = decodeProjectIssues(output, err)
+	} else {
+		issues, err = decodeIssues(output, err)
 	}
-	return decodeIssues(output, err)
+	if err != nil {
+		return nil, err
+	}
+	for i := range issues {
+		if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+			return nil, err
+		}
+	}
+	return issues, nil
 }
 
 func issueListArgs(repo, filter string, allIssues bool) []string {
@@ -141,7 +156,7 @@ func issueListArgs(repo, filter string, allIssues bool) []string {
 	if !allIssues && filter != "" {
 		args = append(args, "--search", searchQuery(filter))
 	}
-	return append(args, "--json", "number,title,state,createdAt,labels")
+	return append(args, "--json", "number,title,body,state,createdAt,labels")
 }
 
 type target struct {
@@ -173,7 +188,7 @@ func parseTarget(value string) (target, error) {
 func projectListArgs(t target, filter string, allIssues bool) []string {
 	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
 	query := "is:issue is:open"
-	if !allIssues && filter != "" {
+	if !allIssues && filter != "" && filter != defaultIssueFilter {
 		query += " " + searchQuery(filter)
 	}
 	return append(args, "--query", query)
@@ -193,6 +208,53 @@ func decodeIssues(data []byte, err error) ([]Issue, error) {
 		return nil, fmt.Errorf("list issues: %w", err)
 	}
 	return parseIssues(data)
+}
+
+var dependencyPattern = regexp.MustCompile(`(?i)\bdepends\s+on\s+#(\d+)`)
+
+func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) error {
+	dependencies := make(map[int]IssueDependency)
+	for _, match := range dependencyPattern.FindAllStringSubmatch(issue.Body, -1) {
+		number := 0
+		if _, err := fmt.Sscanf(match[1], "%d", &number); err == nil && number > 0 {
+			dependency := IssueDependency{Number: number}
+			if repo != "" {
+				cmd := exec.CommandContext(ctx, g.Binary, "issue", "view", fmt.Sprint(number), "--repo", repo, "--json", "state")
+				output, viewErr := cmd.Output()
+				if viewErr != nil {
+					return fmt.Errorf("read dependency #%d for issue #%d: %w", number, issue.Number, viewErr)
+				}
+				var state struct {
+					State string `json:"state"`
+				}
+				if err := json.Unmarshal(output, &state); err != nil {
+					return fmt.Errorf("decode dependency #%d for issue #%d: %w", number, issue.Number, err)
+				}
+				dependency.State = state.State
+			}
+			dependencies[number] = dependency
+		}
+	}
+	if repo != "" {
+		cmd := exec.CommandContext(ctx, g.Binary, "api", "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("list dependencies for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
+		}
+		var related []IssueDependency
+		if err := json.Unmarshal(output, &related); err != nil {
+			return fmt.Errorf("decode dependencies for issue #%d: %w", issue.Number, err)
+		}
+		for _, dependency := range related {
+			dependencies[dependency.Number] = dependency
+		}
+	}
+	issue.DependsOn = issue.DependsOn[:0]
+	for _, dependency := range dependencies {
+		issue.DependsOn = append(issue.DependsOn, dependency)
+	}
+	slices.SortFunc(issue.DependsOn, func(a, b IssueDependency) int { return a.Number - b.Number })
+	return nil
 }
 
 func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add bool) error {
