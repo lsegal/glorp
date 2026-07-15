@@ -22,6 +22,12 @@ func TestValidRepo(t *testing.T) {
 	}
 }
 
+func TestVersionDefaultsToDevelopment(t *testing.T) {
+	if version != "dev" {
+		t.Fatalf("version = %q, want dev", version)
+	}
+}
+
 func TestParseTargetURLs(t *testing.T) {
 	for _, input := range []string{
 		"https://github.com/lsegal/gh-watch",
