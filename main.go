@@ -75,7 +75,7 @@ func main() {
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
 	targets := flag.Args()
-	events := make(chan struct{}, 1)
+	events := make(chan WebhookEvent, 1)
 	w := &Watcher{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Output: os.Stdout}, Out: os.Stdout}
 	var server *http.Server
 	if !*poll {

@@ -29,7 +29,7 @@ Watching a project requires a GitHub CLI token with the `read:project` scope. Be
 
 `--concurrency 0` is normalized to 3. Use `--agent claude`, `--model`, and `--model-level low|medium|high` to configure the agent, or use `--codex-binary` and `--claude-binary` to locate its executable. Agents are launched with their non-interactive, no-sandbox permission-bypass options. Every open issue not already listed in `.gh-watch.json` is handled, including issues created before `gh-watch` started; issue numbers are persisted to avoid duplicate work after restarts.
 
-Runtime progress is written to stdout with timestamps. It reports each poll's open-issue count, baseline/new-issue detection, queued and running task counts, agent completion/failure totals, poll retries, and shutdown progress.
+Runtime progress is written to stdout with timestamps. It reports each poll's open-issue count, baseline/new-issue detection, queued and running task counts, agent completion/failure totals, webhook delivery details, webhook follow-up refreshes, poll retries, and shutdown progress.
 
 While an agent is running, gh-watch applies the `agent-started` label to its issue and removes it when the agent exits. Persisted session state lets a restarted watcher reclaim issues whose label was left behind by an interrupted process.
 
