@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -11,7 +12,7 @@ import (
 	"os/signal"
 	"path"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -52,7 +53,7 @@ func main() {
 	defer stop()
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
-	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent}, Out: os.Stdout}
+	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Repo: flag.Arg(0)}, Out: os.Stdout}
 	if err := w.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -244,7 +245,7 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 	for _, dependency := range dependencies {
 		issue.DependsOn = append(issue.DependsOn, dependency)
 	}
-	sort.Slice(issue.DependsOn, func(i, j int) bool { return issue.DependsOn[i].Number < issue.DependsOn[j].Number })
+	slices.SortFunc(issue.DependsOn, func(a, b IssueDependency) int { return a.Number - b.Number })
 	return nil
 }
 
@@ -330,7 +331,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, stat
 	return nil
 }
 
-type CommandRunner struct{ Binary, Agent string }
+type CommandRunner struct{ Binary, Agent, Repo string }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
 	prompt := fmt.Sprintf("/gh-fix %d", issue.Number)
@@ -343,8 +344,49 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
 	args := commandArgs(r, issue)
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Run(); err != nil {
+		report, reportErr := bugReportURL(r.Repo, issue, args, output.String())
+		if reportErr != nil {
+			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", err, reportErr)
+		}
+		return fmt.Errorf("agent failed: %w; bug report: %s", err, report)
+	}
+	return nil
+}
+
+const maxBugReportOutput = 12000
+
+var robotSecretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:gh[pousr]|github_pat|xox[baprs])-?[A-Za-z0-9_\-]{8,}\b`),
+	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`),
+	regexp.MustCompile(`(?i)(\b(?:authorization|token|password|passwd|secret|api[_-]?key)\s*[:=]\s*)[^\s,]+`),
+}
+
+func scrubRobotOutput(output string) string {
+	for _, pattern := range robotSecretPatterns {
+		output = pattern.ReplaceAllString(output, `${1}[REDACTED]`)
+	}
+	if len(output) > maxBugReportOutput {
+		output = output[:maxBugReportOutput] + "\n[output truncated]"
+	}
+	return output
+}
+
+func bugReportURL(repo string, issue Issue, args []string, output string) (string, error) {
+	target, err := parseTarget(repo)
+	if err != nil || target.isProject || target.repo == "" {
+		if err == nil {
+			err = fmt.Errorf("bug reports require a repository target")
+		}
+		return "", err
+	}
+	values := url.Values{}
+	values.Set("template", "bug_report.md")
+	values.Set("title", fmt.Sprintf("Agent failed while handling issue #%d", issue.Number))
+	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n```text\n%s\n```\n", target.repo, issue.Number, strings.Join(args, " "), scrubRobotOutput(output)))
+	return "https://github.com/" + target.repo + "/issues/new?" + values.Encode(), nil
 }
 func validRepo(repo string) bool {
 	parts := strings.Split(repo, "/")
