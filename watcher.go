@@ -303,6 +303,13 @@ type projectList struct {
 
 func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
 	if err != nil {
+		detail := strings.TrimSpace(string(data))
+		if strings.Contains(detail, "missing required scopes") && strings.Contains(detail, "read:project") {
+			return nil, fmt.Errorf("list project items: %w; authenticate with the read:project scope using `gh auth refresh -s read:project`", err)
+		}
+		if detail != "" {
+			return nil, fmt.Errorf("list project items: %w: %s", err, detail)
+		}
 		return nil, fmt.Errorf("list project items: %w", err)
 	}
 	var result projectList

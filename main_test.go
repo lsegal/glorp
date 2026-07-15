@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +49,13 @@ func TestDecodeProjectIssues(t *testing.T) {
 	got, err := decodeProjectIssues([]byte(`{"items":[{"content":{"number":7,"title":"bug","type":"Issue"}},{"content":{"number":8,"type":"PullRequest"}}]}`), nil)
 	if err != nil || len(got) != 1 || got[0].Number != 7 {
 		t.Fatalf("decode project issues = %#v, %v", got, err)
+	}
+}
+
+func TestDecodeProjectIssuesReportsMissingScope(t *testing.T) {
+	_, err := decodeProjectIssues([]byte("error: your authentication token is missing required scopes [read:project]"), errors.New("exit status 1"))
+	if err == nil || !strings.Contains(err.Error(), "gh auth refresh -s read:project") {
+		t.Fatalf("missing scope error = %v", err)
 	}
 }
 

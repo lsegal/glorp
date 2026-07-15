@@ -98,7 +98,7 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 		args = projectListArgs(target, g.Filter, g.AllIssues)
 	}
 	cmd := exec.CommandContext(ctx, g.Binary, args...)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if target.isProject {
 		return decodeProjectIssues(output, err)
 	}
