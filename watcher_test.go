@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -34,6 +35,28 @@ type fakeRunner struct {
 	active, max int
 	release     chan struct{}
 }
+
+type fakeOutputRunner struct{}
+
+func (fakeOutputRunner) Run(context.Context, Issue) error { return nil }
+
+func (fakeOutputRunner) RunWithOutput(_ context.Context, _ Issue, output io.Writer) error {
+	_, err := io.WriteString(output, "agent output\n")
+	return err
+}
+
+type snapshotReporter struct {
+	mu        sync.Mutex
+	snapshots []WatchSnapshot
+}
+
+func (r *snapshotReporter) Snapshot(snapshot WatchSnapshot) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshots = append(r.snapshots, snapshot)
+}
+
+func (r *snapshotReporter) Log(string) {}
 
 type fakeLabelEnsurer struct {
 	called bool
@@ -117,6 +140,35 @@ func TestWatcherRunsUnseenIssuesWithLimit(t *testing.T) {
 			t.Errorf("logs missing %q:\n%s", want, logs.String())
 		}
 	}
+}
+
+func TestWatcherShowsAgentOutputInJobSnapshot(t *testing.T) {
+	reporter := &snapshotReporter{}
+	w := &Watcher{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 1, Title: "bug"}}}},
+		Runner: fakeOutputRunner{}, UI: reporter,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	for _, snapshot := range reporter.snapshots {
+		for _, job := range snapshot.Jobs {
+			if job.Number == 1 && strings.Contains(job.Log, "agent output") {
+				return
+			}
+		}
+	}
+	t.Fatalf("agent output was not included in snapshots: %+v", reporter.snapshots)
 }
 func TestWatcherTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	dir := t.TempDir()

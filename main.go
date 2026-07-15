@@ -465,12 +465,23 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 }
 
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
+	return r.run(ctx, issue, nil)
+}
+
+func (r CommandRunner) RunWithOutput(ctx context.Context, issue Issue, output io.Writer) error {
+	return r.run(ctx, issue, output)
+}
+
+func (r CommandRunner) run(ctx context.Context, issue Issue, jobOutput io.Writer) error {
 	args := commandArgs(r, issue)
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	var output bytes.Buffer
 	var agentOutput io.Writer = &output
+	if jobOutput != nil {
+		agentOutput = io.MultiWriter(agentOutput, jobOutput)
+	}
 	if r.Output != nil {
-		agentOutput = io.MultiWriter(&output, r.Output)
+		agentOutput = io.MultiWriter(agentOutput, r.Output)
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	if err := cmd.Run(); err != nil {

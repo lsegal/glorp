@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show agent output in its dashboard job card.
 - Show the Codex weekly quota remaining in the dashboard status bar.
 - Improve the terminal dashboard with titled panels, a dedicated scrolling log area, and clearer status boundaries.
 - Log webhook delivery details and retry webhook-triggered issue refreshes after GitHub indexing catches up.
