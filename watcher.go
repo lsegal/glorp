@@ -131,6 +131,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	var workMu sync.Mutex
 	active := make(map[int]string)
 	labeler, _ := w.Labels.(IssueLabeler)
+	projectTarget := isProjectTarget(w.Repo)
 	pollNumber := 0
 	poll := func() error {
 		pollNumber++
@@ -175,7 +176,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if labeler != nil {
+			if labeler != nil && !projectTarget {
 				if err := labeler.SetIssueLabel(ctx, issueRepository(w.Repo, issue), issue.Number, true); err != nil {
 					return err
 				}
@@ -225,7 +226,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
 						}
 					}
-					if labeler != nil {
+					if labeler != nil && !projectTarget {
 						_ = labeler.SetIssueLabel(context.Background(), issueRepository(w.Repo, i), i.Number, false)
 					}
 					workMu.Lock()
@@ -245,7 +246,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 							w.logf("issue #%d failed to update project status: %v", i.Number, statusErr)
 						}
 					}
-					if labeler != nil {
+					if labeler != nil && !projectTarget {
 						_ = labeler.SetIssueLabel(context.Background(), issueRepository(w.Repo, i), i.Number, false)
 					}
 					workMu.Lock()
