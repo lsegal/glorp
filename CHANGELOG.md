@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a `--version` flag and promote changelog entries during releases.
 - Fix labeling issues discovered while watching GitHub project boards.
 -Recover stuck project issues from their `In Progress` board status without relying on the `agent-started` label.
 - Use the `bug:` prefix for new bug-report issue titles.
