@@ -78,6 +78,7 @@ type Watcher struct {
 	Labels      LabelEnsurer
 	Status      IssueStatuser
 	UI          UIReporter
+	Quota       func(context.Context) string
 	logMu       sync.Mutex
 }
 
@@ -190,7 +191,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 		if len(list) > maxVisibleJobs {
 			list = list[:maxVisibleJobs]
 		}
-		w.UI.Snapshot(WatchSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Jobs: list})
+		quota := ""
+		if w.Quota != nil {
+			quota = w.Quota(ctx)
+		}
+		w.UI.Snapshot(WatchSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quota: quota, Jobs: list})
 	}
 	pollNumber := 0
 	poll := func() error {

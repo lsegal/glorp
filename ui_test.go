@@ -41,6 +41,22 @@ func TestDashboardKeepsLogsInDedicatedPanel(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsQuota(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Quota: "weekly 87% left"}))
+	if !strings.Contains(updated.(dashboard).View(), "quota: weekly 87% left") {
+		t.Fatal("dashboard did not show quota")
+	}
+}
+
+func TestFormatCodexQuota(t *testing.T) {
+	window := int64(7 * 24 * 60)
+	if got := formatCodexQuota(&codexPrimaryRateLimit{UsedPercent: 13, WindowDurationMins: &window}); got != "weekly 87% left" {
+		t.Fatalf("quota = %q", got)
+	}
+}
+
 func TestDashboardTrimsOldestJobs(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

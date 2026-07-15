@@ -38,6 +38,7 @@ type WatchSnapshot struct {
 	WebhookOnline bool
 	TokensUsed    int
 	TokenLimit    int
+	Quota         string
 	Jobs          []JobSnapshot
 }
 
@@ -128,10 +129,7 @@ func (m dashboard) View() string {
 	logHeight := max(3, m.height/3)
 	logs := logPanel.Copy().Width(max(1, m.width-2)).Height(max(1, logHeight-2)).Render(muted.Render("Logs") + "\n" + m.viewport.View())
 	counts := fmt.Sprintf("jobs: %s idle %s active %s total", muted.Render(fmt.Sprint(max(0, m.snapshot.Concurrency-m.snapshot.Running-m.snapshot.Queued))), active.Render(fmt.Sprint(m.snapshot.Running+m.snapshot.Queued)), fmt.Sprint(m.snapshot.Completed+m.snapshot.Failed+m.snapshot.Running+m.snapshot.Queued))
-	tokens := "tokens: unavailable"
-	if m.snapshot.TokenLimit > 0 {
-		tokens = fmt.Sprintf("tokens: %d/%d", m.snapshot.TokensUsed, m.snapshot.TokenLimit)
-	}
+	tokens := quotaText(m.snapshot)
 	push := "polling every " + m.snapshot.Interval.String()
 	if m.snapshot.UseWebhooks {
 		push = "push"
