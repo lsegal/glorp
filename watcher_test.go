@@ -285,6 +285,19 @@ func TestHasAgentStartedLabel(t *testing.T) {
 	}
 }
 
+func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
+	project := "https://github.com/users/lsegal/projects/3"
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, true) {
+		t.Fatal("in-progress project issue was not reclaimed")
+	}
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, true) {
+		t.Fatal("non-in-progress project issue was reclaimed")
+	}
+	if !shouldDispatchIssue("o/r", Issue{Labels: []IssueLabel{{Name: agentStartedLabel}}}, false, false, true) {
+		t.Fatal("agent-started repository issue was not reclaimed")
+	}
+}
+
 func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
 	blocked, reason := issueBlocked(Issue{DependsOn: []IssueDependency{{Number: 4, State: "open"}, {Number: 7, State: "CLOSED"}}})
 	if !blocked || reason != "depends on #4 (open)" {

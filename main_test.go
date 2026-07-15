@@ -55,8 +55,8 @@ func TestProjectListArgsOmitsDefaultFilter(t *testing.T) {
 }
 
 func TestDecodeProjectIssues(t *testing.T) {
-	got, err := decodeProjectIssues([]byte(`{"items":[{"content":{"number":7,"title":"bug","type":"Issue"}},{"content":{"number":8,"type":"PullRequest"}}]}`), nil)
-	if err != nil || len(got) != 1 || got[0].Number != 7 {
+	got, err := decodeProjectIssues([]byte(`{"items":[{"status":"In Progress","content":{"number":7,"title":"bug","type":"Issue"}},{"content":{"number":8,"type":"PullRequest"}}]}`), nil)
+	if err != nil || len(got) != 1 || got[0].Number != 7 || got[0].ProjectStatus != "In Progress" {
 		t.Fatalf("decode project issues = %#v, %v", got, err)
 	}
 }
