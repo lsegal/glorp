@@ -443,7 +443,7 @@ type CommandRunner struct {
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
-	prompt := fmt.Sprintf("/gh-fix %d", issue.Number)
+	prompt := fmt.Sprintf("/gh-fix %d\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead.", issue.Number)
 	if r.Agent == "codex" {
 		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox"}
 		if r.Model != "" {

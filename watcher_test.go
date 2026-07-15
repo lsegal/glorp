@@ -337,19 +337,21 @@ func TestWatcherResetsFailedProjectWorkOnStart(t *testing.T) {
 }
 
 func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
-	if got := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}); len(got) != 3 || got[0] != "exec" || got[1] != "--dangerously-bypass-approvals-and-sandbox" || got[2] != "/gh-fix 12" {
+	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	if got := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}); len(got) != 3 || got[0] != "exec" || got[1] != "--dangerously-bypass-approvals-and-sandbox" || got[2] != prompt {
 		t.Fatalf("codex args: %#v", got)
 	}
-	if got := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}); len(got) != 3 || got[0] != "-p" || got[1] != "--dangerously-skip-permissions" || got[2] != "/gh-fix 12" {
+	if got := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}); len(got) != 3 || got[0] != "-p" || got[1] != "--dangerously-skip-permissions" || got[2] != prompt {
 		t.Fatalf("claude args: %#v", got)
 	}
 }
 
 func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", "/gh-fix 12"}; !reflect.DeepEqual(got, want) {
+	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--model", "claude-sonnet", "--effort", "medium", "/gh-fix 12"}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--model", "claude-sonnet", "--effort", "medium", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
 	}
 }
