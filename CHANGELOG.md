@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Improve the terminal dashboard with titled panels, a dedicated scrolling log area, and clearer status boundaries.
 - Log webhook delivery details and retry webhook-triggered issue refreshes after GitHub indexing catches up.
 - Watch multiple repository or project targets in one process.
 - Support GitHub webhooks as the default issue refresh mechanism, with polling available through `--poll`.

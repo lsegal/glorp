@@ -59,6 +59,8 @@ var (
 	active   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	done     = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 	fail     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	panel    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238"))
+	logPanel = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("205"))
 )
 
 func newDashboard() dashboard { return dashboard{snapshot: WatchSnapshot{}} }
@@ -69,11 +71,12 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		logHeight := max(3, msg.Height/3)
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, max(1, msg.Height-8))
+			m.viewport = viewport.New(max(1, msg.Width-2), max(1, logHeight-3))
 			m.ready = true
 		} else {
-			m.viewport.Width, m.viewport.Height = msg.Width, max(1, msg.Height-8)
+			m.viewport.Width, m.viewport.Height = max(1, msg.Width-2), max(1, logHeight-3)
 		}
 	case snapshotMsg:
 		m.snapshot = WatchSnapshot(msg)
@@ -113,8 +116,8 @@ func (m dashboard) View() string {
 		if body == "" {
 			body = "waiting for output..."
 		}
-		jobs = append(jobs, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(max(18, m.width/3-4)).Height(4).Render(
-			fmt.Sprintf("%s #%d %s\n%s", style.Render(status), job.Number, truncate(job.Title, 24), truncate(lastLine(body), max(18, m.width/3-7)))))
+		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(max(18, m.width/3-4)).Height(4).Render(
+			fmt.Sprintf("%s\n%s #%d %s\n%s", muted.Render("Agent "+fmt.Sprint(job.Number)), style.Render(status), job.Number, truncate(job.Title, 20), truncate(lastLine(body), max(18, m.width/3-7)))))
 	}
 	rows := make([]string, 0, (len(jobs)+2)/3)
 	for i := 0; i < len(jobs); i += 3 {
@@ -122,6 +125,8 @@ func (m dashboard) View() string {
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, jobs[i:end]...))
 	}
 	grid := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	logHeight := max(3, m.height/3)
+	logs := logPanel.Copy().Width(max(1, m.width-2)).Height(max(1, logHeight-2)).Render(muted.Render("Logs") + "\n" + m.viewport.View())
 	counts := fmt.Sprintf("jobs: %s idle %s active %s total", muted.Render(fmt.Sprint(max(0, m.snapshot.Concurrency-m.snapshot.Running-m.snapshot.Queued))), active.Render(fmt.Sprint(m.snapshot.Running+m.snapshot.Queued)), fmt.Sprint(m.snapshot.Completed+m.snapshot.Failed+m.snapshot.Running+m.snapshot.Queued))
 	tokens := "tokens: unavailable"
 	if m.snapshot.TokenLimit > 0 {
@@ -138,8 +143,18 @@ func (m dashboard) View() string {
 		}
 	}
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
-	footer := barStyle.Render(counts + "  " + tokens + "  " + push + "  " + targets)
-	return lipgloss.JoinVertical(lipgloss.Left, grid, m.viewport.View(), footer)
+	footer := renderStatusBar([]string{counts, tokens, push, targets})
+	return lipgloss.JoinVertical(lipgloss.Left, grid, logs, footer)
+}
+
+func renderStatusBar(items []string) string {
+	colors := []lipgloss.Color{"205", "141", "42", "69"}
+	cells := make([]string, len(items))
+	for i, item := range items {
+		color := colors[i%len(colors)]
+		cells[i] = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(color).Padding(0, 1).Render(item)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, cells...)
 }
 
 type dashboardWriter struct{ ui *TerminalUI }

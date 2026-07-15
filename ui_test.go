@@ -20,10 +20,24 @@ func TestDashboardShowsStatusAndTargets(t *testing.T) {
 		Jobs: []JobSnapshot{{Number: 7, Title: "Improve UI", Status: "active", Started: time.Now()}},
 	}))
 	view := updated.(dashboard).View()
-	for _, want := range []string{"idle", "active", "total", "12/100", "push", "o/one (4 issues)", "#7"} {
+	for _, want := range []string{"idle", "active", "total", "12/100", "push", "o/one (4 issues)", "#7", "Agent 7", "Logs"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("dashboard missing %q in %q", want, view)
 		}
+	}
+}
+
+func TestDashboardKeepsLogsInDedicatedPanel(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(dashboard)
+	updated, _ = m.Update(logMsg("webhook delivered"))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "Logs") || !strings.Contains(view, "webhook delivered") {
+		t.Fatalf("dashboard missing log panel content: %s", view)
+	}
+	if updated.(dashboard).viewport.Height != 7 {
+		t.Fatalf("log viewport height = %d, want 7", updated.(dashboard).viewport.Height)
 	}
 }
 
