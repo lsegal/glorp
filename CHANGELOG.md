@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+-Recover stuck project issues from their `In Progress` board status without relying on the `agent-started` label.
 - Allow selecting the agent model and reasoning level with `--model` and `--model-level`.
 - Omit robot output from autofilled bug reports to prevent private data from being disclosed.
 - Parse `label=...` filter terms as GitHub label search queries.
