@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,6 +25,10 @@ var version = "dev"
 func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
+	poll := flag.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
+	listen := flag.String("listen", ":8080", "address for the GitHub webhook server")
+	webhookPath := flag.String("webhook-path", "/webhook", "path for GitHub webhook deliveries")
+	webhookSecret := flag.String("webhook-secret", "", "optional GitHub webhook secret")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
 	model := flag.String("model", "", "model to use for the agent")
@@ -67,7 +72,19 @@ func main() {
 	defer stop()
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
-	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: flag.Arg(0), Output: os.Stdout}, Out: os.Stdout}
+	events := make(chan struct{}, 1)
+	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: flag.Arg(0), Output: os.Stdout}, Out: os.Stdout}
+	var server *http.Server
+	if !*poll {
+		server = &http.Server{Addr: *listen, Handler: WebhookHandler{Events: events, Secret: *webhookSecret, WebhookPath: *webhookPath}}
+		go func() {
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "webhook server: %v\n", err)
+			}
+		}()
+		defer server.Close()
+		fmt.Fprintf(os.Stdout, "webhook server listening on %s%s\n", *listen, *webhookPath)
+	}
 	if err := w.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -60,6 +60,8 @@ type AgentRunner interface {
 type Watcher struct {
 	Repo        string
 	Interval    time.Duration
+	UseWebhooks bool
+	Events      <-chan struct{}
 	Concurrency int
 	StatePath   string
 	Issues      IssueSource
@@ -275,8 +277,13 @@ func (w *Watcher) Run(ctx context.Context) error {
 		}
 		return err
 	}
-	ticker := time.NewTicker(w.Interval)
-	defer ticker.Stop()
+	var ticker *time.Ticker
+	var tick <-chan time.Time
+	if !w.UseWebhooks {
+		ticker = time.NewTicker(w.Interval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -285,7 +292,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			running, queued, completed, failed := tasks.snapshot()
 			w.logf("stopped (tasks: %d running, %d queued, %d completed, %d failed)", running, queued, completed, failed)
 			return nil
-		case <-ticker.C:
+		case <-tick:
 			if err := poll(); err != nil {
 				if ctx.Err() != nil {
 					w.logf("shutdown requested during poll; waiting for running tasks to finish")
@@ -294,6 +301,14 @@ func (w *Watcher) Run(ctx context.Context) error {
 					return nil
 				}
 				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, w.Interval)
+			}
+		case <-w.Events:
+			if err := poll(); err != nil {
+				if ctx.Err() != nil {
+					wg.Wait()
+					return nil
+				}
+				w.logf("webhook-triggered poll #%d error: %v", pollNumber, err)
 			}
 		}
 	}

@@ -1,9 +1,22 @@
 # gh-watch
 
-Poll a GitHub repository and start an agent for each newly discovered open issue.
+Watch a GitHub repository and start an agent for each newly discovered open issue.
+
+By default, `gh-watch` listens for GitHub `issues`, `push`, and `ping` webhook
+deliveries on `:8080/webhook` and refreshes the issue list after each delivery.
+Configure that URL as a repository webhook, optionally using `--webhook-secret`
+to verify GitHub's HMAC signature. Use `--listen` and `--webhook-path` when the
+endpoint needs a different address.
 
 ```sh
 gh-watch --interval 30s --concurrency 3 --agent codex owner/repo
+```
+
+For repositories where webhooks are not available, enable the previous polling
+mode explicitly:
+
+```sh
+gh-watch --poll --interval 30s --concurrency 3 --agent codex owner/repo
 ```
 
 The repository argument may also be a GitHub repository URL or a GitHub project URL, such as `https://github.com/users/owner/projects/3`.

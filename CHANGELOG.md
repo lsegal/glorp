@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support GitHub webhooks as the default issue refresh mechanism, with polling available through `--poll`.
+
 ## v1.0.0 - 2026-07-15
 
 - Explain and report the `project` scope required to update project-board issue status.
