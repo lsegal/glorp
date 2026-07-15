@@ -43,7 +43,8 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: GHCLI{Binary: "gh"}, Runner: CommandRunner{Binary: binary, Agent: *agent}, Out: os.Stdout}
+	gh := GHCLI{Binary: "gh"}
+	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Runner: CommandRunner{Binary: binary, Agent: *agent}, Out: os.Stdout}
 	if err := w.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -51,6 +52,25 @@ func main() {
 }
 
 type GHCLI struct{ Binary string }
+
+type managedLabel struct {
+	name, color, description string
+}
+
+var managedLabels = []managedLabel{
+	{name: "agent-ready", color: "0E8A16", description: "Issue is ready for an agent"},
+	{name: "agent-started", color: "FBCA04", description: "An agent is working on this issue"},
+}
+
+func (g GHCLI) EnsureLabels(ctx context.Context, repo string) error {
+	for _, label := range managedLabels {
+		cmd := exec.CommandContext(ctx, g.Binary, "label", "create", label.name, "--repo", repo, "--color", label.color, "--description", label.description, "--force")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("ensure %s label: %w: %s", label.name, err, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
 
 func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 	cmd := exec.CommandContext(ctx, g.Binary, "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,title,state,createdAt")

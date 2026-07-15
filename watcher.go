@@ -20,6 +20,9 @@ type Issue struct {
 type IssueSource interface {
 	ListIssues(context.Context, string) ([]Issue, error)
 }
+type LabelEnsurer interface {
+	EnsureLabels(context.Context, string) error
+}
 type AgentRunner interface {
 	Run(context.Context, Issue) error
 }
@@ -29,6 +32,7 @@ type Watcher struct {
 	Concurrency int
 	StatePath   string
 	Issues      IssueSource
+	Labels      LabelEnsurer
 	Runner      AgentRunner
 	Out         io.Writer
 	logMu       sync.Mutex
@@ -66,6 +70,12 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 	if w.Out == nil {
 		w.Out = io.Discard
+	}
+	if w.Labels != nil {
+		if err := w.Labels.EnsureLabels(ctx, w.Repo); err != nil {
+			return err
+		}
+		w.logf("ensured agent labels exist")
 	}
 	seen, err := loadState(w.StatePath)
 	if err != nil {

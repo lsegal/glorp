@@ -34,6 +34,16 @@ type fakeRunner struct {
 	release     chan struct{}
 }
 
+type fakeLabelEnsurer struct {
+	called bool
+	err    error
+}
+
+func (f *fakeLabelEnsurer) EnsureLabels(_ context.Context, _ string) error {
+	f.called = true
+	return f.err
+}
+
 func (f *fakeRunner) Run(ctx context.Context, i Issue) error {
 	f.mu.Lock()
 	f.got = append(f.got, i.Number)
@@ -114,6 +124,27 @@ func TestInvalidRepo(t *testing.T) {
 	w := &Watcher{Repo: "bad", Interval: time.Second, Concurrency: 1}
 	if w.Run(context.Background()) == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestWatcherEnsuresLabelsOnStart(t *testing.T) {
+	labels := &fakeLabelEnsurer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := &Watcher{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels, Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})}}
+	if err := w.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !labels.called {
+		t.Fatal("labels were not ensured on startup")
+	}
+}
+
+func TestWatcherStopsWhenLabelEnsuringFails(t *testing.T) {
+	labels := &fakeLabelEnsurer{err: context.Canceled}
+	w := &Watcher{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels}
+	if err := w.Run(context.Background()); err != context.Canceled {
+		t.Fatalf("expected label error, got %v", err)
 	}
 }
 
