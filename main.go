@@ -258,6 +258,13 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 }
 
 func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add bool) error {
+	target, err := parseTarget(repo)
+	if err != nil {
+		return err
+	}
+	if target.isProject {
+		return nil
+	}
 	action := "--remove-label"
 	if add {
 		action = "--add-label"

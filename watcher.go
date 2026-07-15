@@ -13,14 +13,15 @@ import (
 )
 
 type Issue struct {
-	Number     int               `json:"number"`
-	Repository string            `json:"repository,omitempty"`
-	Title      string            `json:"title,omitempty"`
-	Body       string            `json:"body,omitempty"`
-	State      string            `json:"state,omitempty"`
-	CreatedAt  time.Time         `json:"createdAt,omitempty"`
-	Labels     []IssueLabel      `json:"labels,omitempty"`
-	DependsOn  []IssueDependency `json:"dependsOn,omitempty"`
+	Number        int               `json:"number"`
+	Repository    string            `json:"repository,omitempty"`
+	Title         string            `json:"title,omitempty"`
+	Body          string            `json:"body,omitempty"`
+	State         string            `json:"state,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt,omitempty"`
+	Labels        []IssueLabel      `json:"labels,omitempty"`
+	DependsOn     []IssueDependency `json:"dependsOn,omitempty"`
+	ProjectStatus string            `json:"projectStatus,omitempty"`
 }
 
 func issueRepository(target string, issue Issue) string {
@@ -152,7 +153,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			_, isActive := active[issue.Number]
 			wasActive := work[issue.Number].Status == "active"
 			workMu.Unlock()
-			if issue.Number > 0 && ((hasLabel(issue, agentStartedLabel) && !isActive) || (wasActive && !isActive) || !seen[issue.Number]) {
+			if issue.Number > 0 && shouldDispatchIssue(w.Repo, issue, isActive, wasActive, seen[issue.Number]) {
 				seen[issue.Number] = true
 				newIssues = append(newIssues, issue)
 			}
@@ -330,6 +331,19 @@ func hasLabel(issue Issue, name string) bool {
 	return false
 }
 
+func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen bool) bool {
+	if isActive {
+		return false
+	}
+	if wasActive || !seen {
+		return true
+	}
+	if isProjectTarget(repo) {
+		return issue.ProjectStatus == "In Progress"
+	}
+	return hasLabel(issue, agentStartedLabel)
+}
+
 func newSessionID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -350,6 +364,7 @@ func parseIssues(data []byte) ([]Issue, error) {
 type projectItem struct {
 	ID      string          `json:"id"`
 	Content *projectContent `json:"content"`
+	Status  string          `json:"status"`
 }
 
 type projectContent struct {
@@ -369,10 +384,17 @@ func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
 	issues := make([]Issue, 0, len(items))
 	for _, item := range items {
 		if item.Content != nil && item.Content.Type == "Issue" {
-			issues = append(issues, item.Content.Issue)
+			issue := item.Content.Issue
+			issue.ProjectStatus = item.Status
+			issues = append(issues, issue)
 		}
 	}
 	return issues, nil
+}
+
+func isProjectTarget(repo string) bool {
+	target, err := parseTarget(repo)
+	return err == nil && target.isProject
 }
 
 func decodeProjectItems(data []byte, err error) ([]projectItem, error) {
