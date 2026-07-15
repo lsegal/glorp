@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Allow selecting the agent model and reasoning level with `--model` and `--model-level`.
 - Omit robot output from autofilled bug reports to prevent private data from being disclosed.
 - Parse `label=...` filter terms as GitHub label search queries.
 - Update project-board issue status as agents start and finish work.
