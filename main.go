@@ -21,6 +21,8 @@ func main() {
 	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
+	model := flag.String("model", "", "model to use for the agent")
+	modelLevel := flag.String("model-level", "", "model reasoning level: low, medium, or high")
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
 	statePath := flag.String("state", ".gh-watch.json", "file used to remember handled issue numbers")
@@ -40,6 +42,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "agent must be codex or claude")
 		os.Exit(2)
 	}
+	if *modelLevel != "" && *modelLevel != "low" && *modelLevel != "medium" && *modelLevel != "high" {
+		fmt.Fprintln(os.Stderr, "model-level must be low, medium, or high")
+		os.Exit(2)
+	}
 	limit := *concurrency
 	if limit == 0 {
 		limit = 3
@@ -52,7 +58,7 @@ func main() {
 	defer stop()
 	gh := GHCLI{Binary: "gh"}
 	gh.Filter, gh.AllIssues = *filter, *allIssues
-	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Repo: flag.Arg(0)}, Out: os.Stdout}
+	w := &Watcher{Repo: flag.Arg(0), Interval: *interval, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: flag.Arg(0)}, Out: os.Stdout}
 	if err := w.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -272,14 +278,28 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, stat
 	return nil
 }
 
-type CommandRunner struct{ Binary, Agent, Repo string }
+type CommandRunner struct{ Binary, Agent, Model, ModelLevel, Repo string }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
 	prompt := fmt.Sprintf("/gh-fix %d", issue.Number)
 	if r.Agent == "codex" {
-		return []string{"exec", "--dangerously-bypass-approvals-and-sandbox", prompt}
+		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox"}
+		if r.Model != "" {
+			args = append(args, "--model", r.Model)
+		}
+		if r.ModelLevel != "" {
+			args = append(args, "-c", "model_reasoning_effort="+r.ModelLevel)
+		}
+		return append(args, prompt)
 	}
-	return []string{"-p", "--dangerously-skip-permissions", prompt}
+	args := []string{"-p", "--dangerously-skip-permissions"}
+	if r.Model != "" {
+		args = append(args, "--model", r.Model)
+	}
+	if r.ModelLevel != "" {
+		args = append(args, "--effort", r.ModelLevel)
+	}
+	return append(args, prompt)
 }
 
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
