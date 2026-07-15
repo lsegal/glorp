@@ -1,0 +1,84 @@
+name: Finalize release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v1.0.0
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Select release tag
+        id: release
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag: $tag" >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Build archives and installer
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="${TAG#v}"
+          for target in "linux amd64 tar.gz" "linux arm64 tar.gz" "darwin amd64 tar.gz" "darwin arm64 tar.gz" "windows amd64 zip" "windows arm64 zip"; do
+            read -r goos goarch extension <<< "$target"
+            name="gh-watch_${version}_${goos}_${goarch}"
+            GOOS="$goos" GOARCH="$goarch" go build -ldflags "-X main.version=$version" -o "dist/$name/gh-watch" .
+            if [[ "$goos" == "windows" ]]; then
+              mv "dist/$name/gh-watch" "dist/$name/gh-watch.exe"
+              (cd "dist/$name" && zip -q -r "../${name}.${extension}" gh-watch.exe)
+            else
+              tar -czf "dist/${name}.${extension}" -C "dist/$name" gh-watch
+            fi
+          done
+          cp install.sh dist/install.sh
+          cp install.ps1 dist/install.ps1
+      - name: Validate and publish gh-fix skill
+        run: |
+          if gh skill publish --help >/dev/null 2>&1; then gh skill publish --fix; else echo 'gh skill publish is unavailable; public GitHub skill source will be indexed by skills.sh'; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Extract release notes
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          extract_section() {
+            awk -v heading="$1" '
+              index($0, heading) == 1 { in_section=1; next }
+              in_section && /^## / { exit }
+              in_section { print }
+            ' CHANGELOG.md | sed '/^[[:space:]]*$/d'
+          }
+          extract_section "## $TAG -" > release-notes.md
+          if [[ ! -s release-notes.md ]]; then
+            extract_section "## Unreleased" > release-notes.md
+          fi
+          [[ -s release-notes.md ]] || { echo "no changelog entry found for $TAG" >&2; exit 1; }
+      - name: Create GitHub release
+        run: gh release create "${{ steps.release.outputs.tag }}" dist/*.tar.gz dist/*.zip dist/install.sh dist/install.ps1 --notes-file release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

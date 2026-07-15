@@ -1,7 +1,5 @@
 name: Release
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -9,6 +7,7 @@ on:
         required: true
         type: string
 permissions:
+  actions: write
   contents: write
 jobs:
   release:
@@ -25,17 +24,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.version }}"
-            tag="v${tag#v}"
-          else
-            tag="$GITHUB_REF_NAME"
-          fi
+          tag="${{ inputs.version }}"
+          tag="v${tag#v}"
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release version: $tag" >&2; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Promote changelog and create tag
-        id: tag
-        if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           TAG: ${{ steps.release.outputs.tag }}
@@ -70,61 +63,11 @@ jobs:
             git diff --cached --quiet || git commit -m "Prepare ${TAG} release"
             git push origin HEAD:main
           fi
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "created=false" >> "$GITHUB_OUTPUT"
-          else
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             git tag "$TAG"
             git push origin "$TAG"
-            echo "created=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Build archives and installer
-        if: steps.tag.outputs.created != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          version="${{ steps.release.outputs.tag }}"
-          version="${version#v}"
-          for target in "linux amd64 tar.gz" "linux arm64 tar.gz" "darwin amd64 tar.gz" "darwin arm64 tar.gz" "windows amd64 zip" "windows arm64 zip"; do
-            read -r goos goarch extension <<< "$target"
-            name="gh-watch_${version}_${goos}_${goarch}"
-            GOOS="$goos" GOARCH="$goarch" go build -ldflags "-X main.version=$version" -o "dist/$name/gh-watch" .
-            if [[ "$goos" == "windows" ]]; then
-              mv "dist/$name/gh-watch" "dist/$name/gh-watch.exe"
-              (cd "dist/$name" && zip -q -r "../${name}.${extension}" gh-watch.exe)
-            else
-              tar -czf "dist/${name}.${extension}" -C "dist/$name" gh-watch
-            fi
-          done
-          cp install.sh "dist/install.sh"
-          cp install.ps1 "dist/install.ps1"
-      - name: Validate and publish gh-fix skill
-        if: steps.tag.outputs.created != 'true'
-        run: |
-          if gh skill publish --help >/dev/null 2>&1; then gh skill publish --fix; else echo 'gh skill publish is unavailable; public GitHub skill source will be indexed by skills.sh'; fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Extract release notes
-        if: steps.tag.outputs.created != 'true'
-        shell: bash
-        env:
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          extract_section() {
-            awk -v heading="$1" '
-              index($0, heading) == 1 { in_section=1; next }
-              in_section && /^## / { exit }
-              in_section { print }
-            ' CHANGELOG.md | sed '/^[[:space:]]*$/d'
-          }
-          extract_section "## $TAG -" > release-notes.md
-          if [[ ! -s release-notes.md ]]; then
-            extract_section "## Unreleased" > release-notes.md
-          fi
-          [[ -s release-notes.md ]] || { echo "no changelog entry found for $TAG" >&2; exit 1; }
-      - name: Create GitHub release
-        if: steps.tag.outputs.created != 'true'
-        run: gh release create "${{ steps.release.outputs.tag }}" dist/*.tar.gz dist/*.zip dist/install.sh dist/install.ps1 --notes-file release-notes.md
+      - name: Finalize release
+        run: gh workflow run finalize-release.yml --repo "$GITHUB_REPOSITORY" --ref "${{ steps.release.outputs.tag }}" -f tag="${{ steps.release.outputs.tag }}"
         env:
           GH_TOKEN: ${{ github.token }}
