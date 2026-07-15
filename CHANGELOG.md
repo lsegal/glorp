@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.0.0 - 2026-07-15
+
 - Explain and report the `project` scope required to update project-board issue status.
 - Finalize releases after tags created by GitHub Actions.
 - Skip project-board issues that are already in progress or completed.
