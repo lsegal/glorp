@@ -342,6 +342,62 @@ func TestScopedWorkStateKeepsTargetsSeparate(t *testing.T) {
 	}
 }
 
+func TestWatcherKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{
+		{},                         // initial baseline
+		{},                         // first webhook arrives before issue indexing catches up
+		{{Number: 1}},              // second webhook observes the previous issue
+		{{Number: 1}, {Number: 2}}, // preserved follow-up observes the latest issue
+	}}
+	r := &fakeRunner{release: make(chan struct{})}
+	events := make(chan WebhookEvent, 2)
+	w := &Watcher{
+		Repo: "o/r", Interval: 40 * time.Millisecond, Concurrency: 2,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
+		UseWebhooks: true, Events: events,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events <- WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 1}
+	time.Sleep(10 * time.Millisecond)
+	events <- WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 2}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		got := append([]int(nil), r.got...)
+		r.mu.Unlock()
+		if len(got) >= 2 {
+			if !reflect.DeepEqual(got, []int{1, 2}) {
+				t.Fatalf("runner received issues %v, want [1 2]", got)
+			}
+			close(r.release)
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("webhook follow-up did not dispatch the latest issue")
+}
+
 func TestIssueKeyUsesTargetAndNumber(t *testing.T) {
 	if got := issueKey(Issue{Target: "o/one", Number: 7}); got != "o/one#7" {
 		t.Fatalf("issue key = %q", got)

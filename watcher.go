@@ -405,12 +405,16 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 				w.logf("webhook-triggered poll #%d error: %v", pollNumber, err)
 			}
-			if retryTimer != nil {
-				retryTimer.Stop()
+			// Keep an already scheduled follow-up refresh. GitHub may deliver
+			// another webhook while its issue index is still catching up; resetting
+			// the timer in that case can make the refresh observe the previous
+			// issue and miss the newest one until another delivery arrives.
+			if retryTimer == nil {
+				retryTimer = time.NewTimer(w.Interval)
+				retry = retryTimer.C
 			}
-			retryTimer = time.NewTimer(w.Interval)
-			retry = retryTimer.C
 		case <-retry:
+			retryTimer = nil
 			w.logf("webhook follow-up refresh started")
 			if err := poll(); err != nil && ctx.Err() == nil {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
