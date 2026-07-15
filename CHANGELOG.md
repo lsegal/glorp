@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix labeling issues discovered while watching GitHub project boards.
 -Recover stuck project issues from their `In Progress` board status without relying on the `agent-started` label.
 - Use the `bug:` prefix for new bug-report issue titles.
 - Omit the default `agent-ready` label filter when watching a project board.

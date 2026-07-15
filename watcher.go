@@ -14,6 +14,7 @@ import (
 
 type Issue struct {
 	Number        int               `json:"number"`
+	Repository    string            `json:"repository,omitempty"`
 	Title         string            `json:"title,omitempty"`
 	Body          string            `json:"body,omitempty"`
 	State         string            `json:"state,omitempty"`
@@ -22,6 +23,18 @@ type Issue struct {
 	DependsOn     []IssueDependency `json:"dependsOn,omitempty"`
 	ProjectStatus string            `json:"projectStatus,omitempty"`
 }
+
+func issueRepository(target string, issue Issue) string {
+	if issue.Repository != "" {
+		return issue.Repository
+	}
+	parsed, err := parseTarget(target)
+	if err == nil && parsed.repo != "" {
+		return parsed.repo
+	}
+	return target
+}
+
 type IssueLabel struct {
 	Name string `json:"name"`
 }
@@ -163,7 +176,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 				return err
 			}
 			if labeler != nil {
-				if err := labeler.SetIssueLabel(ctx, w.Repo, issue.Number, true); err != nil {
+				if err := labeler.SetIssueLabel(ctx, issueRepository(w.Repo, issue), issue.Number, true); err != nil {
 					return err
 				}
 			}
@@ -213,7 +226,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 						}
 					}
 					if labeler != nil {
-						_ = labeler.SetIssueLabel(context.Background(), w.Repo, i.Number, false)
+						_ = labeler.SetIssueLabel(context.Background(), issueRepository(w.Repo, i), i.Number, false)
 					}
 					workMu.Lock()
 					delete(active, i.Number)
@@ -233,7 +246,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 						}
 					}
 					if labeler != nil {
-						_ = labeler.SetIssueLabel(context.Background(), w.Repo, i.Number, false)
+						_ = labeler.SetIssueLabel(context.Background(), issueRepository(w.Repo, i), i.Number, false)
 					}
 					workMu.Lock()
 					delete(active, i.Number)
