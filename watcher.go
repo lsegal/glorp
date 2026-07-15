@@ -192,7 +192,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					}
 					workMu.Lock()
 					delete(active, i.Number)
-					work[i.Number] = workState{Status: "failed"}
+					work[i.Number] = workState{Status: "failed", SessionID: work[i.Number].SessionID}
 					_ = saveWorkState(w.StatePath, work)
 					workMu.Unlock()
 					tasks.mu.Lock()
@@ -207,7 +207,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					}
 					workMu.Lock()
 					delete(active, i.Number)
-					work[i.Number] = workState{Status: "completed"}
+					work[i.Number] = workState{Status: "completed", SessionID: work[i.Number].SessionID}
 					_ = saveWorkState(w.StatePath, work)
 					workMu.Unlock()
 					tasks.mu.Lock()
