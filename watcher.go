@@ -60,6 +60,9 @@ type IssueStatuser interface {
 type AgentRunner interface {
 	Run(context.Context, Issue) error
 }
+type AgentOutputRunner interface {
+	RunWithOutput(context.Context, Issue, io.Writer) error
+}
 type UIReporter interface {
 	Snapshot(WatchSnapshot)
 	Log(string)
@@ -103,6 +106,17 @@ type taskState struct {
 	queued    int
 	completed int
 	failed    int
+}
+
+type jobOutputWriter struct {
+	write func(string)
+}
+
+func (w jobOutputWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		w.write(string(p))
+	}
+	return len(p), nil
 }
 
 func (s *taskState) snapshot() (running, queued, completed, failed int) {
@@ -308,7 +322,25 @@ func (w *Watcher) Run(ctx context.Context) error {
 				defer wg.Done()
 				defer func() { <-sem }()
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
-				if err := w.Runner.Run(ctx, i); err != nil {
+				jobOutput := jobOutputWriter{write: func(text string) {
+					jobMu.Lock()
+					job := jobs[issueKey(i)]
+					job.Log += text
+					jobs[issueKey(i)] = job
+					jobMu.Unlock()
+					publish()
+				}}
+				var runErr error
+				if w.UI != nil {
+					if runner, ok := w.Runner.(AgentOutputRunner); ok {
+						runErr = runner.RunWithOutput(ctx, i, jobOutput)
+					} else {
+						runErr = w.Runner.Run(ctx, i)
+					}
+				} else {
+					runErr = w.Runner.Run(ctx, i)
+				}
+				if runErr != nil {
 					if w.Status != nil {
 						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i.Number, "Todo"); statusErr != nil {
 							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
@@ -321,7 +353,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					key := issueKey(i)
 					delete(active, key)
 					jobMu.Lock()
-					jobs[key] = JobSnapshot{Number: i.Number, Title: i.Title, Status: "failed", Started: jobs[key].Started, Log: err.Error()}
+					jobs[key] = JobSnapshot{Number: i.Number, Title: i.Title, Status: "failed", Started: jobs[key].Started, Log: jobs[key].Log + runErr.Error()}
 					jobMu.Unlock()
 					work[key] = workState{Status: "failed", SessionID: work[key].SessionID}
 					_ = saveScopedWorkState(w.StatePath, work, targets)
@@ -331,7 +363,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					tasks.failed++
 					running, queued, completed, failed := tasks.running, tasks.queued, tasks.completed, tasks.failed
 					tasks.mu.Unlock()
-					w.logf("issue #%d failed: %v (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, err, running, queued, completed, failed)
+					w.logf("issue #%d failed: %v (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, runErr, running, queued, completed, failed)
 					publish()
 				} else {
 					if w.Status != nil {
@@ -346,7 +378,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					key := issueKey(i)
 					delete(active, key)
 					jobMu.Lock()
-					jobs[key] = JobSnapshot{Number: i.Number, Title: i.Title, Status: "complete", Started: jobs[key].Started}
+					jobs[key] = JobSnapshot{Number: i.Number, Title: i.Title, Status: "complete", Started: jobs[key].Started, Log: jobs[key].Log}
 					jobMu.Unlock()
 					work[key] = workState{Status: "completed", SessionID: work[key].SessionID}
 					_ = saveScopedWorkState(w.StatePath, work, targets)
