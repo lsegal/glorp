@@ -461,7 +461,9 @@ type CommandRunner struct {
 func commandArgs(r CommandRunner, issue Issue) []string {
 	prompt := fmt.Sprintf("/gh-fix %d\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead.", issue.Number)
 	if r.Agent == "codex" {
-		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox"}
+		// JSONL keeps Codex's progress events flowing when stdout is a pipe,
+		// which is how the dashboard captures agent output.
+		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json"}
 		if r.Model != "" {
 			args = append(args, "--model", r.Model)
 		}
