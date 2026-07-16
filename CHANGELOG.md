@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Put agent status in the title line and preserve the title background.
 - Use the available dashboard card width for agent issue titles.
 - Fix dashboard status backgrounds, agent title backgrounds, and spacing between panels.
 - Use dark, borderless dashboard viewports with distinct status-line backgrounds.

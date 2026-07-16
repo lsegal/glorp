@@ -167,9 +167,10 @@ func (m dashboard) View() string {
 		}
 		cardWidth := jobCardWidth(m.width)
 		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
-		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
+		titlePrefix := prefix + status + " "
+		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + style.Render(status) + " " + truncate(job.Title, jobTitleWidth(cardWidth, titlePrefix)))
 		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s\n%s %s", title, style.Render(status), jobViewport.View())))
+			fmt.Sprintf("%s\n%s", title, jobViewport.View())))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {

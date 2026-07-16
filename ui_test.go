@@ -50,6 +50,21 @@ func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 	}
 }
 
+func TestDashboardPutsAgentStatusInTitleLine(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "Improve UI", Status: "active", Log: "agent output",
+	}}}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "active") || !strings.Contains(view, "Improve UI") {
+		t.Fatalf("dashboard did not put status in the agent title line: %s", view)
+	}
+	if strings.Contains(view, "\nactive agent output") || strings.Contains(view, "\nactive Improve UI") {
+		t.Fatalf("dashboard still renders a repeated active title line: %s", view)
+	}
+}
+
 func TestDashboardTruncatesAgentTitleToCardWidth(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -57,7 +72,7 @@ func TestDashboardTruncatesAgentTitleToCardWidth(t *testing.T) {
 		Number: 7, Title: "This is a deliberately long agent issue title", Status: "active",
 	}}}))
 	view := updated.(dashboard).View()
-	if !strings.Contains(view, "This is a deliberately long agent") {
+	if !strings.Contains(view, "This is a deliberately long a") {
 		t.Fatalf("dashboard did not use the available card width for the title: %s", view)
 	}
 	if strings.Contains(view, "This is a deliber...") {
