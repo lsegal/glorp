@@ -16,7 +16,7 @@ import (
 
 const maxVisibleJobs = 6
 const jobGridColumns = 2
-const jobCardHeight = 8
+const jobCardHeight = 12
 
 type JobSnapshot struct {
 	Number  int

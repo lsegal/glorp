@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Increase the default agent output viewport height so more than one line is visible at a time.
 - Use scrollable Bubble Tea viewports for agent output and logs, with clearer light-gray dashboard windows and status indicators.
 - Limit the dashboard agent grid to six two-column cards and keep agent output in its card instead of the Logs panel.
 - Ask launched agents to summarize changes without printing code diffs or large code blocks.

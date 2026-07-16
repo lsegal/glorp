@@ -36,11 +36,16 @@ func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 	if _, ok := m.jobs[7]; !ok {
 		t.Fatal("agent viewport was not created")
 	}
-	if m.jobs[7].Height != jobCardHeight-4 {
-		t.Fatalf("agent viewport height = %d, want %d", m.jobs[7].Height, jobCardHeight-4)
+	if m.jobs[7].Height != 8 {
+		t.Fatalf("agent viewport height = %d, want 8", m.jobs[7].Height)
 	}
 	if strings.Contains(m.View(), "Agent 7") {
 		t.Fatal("agent prefix should not appear in the job title")
+	}
+	for _, line := range []string{"line 1", "line 2", "line 3", "line 4", "line 5"} {
+		if !strings.Contains(m.View(), line) {
+			t.Errorf("dashboard missing visible agent output %q: %s", line, m.View())
+		}
 	}
 }
 
@@ -114,8 +119,8 @@ func TestDashboardTrimsOldestJobs(t *testing.T) {
 }
 
 func TestDashboardUsesTwoByThreeAgentGrid(t *testing.T) {
-	if maxVisibleJobs != 6 || jobGridColumns != 2 || jobCardHeight != 8 {
-		t.Fatalf("agent grid = %d jobs, %d columns, card height %d; want 6, 2, 8", maxVisibleJobs, jobGridColumns, jobCardHeight)
+	if maxVisibleJobs != 6 || jobGridColumns != 2 || jobCardHeight != 12 {
+		t.Fatalf("agent grid = %d jobs, %d columns, card height %d; want 6, 2, 12", maxVisibleJobs, jobGridColumns, jobCardHeight)
 	}
 }
 
