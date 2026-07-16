@@ -4,6 +4,7 @@
 
 - Reload and resynchronize when `.gh-watch.json` changes.
 - Default issue watching to open issues assigned to the current user.
+- Use the current user's authored issues as the default issue filter.
 - Make the watcher concurrency-limit test wait for dispatches instead of relying on timing.
 - Use the project item discovered during polling when updating its board status.
 - Avoid piping stdin to launched agents so Codex does not report additional input.
