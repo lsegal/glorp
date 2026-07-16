@@ -515,6 +515,8 @@ func TestWatcherReloadsChangedStateAfterDebounce(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// Let the initial poll finish persisting its baseline before editing it.
+	time.Sleep(200 * time.Millisecond)
 	if err := saveWorkState(statePath, map[int]workState{}); err != nil {
 		t.Fatal(err)
 	}
