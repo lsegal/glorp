@@ -491,6 +491,61 @@ func TestWatcherKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 	t.Fatal("webhook follow-up did not dispatch the latest issue")
 }
 
+func TestWatcherReloadsChangedStateAfterDebounce(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := saveWorkState(statePath, map[int]workState{1: {Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{batches: [][]Issue{{{Number: 1}}, {{Number: 1}, {Number: 2}}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	w := &Watcher{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath, Issues: src, Runner: r}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := saveWorkState(statePath, map[int]workState{}); err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	deadline = time.Now().Add(stateReloadDebounce + 2*time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		got := append([]int(nil), r.got...)
+		r.mu.Unlock()
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 2 && len(got) == 1 && !released {
+			close(r.release)
+			released = true
+		}
+		if len(got) == 2 {
+			if !reflect.DeepEqual(got, []int{1, 2}) {
+				t.Fatalf("dispatched issues = %v, want [1 2]", got)
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("changed state was not reloaded")
+}
+
 func TestIssueKeyUsesTargetAndNumber(t *testing.T) {
 	if got := issueKey(Issue{Target: "o/one", Number: 7}); got != "o/one#7" {
 		t.Fatalf("issue key = %q", got)

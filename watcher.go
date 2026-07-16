@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+const (
+	stateFilePollInterval = 100 * time.Millisecond
+	stateReloadDebounce   = 5 * time.Second
+)
+
 type Issue struct {
 	Number        int               `json:"number"`
 	Repository    string            `json:"repository,omitempty"`
@@ -167,6 +172,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 		}
 		w.logf("ensured agent labels exist")
 	}
+	watchCtx, stopWatching := context.WithCancel(ctx)
+	defer stopWatching()
+	stateChanges := watchStateFile(watchCtx, w.StatePath)
 	work, err := loadScopedWorkState(w.StatePath, targets)
 	if err != nil {
 		return err
@@ -412,6 +420,13 @@ func (w *Watcher) Run(ctx context.Context) error {
 	var tick <-chan time.Time
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
+	var stateReloadTimer *time.Timer
+	var stateReload <-chan time.Time
+	defer func() {
+		if stateReloadTimer != nil {
+			stateReloadTimer.Stop()
+		}
+	}()
 	if !w.UseWebhooks {
 		ticker = time.NewTicker(w.Interval)
 		defer ticker.Stop()
@@ -459,8 +474,80 @@ func (w *Watcher) Run(ctx context.Context) error {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
 			}
 			retry = nil
+		case <-stateChanges:
+			if stateReloadTimer == nil {
+				stateReloadTimer = time.NewTimer(stateReloadDebounce)
+				stateReload = stateReloadTimer.C
+			} else {
+				if !stateReloadTimer.Stop() {
+					select {
+					case <-stateReloadTimer.C:
+					default:
+					}
+				}
+				stateReloadTimer.Reset(stateReloadDebounce)
+			}
+		case <-stateReload:
+			stateReloadTimer = nil
+			stateReload = nil
+			reloaded, loadErr := loadScopedWorkState(w.StatePath, targets)
+			if loadErr != nil {
+				w.logf("state reload failed: %v", loadErr)
+				continue
+			}
+			workMu.Lock()
+			for key, session := range active {
+				reloaded[key] = workState{Status: "active", SessionID: session}
+			}
+			work = reloaded
+			seen = make(map[string]bool, len(work))
+			for key := range work {
+				seen[key] = true
+			}
+			workMu.Unlock()
+			w.logf("state reloaded; scheduling resync")
+			if err := poll(); err != nil && ctx.Err() == nil {
+				w.logf("state reload poll #%d error: %v", pollNumber, err)
+			}
 		}
 	}
+}
+
+func watchStateFile(ctx context.Context, path string) <-chan struct{} {
+	if path == "" {
+		return nil
+	}
+	changes := make(chan struct{}, 1)
+	previous := stateFileFingerprint(path)
+	go func() {
+		defer close(changes)
+		for {
+			current := stateFileFingerprint(path)
+			if current != previous {
+				select {
+				case changes <- struct{}{}:
+				default:
+				}
+				previous = current
+			}
+			timer := time.NewTimer(stateFilePollInterval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+	return changes
+}
+
+func stateFileFingerprint(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func (w *Watcher) logWebhookEvent(event WebhookEvent) {
