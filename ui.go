@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -50,6 +51,8 @@ type logMsg string
 type dashboard struct {
 	snapshot WatchSnapshot
 	viewport viewport.Model
+	jobs     map[int]viewport.Model
+	spinner  spinner.Model
 	logs     []string
 	width    int
 	height   int
@@ -57,18 +60,24 @@ type dashboard struct {
 }
 
 var (
-	barStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	muted    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	active   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	done     = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
-	fail     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	panel    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238"))
-	logPanel = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("205"))
+	barStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	muted     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	active    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	done      = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	fail      = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	panel     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Background(lipgloss.Color("252"))
+	logPanel  = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("205")).Background(lipgloss.Color("252"))
+	statusBar = lipgloss.NewStyle().Background(lipgloss.Color("250")).Foreground(lipgloss.Color("235")).Padding(0, 1)
 )
 
-func newDashboard() dashboard { return dashboard{snapshot: WatchSnapshot{}} }
+func newDashboard() dashboard {
+	s := spinner.New()
+	s.Spinner = spinner.Line
+	s.Style = active
+	return dashboard{snapshot: WatchSnapshot{}, jobs: make(map[int]viewport.Model), spinner: s}
+}
 
-func (m dashboard) Init() tea.Cmd { return nil }
+func (m dashboard) Init() tea.Cmd { return spinner.Tick }
 
 func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -81,11 +90,24 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.viewport.Width, m.viewport.Height = max(1, msg.Width-2), max(1, logHeight-3)
 		}
+		for number, jobViewport := range m.jobs {
+			jobViewport.Width = max(1, msg.Width/jobGridColumns-7)
+			jobViewport.Height = max(1, jobCardHeight-4)
+			m.jobs[number] = jobViewport
+		}
 	case snapshotMsg:
 		m.snapshot = WatchSnapshot(msg)
 		slices.SortFunc(m.snapshot.Jobs, func(a, b JobSnapshot) int { return b.Started.Compare(a.Started) })
 		if len(m.snapshot.Jobs) > maxVisibleJobs {
 			m.snapshot.Jobs = m.snapshot.Jobs[:maxVisibleJobs]
+		}
+		for _, job := range m.snapshot.Jobs {
+			jobViewport, ok := m.jobs[job.Number]
+			if !ok {
+				jobViewport = viewport.New(max(1, m.width/jobGridColumns-7), max(1, jobCardHeight-4))
+			}
+			jobViewport.SetContent(job.Log)
+			m.jobs[job.Number] = jobViewport
 		}
 	case logMsg:
 		m.logs = append(m.logs, string(msg))
@@ -93,10 +115,24 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logs = m.logs[len(m.logs)-200:]
 		}
 		m.viewport.SetContent(strings.Join(m.logs, "\n"))
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		for number, jobViewport := range m.jobs {
+			var jobCmd tea.Cmd
+			m.jobs[number], jobCmd = jobViewport.Update(msg)
+			if jobCmd != nil {
+				cmd = tea.Batch(cmd, jobCmd)
+			}
+		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -115,12 +151,16 @@ func (m dashboard) View() string {
 		if status == "failed" {
 			style = fail
 		}
-		body := job.Log
-		if body == "" {
-			body = "waiting for output..."
+		jobViewport := m.jobs[job.Number]
+		if job.Log == "" {
+			jobViewport.SetContent("waiting for output...")
+		}
+		indicator := " "
+		if status == "active" {
+			indicator = m.spinner.View()
 		}
 		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(max(18, m.width/jobGridColumns-4)).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s\n%s #%d %s\n%s", muted.Render("Agent "+fmt.Sprint(job.Number)), style.Render(status), job.Number, truncate(job.Title, 20), truncate(lastLine(body), max(18, m.width/jobGridColumns-7)))))
+			fmt.Sprintf("%s #%d %s\n%s %s", indicator, job.Number, truncate(job.Title, 20), style.Render(status), jobViewport.View())))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {
@@ -148,11 +188,9 @@ func (m dashboard) View() string {
 }
 
 func renderStatusBar(items []string) string {
-	colors := []lipgloss.Color{"205", "141", "42", "69"}
 	cells := make([]string, len(items))
 	for i, item := range items {
-		color := colors[i%len(colors)]
-		cells[i] = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(color).Padding(0, 1).Render(item)
+		cells[i] = statusBar.Render(item)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, cells...)
 }
