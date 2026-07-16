@@ -153,16 +153,13 @@ func (m dashboard) View() string {
 	jobs := make([]string, 0, len(m.snapshot.Jobs))
 	for _, job := range m.snapshot.Jobs {
 		status := job.Status
-		style := active
-		if status == "complete" {
-			style = done
-		}
-		if status == "failed" {
-			style = fail
-		}
 		jobViewport := m.jobs[job.Number]
 		if job.Log == "" {
 			jobViewport.SetContent("waiting for output...")
+		}
+		progress := jobViewport.View()
+		if status == "complete" {
+			progress = done.Render("✅")
 		}
 		indicator := " "
 		if status == "active" {
@@ -172,7 +169,7 @@ func (m dashboard) View() string {
 		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
 		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
 		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s\n%s %s", title, style.Render(status), jobViewport.View())))
+			fmt.Sprintf("%s\n%s", title, progress)))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {
