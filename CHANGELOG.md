@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Use dark, borderless dashboard viewports with distinct status-line backgrounds.
+- Drop support for the legacy `label=` issue filter syntax.
 - Support repeated `--filter` arguments and GitHub issue search syntax.
 - Prevent launched agents from waiting for additional input on stdin.
 - Increase the default agent output viewport height so more than one line is visible at a time.

@@ -156,7 +156,7 @@ type GHCLI struct {
 	AllIssues bool
 }
 
-const defaultIssueFilter = "label=agent-ready"
+const defaultIssueFilter = "label:agent-ready"
 
 type filterFlag struct {
 	values []string
@@ -256,7 +256,7 @@ func issueListArgs(repo, filter string, allIssues bool) []string {
 	}
 	args := []string{"issue", "list", "--repo", target.repo, "--state", "open", "--limit", "1000"}
 	if !allIssues && filter != "" {
-		args = append(args, "--search", searchQuery(filter))
+		args = append(args, "--search", filter)
 	}
 	return append(args, "--json", "number,title,body,state,createdAt,labels")
 }
@@ -291,20 +291,11 @@ func projectListArgs(t target, filter string, allIssues bool) []string {
 	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
 	query := "is:issue is:open"
 	if !allIssues && filter != "" && filter != defaultIssueFilter {
-		query += " " + searchQuery(filter)
+		query += " " + filter
 	}
 	return append(args, "--query", query)
 }
 
-func searchQuery(filter string) string {
-	terms := strings.Fields(filter)
-	for i, term := range terms {
-		if strings.HasPrefix(term, "label=") {
-			terms[i] = "label:" + strings.TrimPrefix(term, "label=")
-		}
-	}
-	return strings.Join(terms, " ")
-}
 func decodeIssues(data []byte, err error) ([]Issue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list issues: %w", err)
