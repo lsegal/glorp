@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,8 @@ import (
 )
 
 var version = "dev"
+
+var errProjectIssueNotFound = errors.New("project issue not found")
 
 func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -392,7 +395,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, stat
 		}
 	}
 	if itemID == "" {
-		return fmt.Errorf("issue #%d is not in project %s", number, target.projectID)
+		return fmt.Errorf("%w: issue #%d is not in project %s", errProjectIssueNotFound, number, target.projectID)
 	}
 
 	viewCmd := exec.CommandContext(ctx, g.Binary, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")

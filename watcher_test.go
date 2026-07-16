@@ -79,13 +79,14 @@ func (f *fakeIssueLabeler) SetIssueLabel(_ context.Context, _ string, _ int, add
 type fakeIssueStatuser struct {
 	mu       sync.Mutex
 	statuses []string
+	err      error
 }
 
 func (f *fakeIssueStatuser) SetIssueStatus(_ context.Context, _ string, _ int, status string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statuses = append(f.statuses, status)
-	return nil
+	return f.err
 }
 
 func (f *fakeLabelEnsurer) EnsureLabels(_ context.Context, _ string) error {
@@ -333,6 +334,24 @@ func TestWatcherResetsFailedProjectWorkOnStart(t *testing.T) {
 	defer status.mu.Unlock()
 	if !reflect.DeepEqual(status.statuses, []string{"Todo"}) {
 		t.Fatalf("statuses = %v, want [Todo]", status.statuses)
+	}
+}
+
+func TestWatcherIgnoresMissingProjectIssueWhenResettingFailedWork(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := saveWorkState(statePath, map[int]workState{7: {Status: "failed"}}); err != nil {
+		t.Fatal(err)
+	}
+	status := &fakeIssueStatuser{err: errProjectIssueNotFound}
+	w := &Watcher{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})}, Status: status,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("missing project issue should not stop watcher: %v", err)
 	}
 }
 
