@@ -159,7 +159,7 @@ type GHCLI struct {
 	AllIssues bool
 }
 
-const defaultIssueFilter = "is:issue state:open user:me"
+const defaultIssueFilter = "is:issue state:open author:@me"
 
 type filterFlag struct {
 	values []string
