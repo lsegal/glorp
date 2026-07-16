@@ -21,7 +21,9 @@ Treat `/gh-fix ISSUENUMBER` as authorization to implement, publish, continuously
 2. Create a uniquely named sibling or temporary directory outside the current checkout, such as `<repo>-gh-fix-<N>`. Never reuse or modify the user's current working tree, and do not substitute a worktree for the separate clone.
 3. Clone the repository normally and verify that the clone's default-branch HEAD matches the remote.
 4. Create a new branch from the current remote default branch. Prefer `fix/issue-<N>-<short-slug>` unless repository instructions require another naming scheme.
-5. Keep the clone available after completion for inspection. Do not delete it unless the user asks.
+5. Register cleanup of every clone directory created by this workflow immediately after it is created. Remove those directories before exiting, including on normal completion, errors, or panics. Do not remove the user's existing checkout or unrelated directories.
+
+The cleanup must be unconditional: use a deferred/finally-style cleanup guard as soon as each clone is created, and make cleanup errors visible while preserving the original failure when one exists.
 
 ## Implement the fix
 
