@@ -375,10 +375,10 @@ func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	}
 }
 
-func TestCommandRunnerDoesNotLeaveAgentStdinOpen(t *testing.T) {
+func TestCommandRunnerDoesNotPipeAgentStdin(t *testing.T) {
 	cmd := newAgentCommand(context.Background(), "test-agent")
-	if cmd.Stdin == nil {
-		t.Fatal("agent stdin must be explicitly closed")
+	if cmd.Stdin != nil {
+		t.Fatal("agent stdin must not be piped")
 	}
 }
 
