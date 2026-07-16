@@ -110,8 +110,8 @@ func TestProjectStatusErrorReportsWriteScope(t *testing.T) {
 }
 
 func TestIssueListArgsUsesDefaultFilter(t *testing.T) {
-	got := issueListArgs("owner/repo", "label:agent-ready label:other status=closed", false)
-	want := []string{"issue", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--search", "label:agent-ready label:other status=closed", "--json", "number,title,body,state,createdAt,labels"}
+	got := issueListArgs("owner/repo", defaultIssueFilter, false)
+	want := []string{"issue", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--search", "is:issue state:open user:me", "--json", "number,title,body,state,createdAt,labels"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
 	}
@@ -138,7 +138,7 @@ func TestFilterFlagAccumulatesValues(t *testing.T) {
 	}
 }
 
-func TestFilterFlagDefaultsToAgentReady(t *testing.T) {
+func TestFilterFlagDefaultsToMyOpenIssues(t *testing.T) {
 	got := filterFlag{values: []string{defaultIssueFilter}}
 	if got.String() != defaultIssueFilter {
 		t.Fatalf("filter = %q, want %q", got.String(), defaultIssueFilter)

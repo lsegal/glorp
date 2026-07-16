@@ -159,7 +159,7 @@ type GHCLI struct {
 	AllIssues bool
 }
 
-const defaultIssueFilter = "label:agent-ready"
+const defaultIssueFilter = "is:issue state:open user:me"
 
 type filterFlag struct {
 	values []string
