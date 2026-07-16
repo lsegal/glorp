@@ -145,6 +145,28 @@ func TestDashboardUsesTwoByThreeAgentGrid(t *testing.T) {
 	}
 }
 
+func TestDashboardAddsGuttersBetweenSections(t *testing.T) {
+	if dashboardGap != 1 {
+		t.Fatalf("dashboard gap = %d, want 1", dashboardGap)
+	}
+	if got := joinHorizontalWithGap([]string{"one", "two"}, 1); got != "one two" {
+		t.Fatalf("horizontal gap = %q, want %q", got, "one two")
+	}
+	if got := strings.Split(joinVerticalWithGap([]string{"one", "two"}, 1), "\n"); len(got) != 3 || got[0] != "one" || got[2] != "two" {
+		t.Fatalf("vertical gap = %q, want one blank line", strings.Join(got, "\\n"))
+	}
+}
+
+func TestStatusBarCountsAreOneSelfContainedCell(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Concurrency: 3, Running: 1, Queued: 1, Completed: 2}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "jobs: 1 idle 2 active 4 total") {
+		t.Fatalf("dashboard status counts were not rendered as one cell: %s", view)
+	}
+}
+
 func TestFormatTargets(t *testing.T) {
 	got := formatTargets([]string{"o/one", "o/two"}, map[string]int{"o/one": 2})
 	if got[0] != "o/one (2 issues)" || got[1] != "o/two (0 issues)" {

@@ -17,6 +17,7 @@ import (
 const maxVisibleJobs = 6
 const jobGridColumns = 2
 const jobCardHeight = 12
+const dashboardGap = 1
 
 type JobSnapshot struct {
 	Number  int
@@ -164,18 +165,23 @@ func (m dashboard) View() string {
 		if status == "active" {
 			indicator = m.spinner.View()
 		}
-		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(max(18, m.width/jobGridColumns-4)).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s #%d %s\n%s %s", indicator, job.Number, truncate(job.Title, 20), style.Render(status), jobViewport.View())))
+		cardWidth := max(18, (m.width-dashboardGap)/jobGridColumns-4)
+		titleWidth := max(1, cardWidth-2)
+		title := panel.Copy().Width(titleWidth).Render(fmt.Sprintf("%s #%d %s", indicator, job.Number, truncate(job.Title, 20)))
+		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
+			fmt.Sprintf("%s\n%s %s", title, style.Render(status), jobViewport.View())))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {
 		end := min(i+jobGridColumns, len(jobs))
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, jobs[i:end]...))
+		rows = append(rows, joinHorizontalWithGap(jobs[i:end], dashboardGap))
 	}
-	grid := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	grid := joinVerticalWithGap(rows, dashboardGap)
 	logHeight := max(3, m.height/3)
 	logs := logPanel.Copy().Width(max(1, m.width-2)).Height(max(1, logHeight-2)).Render(muted.Render("Logs") + "\n" + m.viewport.View())
-	counts := fmt.Sprintf("jobs: %s idle %s active %s total", muted.Render(fmt.Sprint(max(0, m.snapshot.Concurrency-m.snapshot.Running-m.snapshot.Queued))), active.Render(fmt.Sprint(m.snapshot.Running+m.snapshot.Queued)), fmt.Sprint(m.snapshot.Completed+m.snapshot.Failed+m.snapshot.Running+m.snapshot.Queued))
+	// Keep nested foreground styles out of this cell: their ANSI resets would
+	// terminate the cell's background after the first styled fragment.
+	counts := fmt.Sprintf("jobs: %d idle %d active %d total", max(0, m.snapshot.Concurrency-m.snapshot.Running-m.snapshot.Queued), m.snapshot.Running+m.snapshot.Queued, m.snapshot.Completed+m.snapshot.Failed+m.snapshot.Running+m.snapshot.Queued)
 	tokens := quotaText(m.snapshot)
 	push := "polling every " + m.snapshot.Interval.String()
 	if m.snapshot.UseWebhooks {
@@ -189,7 +195,37 @@ func (m dashboard) View() string {
 	}
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
 	footer := renderStatusBar([]string{counts, tokens, push, targets})
-	return lipgloss.JoinVertical(lipgloss.Left, grid, logs, footer)
+	return joinVerticalWithGap([]string{grid, logs, footer}, dashboardGap)
+}
+
+func joinHorizontalWithGap(items []string, gap int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(items)*2-1)
+	for i, item := range items {
+		if i > 0 {
+			parts = append(parts, strings.Repeat(" ", max(0, gap)))
+		}
+		parts = append(parts, item)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+}
+
+func joinVerticalWithGap(items []string, gap int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(items)*2-1)
+	for i, item := range items {
+		if i > 0 {
+			for j := 0; j < max(0, gap); j++ {
+				parts = append(parts, "")
+			}
+		}
+		parts = append(parts, item)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func renderStatusBar(items []string) string {

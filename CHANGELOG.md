@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix dashboard status backgrounds, agent title backgrounds, and spacing between panels.
 - Use dark, borderless dashboard viewports with distinct status-line backgrounds.
 - Drop support for the legacy `label=` issue filter syntax.
 - Support repeated `--filter` arguments and GitHub issue search syntax.
