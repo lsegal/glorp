@@ -69,14 +69,12 @@ var (
 	panel      = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
 	logPanel   = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
 	statusBars = []lipgloss.Style{
-		lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("255")),
 		lipgloss.NewStyle().Background(lipgloss.Color("54")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 		lipgloss.NewStyle().Background(lipgloss.Color("29")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 		lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 	}
-	// Keep the cell background on nested styles. Lipgloss resets all
-	// attributes when rendering a foreground-only child, which otherwise
-	// truncates the status-bar background at the first colored count.
+	countLabelStyle  = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("255"))
 	idleCountStyle   = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("241"))
 	activeCountStyle = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("42"))
 	totalCountStyle  = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("205"))
@@ -207,10 +205,17 @@ func renderJobCounts(snapshot WatchSnapshot) string {
 	idle := max(0, snapshot.Concurrency-snapshot.Running-snapshot.Queued)
 	activeJobs := snapshot.Running + snapshot.Queued
 	total := snapshot.Completed + snapshot.Failed + activeJobs
-	return fmt.Sprintf("jobs: %s idle %s active %s total",
+	// Render every visible character with the cell background. A nested
+	// Lipgloss span resets its parent style when it ends, so relying on an
+	// outer background leaves the labels between colored counts unpainted.
+	return fmt.Sprintf("%s%s%s%s%s%s%s",
+		countLabelStyle.Render(" jobs: "),
 		idleCountStyle.Render(fmt.Sprint(idle)),
+		countLabelStyle.Render(" idle "),
 		activeCountStyle.Render(fmt.Sprint(activeJobs)),
+		countLabelStyle.Render(" active "),
 		totalCountStyle.Render(fmt.Sprint(total)),
+		countLabelStyle.Render(" total "),
 	)
 }
 

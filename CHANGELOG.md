@@ -8,7 +8,7 @@
 - Reliably enable the agent output dashboard on supported terminal sessions.
 - Show agent progress in dashboard cards and replace it with a checkmark when complete.
 - Colorize the dashboard's idle, active, and total job counts.
-- Preserve the dashboard status-bar background between colored job counts.
+- Preserve the dashboard status-bar background across colored job counts and their labels.
 - Reload and resynchronize when `.gh-watch.json` changes.
 - Default issue watching to open issues assigned to the current user.
 - Use the current user's authored issues as the default issue filter.

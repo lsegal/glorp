@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func TestDashboardShowsStatusAndTargets(t *testing.T) {
@@ -243,10 +244,47 @@ func TestStatusBarCountStyles(t *testing.T) {
 	if totalCountStyle.GetForeground() != lipgloss.Color("205") {
 		t.Fatalf("total count color = %q, want bar", totalCountStyle.GetForeground())
 	}
-	for _, style := range []lipgloss.Style{idleCountStyle, activeCountStyle, totalCountStyle} {
+	for _, style := range []lipgloss.Style{countLabelStyle, idleCountStyle, activeCountStyle, totalCountStyle} {
 		if style.GetBackground() != lipgloss.Color("24") {
-			t.Fatalf("count background = %q, want status-bar background", style.GetBackground())
+			t.Fatalf("count cell background = %q, want status-bar background", style.GetBackground())
 		}
+	}
+	if statusBars[0].GetPaddingLeft() != 0 || statusBars[0].GetPaddingRight() != 0 {
+		t.Fatal("job status cell padding must be rendered with the count label style")
+	}
+}
+
+func TestJobCountCellBackgroundCoversEveryCharacter(t *testing.T) {
+	profile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+
+	cell := renderStatusBar([]string{renderJobCounts(WatchSnapshot{
+		Concurrency: 3,
+		Running:     1,
+		Completed:   2,
+	})})
+	backgroundActive := false
+	for i := 0; i < len(cell); {
+		if cell[i] == '\x1b' {
+			end := strings.IndexByte(cell[i:], 'm')
+			if end < 0 {
+				t.Fatalf("unterminated ANSI sequence in %q", cell)
+			}
+			sequence := cell[i+2 : i+end]
+			if sequence == "0" {
+				backgroundActive = false
+			}
+			if strings.Contains(sequence, "48;5;24") {
+				backgroundActive = true
+			}
+			i += end + 1
+			continue
+		}
+		if !backgroundActive {
+			t.Fatalf("job count character %q rendered without its background in %q", cell[i], cell)
+		}
+		i++
 	}
 }
 
