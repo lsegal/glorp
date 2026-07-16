@@ -21,10 +21,33 @@ func TestDashboardShowsStatusAndTargets(t *testing.T) {
 		Jobs: []JobSnapshot{{Number: 7, Title: "Improve UI", Status: "active", Started: time.Now()}},
 	}))
 	view := updated.(dashboard).View()
-	for _, want := range []string{"idle", "active", "total", "12/100", "push", "o/one (4 issues)", "#7", "Agent 7", "Logs"} {
+	for _, want := range []string{"idle", "active", "total", "12/100", "push", "o/one (4 issues)", "#7", "Improve UI", "Logs"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("dashboard missing %q in %q", want, view)
 		}
+	}
+}
+
+func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{{Number: 7, Title: "UI", Status: "active", Log: "line 1\nline 2\nline 3\nline 4\nline 5"}}}))
+	m = updated.(dashboard)
+	if _, ok := m.jobs[7]; !ok {
+		t.Fatal("agent viewport was not created")
+	}
+	if m.jobs[7].Height != jobCardHeight-4 {
+		t.Fatalf("agent viewport height = %d, want %d", m.jobs[7].Height, jobCardHeight-4)
+	}
+	if strings.Contains(m.View(), "Agent 7") {
+		t.Fatal("agent prefix should not appear in the job title")
+	}
+}
+
+func TestStatusBarUsesRaisedBackground(t *testing.T) {
+	view := renderStatusBar([]string{"jobs"})
+	if strings.Contains(view, "┏") || strings.Contains(view, "╋") {
+		t.Fatalf("status bar should not use borders: %q", view)
 	}
 }
 
