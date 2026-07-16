@@ -50,6 +50,38 @@ func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{
+		{Number: 7, Title: "UI", Status: "active", Log: "working on it"},
+	}}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "working on it") {
+		t.Fatalf("dashboard did not show job progress: %s", view)
+	}
+	card := strings.Split(view, "Logs")[0]
+	if strings.Contains(card, "active") {
+		t.Fatalf("dashboard rendered the job status: %s", view)
+	}
+}
+
+func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{
+		{Number: 7, Title: "UI", Status: "complete", Log: "finished"},
+	}}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "✅") {
+		t.Fatalf("dashboard did not show completion checkmark: %s", view)
+	}
+	card := strings.Split(view, "Logs")[0]
+	if strings.Contains(card, "complete") || strings.Contains(card, "finished") {
+		t.Fatalf("dashboard rendered the completed status or stale progress: %s", view)
+	}
+}
+
 func TestDashboardTruncatesAgentTitleToCardWidth(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -207,8 +239,8 @@ func TestStatusBarCountStyles(t *testing.T) {
 		t.Fatalf("total count color = %q, want bar", totalCountStyle.GetForeground())
 	}
 	for _, style := range []lipgloss.Style{idleCountStyle, activeCountStyle, totalCountStyle} {
-		if style.GetBackground() != lipgloss.Color("24") {
-			t.Fatalf("count background = %q, want status-cell background", style.GetBackground())
+		if _, ok := style.GetBackground().(lipgloss.NoColor); !ok {
+			t.Fatalf("count background = %q, want no nested background", style.GetBackground())
 		}
 	}
 }

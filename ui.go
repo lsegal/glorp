@@ -74,9 +74,9 @@ var (
 		lipgloss.NewStyle().Background(lipgloss.Color("29")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 		lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 	}
-	idleCountStyle   = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("241"))
-	activeCountStyle = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("42"))
-	totalCountStyle  = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("205"))
+	idleCountStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	activeCountStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	totalCountStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 )
 
 func newDashboard() dashboard {
@@ -153,16 +153,13 @@ func (m dashboard) View() string {
 	jobs := make([]string, 0, len(m.snapshot.Jobs))
 	for _, job := range m.snapshot.Jobs {
 		status := job.Status
-		style := active
-		if status == "complete" {
-			style = done
-		}
-		if status == "failed" {
-			style = fail
-		}
 		jobViewport := m.jobs[job.Number]
 		if job.Log == "" {
 			jobViewport.SetContent("waiting for output...")
+		}
+		progress := jobViewport.View()
+		if status == "complete" {
+			progress = done.Render("✅")
 		}
 		indicator := " "
 		if status == "active" {
@@ -172,7 +169,7 @@ func (m dashboard) View() string {
 		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
 		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
 		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s\n%s %s", title, style.Render(status), jobViewport.View())))
+			fmt.Sprintf("%s\n%s", title, progress)))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {
