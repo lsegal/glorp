@@ -82,7 +82,7 @@ type fakeIssueStatuser struct {
 	err      error
 }
 
-func (f *fakeIssueStatuser) SetIssueStatus(_ context.Context, _ string, _ int, status string) error {
+func (f *fakeIssueStatuser) SetIssueStatus(_ context.Context, _ string, _ Issue, status string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statuses = append(f.statuses, status)

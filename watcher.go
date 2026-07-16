@@ -25,6 +25,7 @@ type Issue struct {
 	Labels        []IssueLabel      `json:"labels,omitempty"`
 	DependsOn     []IssueDependency `json:"dependsOn,omitempty"`
 	ProjectStatus string            `json:"projectStatus,omitempty"`
+	ProjectItemID string            `json:"-"`
 	Target        string            `json:"-"`
 }
 
@@ -56,7 +57,7 @@ type IssueLabeler interface {
 	SetIssueLabel(context.Context, string, int, bool) error
 }
 type IssueStatuser interface {
-	SetIssueStatus(context.Context, string, int, string) error
+	SetIssueStatus(context.Context, string, Issue, string) error
 }
 type AgentRunner interface {
 	Run(context.Context, Issue) error
@@ -276,7 +277,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 			}
 			if w.Status != nil {
-				if err := w.Status.SetIssueStatus(ctx, issue.Target, issue.Number, "In Progress"); err != nil {
+				if err := w.Status.SetIssueStatus(ctx, issue.Target, issue, "In Progress"); err != nil {
 					return err
 				}
 			}
@@ -343,7 +344,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 				}
 				if runErr != nil {
 					if w.Status != nil {
-						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i.Number, "Todo"); statusErr != nil {
+						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, "Todo"); statusErr != nil {
 							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
 						}
 					}
@@ -368,7 +369,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 					publish()
 				} else {
 					if w.Status != nil {
-						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i.Number, "Done"); statusErr != nil {
+						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, "Done"); statusErr != nil {
 							w.logf("issue #%d failed to update project status: %v", i.Number, statusErr)
 						}
 					}
@@ -494,7 +495,7 @@ func (w *Watcher) resetFailedWork(ctx context.Context, work map[string]workState
 			}
 		}
 		if w.Status != nil {
-			if err := w.Status.SetIssueStatus(ctx, target, number, "Todo"); err != nil {
+			if err := w.Status.SetIssueStatus(ctx, target, issue, "Todo"); err != nil {
 				if isProjectTarget(target) && errors.Is(err, errProjectIssueNotFound) {
 					w.logf("reset failed issue #%d skipped because it is no longer in project", number)
 					continue
@@ -610,6 +611,7 @@ func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
 		if item.Content != nil && item.Content.Type == "Issue" {
 			issue := item.Content.Issue
 			issue.ProjectStatus = item.Status
+			issue.ProjectItemID = item.ID
 			issues = append(issues, issue)
 		}
 	}

@@ -372,7 +372,7 @@ func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add b
 	return nil
 }
 
-func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, status string) error {
+func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, status string) error {
 	target, err := parseTarget(repo)
 	if err != nil {
 		return err
@@ -381,21 +381,23 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, stat
 		return nil
 	}
 
-	list := exec.CommandContext(ctx, g.Binary, projectListArgs(target, "", true)...)
-	output, err := list.Output()
-	items, err := decodeProjectItems(output, err)
-	if err != nil {
-		return err
-	}
-	var itemID string
-	for _, item := range items {
-		if item.Content != nil && item.Content.Number == number {
-			itemID = item.ID
-			break
+	itemID := issue.ProjectItemID
+	if itemID == "" {
+		list := exec.CommandContext(ctx, g.Binary, projectListArgs(target, "", true)...)
+		output, err := list.Output()
+		items, err := decodeProjectItems(output, err)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			if item.Content != nil && item.Content.Number == issue.Number {
+				itemID = item.ID
+				break
+			}
 		}
 	}
 	if itemID == "" {
-		return fmt.Errorf("%w: issue #%d is not in project %s", errProjectIssueNotFound, number, target.projectID)
+		return fmt.Errorf("%w: issue #%d is not in project %s", errProjectIssueNotFound, issue.Number, target.projectID)
 	}
 
 	viewCmd := exec.CommandContext(ctx, g.Binary, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
@@ -437,7 +439,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, number int, stat
 
 	edit := exec.CommandContext(ctx, g.Binary, "project", "item-edit", "--id", itemID, "--field-id", fieldID, "--project-id", view.ID, "--single-select-option-id", optionID)
 	if output, err := edit.CombinedOutput(); err != nil {
-		return projectStatusError(number, err, strings.TrimSpace(string(output)))
+		return projectStatusError(issue.Number, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
