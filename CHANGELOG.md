@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Put agent status in the title line and preserve the title background.
+- Keep watching when a failed project issue has been removed from the board.
 - Use the available dashboard card width for agent issue titles.
 - Fix dashboard status backgrounds, agent title backgrounds, and spacing between panels.
 - Use dark, borderless dashboard viewports with distinct status-line backgrounds.

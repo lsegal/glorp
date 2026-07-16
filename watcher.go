@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -494,6 +495,10 @@ func (w *Watcher) resetFailedWork(ctx context.Context, work map[string]workState
 		}
 		if w.Status != nil {
 			if err := w.Status.SetIssueStatus(ctx, target, number, "Todo"); err != nil {
+				if isProjectTarget(target) && errors.Is(err, errProjectIssueNotFound) {
+					w.logf("reset failed issue #%d skipped because it is no longer in project", number)
+					continue
+				}
 				return fmt.Errorf("reset failed issue #%d project status: %w", number, err)
 			}
 		}
