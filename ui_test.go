@@ -196,6 +196,23 @@ func TestStatusBarCountsAreOneSelfContainedCell(t *testing.T) {
 	}
 }
 
+func TestStatusBarCountStyles(t *testing.T) {
+	if idleCountStyle.GetForeground() != lipgloss.Color("241") {
+		t.Fatalf("idle count color = %q, want muted", idleCountStyle.GetForeground())
+	}
+	if activeCountStyle.GetForeground() != lipgloss.Color("42") {
+		t.Fatalf("active count color = %q, want active", activeCountStyle.GetForeground())
+	}
+	if totalCountStyle.GetForeground() != lipgloss.Color("205") {
+		t.Fatalf("total count color = %q, want bar", totalCountStyle.GetForeground())
+	}
+	for _, style := range []lipgloss.Style{idleCountStyle, activeCountStyle, totalCountStyle} {
+		if style.GetBackground() != lipgloss.Color("24") {
+			t.Fatalf("count background = %q, want status-cell background", style.GetBackground())
+		}
+	}
+}
+
 func TestFormatTargets(t *testing.T) {
 	got := formatTargets([]string{"o/one", "o/two"}, map[string]int{"o/one": 2})
 	if got[0] != "o/one (2 issues)" || got[1] != "o/two (0 issues)" {

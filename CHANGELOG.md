@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Colorize the dashboard's idle, active, and total job counts.
 - Reload and resynchronize when `.gh-watch.json` changes.
 - Default issue watching to open issues assigned to the current user.
 - Make the watcher concurrency-limit test wait for dispatches instead of relying on timing.

@@ -74,6 +74,9 @@ var (
 		lipgloss.NewStyle().Background(lipgloss.Color("29")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 		lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 	}
+	idleCountStyle   = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("241"))
+	activeCountStyle = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("42"))
+	totalCountStyle  = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("205"))
 )
 
 func newDashboard() dashboard {
@@ -179,9 +182,7 @@ func (m dashboard) View() string {
 	grid := joinVerticalWithGap(rows, dashboardGap)
 	logHeight := max(3, m.height/3)
 	logs := logPanel.Copy().Width(max(1, m.width-2)).Height(max(1, logHeight-2)).Render(muted.Render("Logs") + "\n" + m.viewport.View())
-	// Keep nested foreground styles out of this cell: their ANSI resets would
-	// terminate the cell's background after the first styled fragment.
-	counts := fmt.Sprintf("jobs: %d idle %d active %d total", max(0, m.snapshot.Concurrency-m.snapshot.Running-m.snapshot.Queued), m.snapshot.Running+m.snapshot.Queued, m.snapshot.Completed+m.snapshot.Failed+m.snapshot.Running+m.snapshot.Queued)
+	counts := renderJobCounts(m.snapshot)
 	tokens := quotaText(m.snapshot)
 	push := "polling every " + m.snapshot.Interval.String()
 	if m.snapshot.UseWebhooks {
@@ -196,6 +197,17 @@ func (m dashboard) View() string {
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
 	footer := renderStatusBar([]string{counts, tokens, push, targets})
 	return joinVerticalWithGap([]string{grid, logs, footer}, dashboardGap)
+}
+
+func renderJobCounts(snapshot WatchSnapshot) string {
+	idle := max(0, snapshot.Concurrency-snapshot.Running-snapshot.Queued)
+	activeJobs := snapshot.Running + snapshot.Queued
+	total := snapshot.Completed + snapshot.Failed + activeJobs
+	return fmt.Sprintf("jobs: %s idle %s active %s total",
+		idleCountStyle.Render(fmt.Sprint(idle)),
+		activeCountStyle.Render(fmt.Sprint(activeJobs)),
+		totalCountStyle.Render(fmt.Sprint(total)),
+	)
 }
 
 func joinHorizontalWithGap(items []string, gap int) string {
