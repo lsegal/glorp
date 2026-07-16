@@ -124,6 +124,26 @@ func TestSearchQueryParsesLabelTerms(t *testing.T) {
 	}
 }
 
+func TestFilterFlagAccumulatesValues(t *testing.T) {
+	got := filterFlag{values: []string{defaultIssueFilter}}
+	if err := got.Set("label:bug"); err != nil {
+		t.Fatal(err)
+	}
+	if err := got.Set("author:lsegal"); err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != "label:bug author:lsegal" {
+		t.Fatalf("filter = %q", got.String())
+	}
+}
+
+func TestFilterFlagDefaultsToAgentReady(t *testing.T) {
+	got := filterFlag{values: []string{defaultIssueFilter}}
+	if got.String() != defaultIssueFilter {
+		t.Fatalf("filter = %q, want %q", got.String(), defaultIssueFilter)
+	}
+}
+
 func TestIssueListArgsDisablesFilter(t *testing.T) {
 	got := issueListArgs("owner/repo", "label=agent-ready", true)
 	if slices.Contains(got, "--search") {

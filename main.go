@@ -37,7 +37,8 @@ func main() {
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
 	statePath := flag.String("state", ".gh-watch.json", "file used to remember handled issue numbers")
-	filter := flag.String("filter", defaultIssueFilter, "GitHub issue search filter")
+	filter := filterFlag{values: []string{defaultIssueFilter}}
+	flag.Var(&filter, "filter", "GitHub issue search filter (repeatable)")
 	allIssues := flag.Bool("all-issues", false, "disable the default issue filter")
 	flag.Parse()
 	if *showVersion {
@@ -72,7 +73,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	gh := GHCLI{Binary: "gh"}
-	gh.Filter, gh.AllIssues = *filter, *allIssues
+	gh.Filter, gh.AllIssues = filter.String(), *allIssues
 	targets := flag.Args()
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
@@ -156,6 +157,24 @@ type GHCLI struct {
 }
 
 const defaultIssueFilter = "label=agent-ready"
+
+type filterFlag struct {
+	values []string
+	set    bool
+}
+
+func (f *filterFlag) String() string {
+	return strings.Join(f.values, " ")
+}
+
+func (f *filterFlag) Set(value string) error {
+	if !f.set {
+		f.values = nil
+		f.set = true
+	}
+	f.values = append(f.values, value)
+	return nil
+}
 
 type projectFieldOption struct {
 	ID   string `json:"id"`
