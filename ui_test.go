@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,17 @@ func TestFormatCodexQuota(t *testing.T) {
 	window := int64(7 * 24 * 60)
 	if got := formatCodexQuota(&codexPrimaryRateLimit{UsedPercent: 13, WindowDurationMins: &window}); got != "weekly 87% left" {
 		t.Fatalf("quota = %q", got)
+	}
+}
+
+func TestCodexRateLimitsRequestOmitsParams(t *testing.T) {
+	requests := codexQuotaRequests()
+	var request map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(requests[len(requests)-1]), &request); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := request["params"]; ok {
+		t.Fatal("account/rateLimits/read request must omit params")
 	}
 }
 

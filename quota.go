@@ -60,11 +60,7 @@ func readCodexQuota(ctx context.Context, binary string) (string, error) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	}()
-	for _, request := range []string{
-		`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"gh-watch","title":"gh-watch","version":"dev"}}}`,
-		`{"method":"initialized","params":{}}`,
-		`{"id":2,"method":"account/rateLimits/read","params":null}`,
-	} {
+	for _, request := range codexQuotaRequests() {
 		if _, err := fmt.Fprintln(stdin, request); err != nil {
 			return "", err
 		}
@@ -91,6 +87,14 @@ func readCodexQuota(ctx context.Context, binary string) (string, error) {
 		return "", err
 	}
 	return "", fmt.Errorf("codex rate limit response not received")
+}
+
+func codexQuotaRequests() []string {
+	return []string{
+		`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"gh-watch","title":"gh-watch","version":"dev"}}}`,
+		`{"method":"initialized","params":{}}`,
+		`{"id":2,"method":"account/rateLimits/read"}`,
+	}
 }
 
 func formatCodexQuota(primary *codexPrimaryRateLimit) string {
