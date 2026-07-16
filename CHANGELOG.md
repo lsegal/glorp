@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reliably enable the agent output dashboard on supported terminal sessions.
 - Show agent progress in dashboard cards and replace it with a checkmark when complete.
 - Colorize the dashboard's idle, active, and total job counts.
 - Preserve the dashboard status-bar background between colored job counts.

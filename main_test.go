@@ -3,10 +3,13 @@ package main
 import (
 	"errors"
 	"net/url"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mattn/go-isatty"
 )
 
 func TestValidRepo(t *testing.T) {
@@ -163,5 +166,12 @@ func TestBugReportURL(t *testing.T) {
 	}
 	if strings.Contains(got, "private source code") || strings.Contains(got, "secret") || !strings.Contains(got, "bug_report.md") || !strings.Contains(got, "robot+output+omitted") {
 		t.Fatalf("URL contains agent output or is missing the redacted placeholder: %s", got)
+	}
+}
+
+func TestIsTerminalUsesTTYDetection(t *testing.T) {
+	want := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+	if got := isTerminal(os.Stdout); got != want {
+		t.Fatalf("isTerminal = %v, want %v", got, want)
 	}
 }
