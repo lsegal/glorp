@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+-Always remove isolated clone directories when the issue-fix workflow exits.
 - Reliably enable the agent output dashboard on supported terminal sessions.
 - Show agent progress in dashboard cards and replace it with a checkmark when complete.
 - Colorize the dashboard's idle, active, and total job counts.
