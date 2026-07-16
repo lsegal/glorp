@@ -490,9 +490,18 @@ func (r CommandRunner) RunWithOutput(ctx context.Context, issue Issue, output io
 	return r.run(ctx, issue, output)
 }
 
+func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	// Codex treats a piped stdin as additional prompt input. Give the agent an
+	// explicitly closed stream so it cannot wait for input from gh-watch's
+	// parent process.
+	cmd.Stdin = strings.NewReader("")
+	return cmd
+}
+
 func (r CommandRunner) run(ctx context.Context, issue Issue, jobOutput io.Writer) error {
 	args := commandArgs(r, issue)
-	cmd := exec.CommandContext(ctx, r.Binary, args...)
+	cmd := newAgentCommand(ctx, r.Binary, args...)
 	agentOutput := io.Writer(io.Discard)
 	if jobOutput != nil {
 		agentOutput = io.MultiWriter(agentOutput, jobOutput)

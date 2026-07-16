@@ -356,6 +356,13 @@ func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerDoesNotLeaveAgentStdinOpen(t *testing.T) {
+	cmd := newAgentCommand(context.Background(), "test-agent")
+	if cmd.Stdin == nil {
+		t.Fatal("agent stdin must be explicitly closed")
+	}
+}
+
 func TestStateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	want := map[int]bool{3: true, 9: true}
