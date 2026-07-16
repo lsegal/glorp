@@ -79,8 +79,14 @@ func TestDashboardTrimsOldestJobs(t *testing.T) {
 	}
 	updated, _ = m.Update(snapshotMsg(WatchSnapshot{Concurrency: 3, Jobs: jobs}))
 	view := updated.(dashboard).View()
-	if strings.Contains(view, "#1 ") || !strings.Contains(view, "#10 ") {
-		t.Fatalf("dashboard did not keep newest nine jobs: %s", view)
+	if strings.Contains(view, "#1 ") || strings.Contains(view, "#4 ") || !strings.Contains(view, "#10 ") {
+		t.Fatalf("dashboard did not keep newest six jobs: %s", view)
+	}
+}
+
+func TestDashboardUsesTwoByThreeAgentGrid(t *testing.T) {
+	if maxVisibleJobs != 6 || jobGridColumns != 2 || jobCardHeight != 8 {
+		t.Fatalf("agent grid = %d jobs, %d columns, card height %d; want 6, 2, 8", maxVisibleJobs, jobGridColumns, jobCardHeight)
 	}
 }
 

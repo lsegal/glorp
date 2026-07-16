@@ -13,7 +13,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const maxVisibleJobs = 9
+const maxVisibleJobs = 6
+const jobGridColumns = 2
+const jobCardHeight = 8
 
 type JobSnapshot struct {
 	Number  int
@@ -117,12 +119,12 @@ func (m dashboard) View() string {
 		if body == "" {
 			body = "waiting for output..."
 		}
-		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(max(18, m.width/3-4)).Height(4).Render(
-			fmt.Sprintf("%s\n%s #%d %s\n%s", muted.Render("Agent "+fmt.Sprint(job.Number)), style.Render(status), job.Number, truncate(job.Title, 20), truncate(lastLine(body), max(18, m.width/3-7)))))
+		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(max(18, m.width/jobGridColumns-4)).Height(jobCardHeight).Render(
+			fmt.Sprintf("%s\n%s #%d %s\n%s", muted.Render("Agent "+fmt.Sprint(job.Number)), style.Render(status), job.Number, truncate(job.Title, 20), truncate(lastLine(body), max(18, m.width/jobGridColumns-7)))))
 	}
-	rows := make([]string, 0, (len(jobs)+2)/3)
-	for i := 0; i < len(jobs); i += 3 {
-		end := min(i+3, len(jobs))
+	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
+	for i := 0; i < len(jobs); i += jobGridColumns {
+		end := min(i+jobGridColumns, len(jobs))
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, jobs[i:end]...))
 	}
 	grid := lipgloss.JoinVertical(lipgloss.Left, rows...)

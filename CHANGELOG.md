@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Limit the dashboard agent grid to six two-column cards and keep agent output in its card instead of the Logs panel.
 - Ask launched agents to summarize changes without printing code diffs or large code blocks.
 - Show agent output in its dashboard job card.
 - Do not retain agent output outside the interactive dashboard.

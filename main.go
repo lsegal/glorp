@@ -86,16 +86,12 @@ func main() {
 	if ui != nil {
 		wOut = io.Discard
 	}
-	var agentOutput io.Writer
-	if ui != nil {
-		agentOutput = ui.Writer()
-	}
 	var quota func(context.Context) string
 	if *agent == "codex" {
 		quotaReader := &codexQuotaReader{Binary: binary}
 		quota = quotaReader.Read
 	}
-	w := &Watcher{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: ui, Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Output: agentOutput}, Out: wOut}
+	w := &Watcher{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: ui, Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0]}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		server = &http.Server{Addr: *listen, Handler: WebhookHandler{Events: events, Secret: *webhookSecret, WebhookPath: *webhookPath}}
