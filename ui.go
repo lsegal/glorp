@@ -60,14 +60,19 @@ type dashboard struct {
 }
 
 var (
-	barStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	muted     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	active    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	done      = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
-	fail      = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	panel     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Background(lipgloss.Color("252"))
-	logPanel  = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("205")).Background(lipgloss.Color("252"))
-	statusBar = lipgloss.NewStyle().Background(lipgloss.Color("250")).Foreground(lipgloss.Color("235")).Padding(0, 1)
+	barStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	muted      = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	active     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	done       = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	fail       = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	panel      = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
+	logPanel   = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252"))
+	statusBars = []lipgloss.Style{
+		lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		lipgloss.NewStyle().Background(lipgloss.Color("54")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		lipgloss.NewStyle().Background(lipgloss.Color("29")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+		lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("255")).Padding(0, 1),
+	}
 )
 
 func newDashboard() dashboard {
@@ -190,7 +195,7 @@ func (m dashboard) View() string {
 func renderStatusBar(items []string) string {
 	cells := make([]string, len(items))
 	for i, item := range items {
-		cells[i] = statusBar.Render(item)
+		cells[i] = statusBars[i%len(statusBars)].Render(item)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, cells...)
 }

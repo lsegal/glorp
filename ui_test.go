@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestDashboardShowsStatusAndTargets(t *testing.T) {
@@ -53,6 +54,26 @@ func TestStatusBarUsesRaisedBackground(t *testing.T) {
 	view := renderStatusBar([]string{"jobs"})
 	if strings.Contains(view, "┏") || strings.Contains(view, "╋") {
 		t.Fatalf("status bar should not use borders: %q", view)
+	}
+}
+
+func TestDashboardUsesDarkBorderlessViewportPanels(t *testing.T) {
+	if panel.GetBackground() != lipgloss.Color("236") || logPanel.GetBackground() != lipgloss.Color("236") {
+		t.Fatalf("viewport backgrounds = %q and %q, want dark gray", panel.GetBackground(), logPanel.GetBackground())
+	}
+	if panel.GetBorderStyle().Top != "" || logPanel.GetBorderStyle().Top != "" {
+		t.Fatal("viewport panels should not have borders")
+	}
+}
+
+func TestStatusBarUsesDistinctBackgrounds(t *testing.T) {
+	if len(statusBars) < 2 {
+		t.Fatal("status bar should define multiple background styles")
+	}
+	for i := 1; i < len(statusBars); i++ {
+		if statusBars[i].GetBackground() == statusBars[0].GetBackground() {
+			t.Fatalf("status bar cell %d reuses the first cell background", i)
+		}
 	}
 }
 
