@@ -164,8 +164,10 @@ func (m dashboard) View() string {
 		if status == "active" {
 			indicator = m.spinner.View()
 		}
-		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(max(18, m.width/jobGridColumns-4)).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s #%d %s\n%s %s", indicator, job.Number, truncate(job.Title, 20), style.Render(status), jobViewport.View())))
+		cardWidth := jobCardWidth(m.width)
+		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
+		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
+			fmt.Sprintf("%s%s\n%s %s", prefix, truncate(job.Title, jobTitleWidth(cardWidth, prefix)), style.Render(status), jobViewport.View())))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {
@@ -243,10 +245,33 @@ func truncate(s string, width int) string {
 	if width < 1 {
 		return ""
 	}
-	if len([]rune(s)) <= width {
+	if lipgloss.Width(s) <= width {
 		return s
 	}
-	return string([]rune(s)[:max(0, width-1)]) + "..."
+	if width <= 3 {
+		var result []rune
+		for _, r := range s {
+			candidate := string(append(result, r))
+			if lipgloss.Width(candidate) > width {
+				break
+			}
+			result = append(result, r)
+		}
+		return string(result)
+	}
+	runes := []rune(s)
+	for len(runes) > 0 && lipgloss.Width(string(runes[:len(runes)]))+3 > width {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "..."
+}
+
+func jobCardWidth(width int) int {
+	return max(18, width/jobGridColumns-4)
+}
+
+func jobTitleWidth(cardWidth int, prefix string) int {
+	return max(1, cardWidth-2-lipgloss.Width(prefix))
 }
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")

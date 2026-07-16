@@ -50,6 +50,35 @@ func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 	}
 }
 
+func TestDashboardTruncatesAgentTitleToCardWidth(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "This is a deliberately long agent issue title", Status: "active",
+	}}}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "This is a deliberately long agent") {
+		t.Fatalf("dashboard did not use the available card width for the title: %s", view)
+	}
+	if strings.Contains(view, "This is a deliber...") {
+		t.Fatalf("dashboard still uses the old fixed title width: %s", view)
+	}
+}
+
+func TestTruncateKeepsDisplayWidthWithinLimit(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		width int
+	}{
+		{input: "a long title", width: 8},
+		{input: "日本語のタイトル", width: 8},
+	} {
+		if got := truncate(test.input, test.width); lipgloss.Width(got) > test.width {
+			t.Errorf("truncate(%q, %d) = %q with display width %d", test.input, test.width, got, lipgloss.Width(got))
+		}
+	}
+}
+
 func TestStatusBarUsesRaisedBackground(t *testing.T) {
 	view := renderStatusBar([]string{"jobs"})
 	if strings.Contains(view, "┏") || strings.Contains(view, "╋") {
