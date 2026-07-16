@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Stream Codex JSONL progress events so agent output appears reliably in the dashboard.
+- Render completed-job checkmarks on the issue title line in green.
 -Always remove isolated clone directories when the issue-fix workflow exits.
 - Reliably enable the agent output dashboard on supported terminal sessions.
 - Show agent progress in dashboard cards and replace it with a checkmark when complete.

@@ -73,12 +73,17 @@ func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
 		{Number: 7, Title: "UI", Status: "complete", Log: "finished"},
 	}}))
 	view := updated.(dashboard).View()
-	if !strings.Contains(view, "✅") {
+	if !strings.Contains(view, "✓") {
 		t.Fatalf("dashboard did not show completion checkmark: %s", view)
 	}
 	card := strings.Split(view, "Logs")[0]
 	if strings.Contains(card, "complete") || strings.Contains(card, "finished") {
 		t.Fatalf("dashboard rendered the completed status or stale progress: %s", view)
+	}
+	for _, line := range strings.Split(card, "\n") {
+		if strings.Contains(line, "#7") && !strings.Contains(line, "✓") {
+			t.Fatalf("dashboard rendered the completion checkmark on a separate line: %s", view)
+		}
 	}
 }
 

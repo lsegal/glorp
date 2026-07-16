@@ -168,6 +168,10 @@ func (m dashboard) View() string {
 		if status == "active" {
 			indicator = m.spinner.View()
 		}
+		if status == "complete" {
+			indicator = done.Render("✓")
+			progress = ""
+		}
 		cardWidth := jobCardWidth(m.width)
 		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
 		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
