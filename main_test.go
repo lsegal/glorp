@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"net/url"
 	"os"
@@ -182,5 +183,19 @@ func TestShouldUseUIDisablesTerminalDetection(t *testing.T) {
 	}
 	if got, want := shouldUseUI(false, os.Stdout), isTerminal(os.Stdout); got != want {
 		t.Fatalf("shouldUseUI = %v, want %v", got, want)
+	}
+}
+
+func TestTerminalUIReporterDoesNotWrapNilUI(t *testing.T) {
+	var logs bytes.Buffer
+	w := &Glorp{Out: &logs, UI: terminalUIReporter(nil)}
+
+	w.logf("running without UI")
+
+	if w.UI != nil {
+		t.Fatal("terminalUIReporter returned a non-nil reporter for a nil UI")
+	}
+	if !strings.Contains(logs.String(), "running without UI") {
+		t.Fatalf("log output = %q", logs.String())
 	}
 }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prevent `--no-ui` from crashing when normal log messages are written.
+
 ## v1.0.0 - 2026-07-17
 
 - Add the glorp robot-patcher logo and a Hugo-powered GitHub Pages site generated directly from the README.
