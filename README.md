@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/glorp-logo.png" alt="glorp robot patcher logo" width="280">
+  <img src="assets/glorp-logo.svg" alt="glorp robot patcher logo" width="280">
 </p>
 
 # glorp

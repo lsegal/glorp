@@ -5,7 +5,7 @@ on:
     branches: ["main"]
     paths:
       - "README.md"
-      - "assets/glorp-logo.png"
+      - "assets/glorp-logo.svg"
       - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
