@@ -23,7 +23,7 @@ type WebhookEvent struct {
 }
 
 // WebhookHandler accepts GitHub webhook deliveries, records useful delivery
-// details, and asks the watcher to refresh its issue list. The payload is not
+// details, and asks the glorp to refresh its issue list. The payload is not
 // used as the source of issue data: the next authenticated GitHub CLI query
 // remains authoritative.
 type WebhookHandler struct {

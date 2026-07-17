@@ -27,7 +27,7 @@ type JobSnapshot struct {
 	Log     string
 }
 
-type WatchSnapshot struct {
+type GlorpSnapshot struct {
 	Targets       []string
 	IssueCounts   map[string]int
 	Running       int
@@ -46,11 +46,11 @@ type WatchSnapshot struct {
 	Jobs          []JobSnapshot
 }
 
-type snapshotMsg WatchSnapshot
+type snapshotMsg GlorpSnapshot
 type logMsg string
 
 type dashboard struct {
-	snapshot WatchSnapshot
+	snapshot GlorpSnapshot
 	viewport viewport.Model
 	jobs     map[int]viewport.Model
 	spinner  spinner.Model
@@ -84,7 +84,7 @@ func newDashboard() dashboard {
 	s := spinner.New()
 	s.Spinner = spinner.Line
 	s.Style = active
-	return dashboard{snapshot: WatchSnapshot{}, jobs: make(map[int]viewport.Model), spinner: s}
+	return dashboard{snapshot: GlorpSnapshot{}, jobs: make(map[int]viewport.Model), spinner: s}
 }
 
 func (m dashboard) Init() tea.Cmd { return spinner.Tick }
@@ -106,7 +106,7 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.jobs[number] = jobViewport
 		}
 	case snapshotMsg:
-		m.snapshot = WatchSnapshot(msg)
+		m.snapshot = GlorpSnapshot(msg)
 		slices.SortFunc(m.snapshot.Jobs, func(a, b JobSnapshot) int { return b.Started.Compare(a.Started) })
 		if len(m.snapshot.Jobs) > maxVisibleJobs {
 			m.snapshot.Jobs = m.snapshot.Jobs[:maxVisibleJobs]
@@ -149,7 +149,7 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m dashboard) View() string {
 	if !m.ready {
-		return "Starting gh-watch dashboard..."
+		return "Starting glorp dashboard..."
 	}
 	jobs := make([]string, 0, len(m.snapshot.Jobs))
 	for _, job := range m.snapshot.Jobs {
@@ -201,7 +201,7 @@ func (m dashboard) View() string {
 	return joinVerticalWithGap([]string{grid, logs, footer}, dashboardGap)
 }
 
-func renderJobCounts(snapshot WatchSnapshot) string {
+func renderJobCounts(snapshot GlorpSnapshot) string {
 	idle := max(0, snapshot.Concurrency-snapshot.Running-snapshot.Queued)
 	activeJobs := snapshot.Running + snapshot.Queued
 	total := snapshot.Completed + snapshot.Failed + activeJobs
@@ -291,7 +291,7 @@ func (ui *TerminalUI) Run(ctx context.Context) error {
 	return err
 }
 func (ui *TerminalUI) Writer() io.Writer { return dashboardWriter{ui: ui} }
-func (ui *TerminalUI) Snapshot(snapshot WatchSnapshot) {
+func (ui *TerminalUI) Snapshot(snapshot GlorpSnapshot) {
 	ui.program.Send(snapshotMsg(snapshot))
 }
 func (ui *TerminalUI) Log(line string) { ui.program.Send(logMsg(line)) }

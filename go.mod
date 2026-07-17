@@ -1,4 +1,4 @@
-module github.com/lsegal/gh-watch
+module github.com/lsegal/glorp
 
 go 1.23
 

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a gh-watch failure
+about: Report a glorp failure
 title: "bug: "
 labels: ""
 assignees: ""
@@ -16,4 +16,4 @@ assignees: ""
 
 ## Agent output
 
-<!-- Robot output is intentionally omitted from autofilled reports. Add only gh-watch logs or other non-sensitive diagnostic context. -->
+<!-- Robot output is intentionally omitted from autofilled reports. Add only glorp logs or other non-sensitive diagnostic context. -->

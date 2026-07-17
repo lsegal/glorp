@@ -2,20 +2,19 @@
 
 ## Unreleased
 
+- Add `--yolo` to opt into launching Codex or Claude without sandbox and permission checks.
+- Add `--no-ui` to disable the interactive dashboard and print normal logs in a terminal.
 - Watch multiple repository or project targets in one process.
 - Use synchronized GitHub webhooks over a managed ngrok tunnel by default, with polling available through `--poll`.
 - Show an interactive terminal dashboard with job cards, status counts, targets, scrolling logs, and push or polling state.
 - Stream Codex progress into dashboard job cards, show completed jobs with a green checkmark, and display the weekly quota remaining.
-- Reload and resynchronize when `.gh-watch.json` changes.
+- Reload and resynchronize when `.glorp.json` changes.
 - Default issue watching to open issues authored by the current user.
-- Support repeated `--filter` arguments using GitHub issue search syntax and drop the legacy `label=` syntax.
+- Support repeated `--filter` arguments using GitHub issue search syntax.
 - Prevent launched agents from waiting for or reporting additional stdin input.
 - Ask launched agents to summarize changes without printing code diffs or large code blocks.
 - Reliably update project-board status and keep watching when a failed issue has been removed from the board.
 - Always remove isolated clone directories when the issue-fix workflow exits.
-
-## v1.0.0 - 2026-07-15
-
 - Explain and report the `project` scope required to update project-board issue status.
 - Finalize releases after tags created by GitHub Actions.
 - Skip project-board issues that are already in progress or completed.

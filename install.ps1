@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
-$repo = if ($env:GH_WATCH_REPO) { $env:GH_WATCH_REPO } else { 'lsegal/gh-watch' }
-$version = if ($env:GH_WATCH_VERSION) { $env:GH_WATCH_VERSION } else { 'latest' }
-$installDir = if ($env:GH_WATCH_BIN_DIR) { $env:GH_WATCH_BIN_DIR } else { Join-Path $HOME 'AppData\Local\gh-watch' }
+$repo = if ($env:GLORP_REPO) { $env:GLORP_REPO } else { 'lsegal/glorp' }
+$version = if ($env:GLORP_VERSION) { $env:GLORP_VERSION } else { 'latest' }
+$installDir = if ($env:GLORP_BIN_DIR) { $env:GLORP_BIN_DIR } else { Join-Path $HOME 'AppData\Local\glorp' }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw 'gh CLI is required: https://cli.github.com/'
@@ -18,23 +18,23 @@ if ($version -eq 'latest') {
 $tag = $version
 $version = $version.TrimStart('v')
 $architecture = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
-$archive = "gh-watch_${version}_windows_${architecture}.zip"
+$archive = "glorp_${version}_windows_${architecture}.zip"
 $url = "https://github.com/$repo/releases/download/$tag/$archive"
-$temp = Join-Path ([System.IO.Path]::GetTempPath()) ("gh-watch-" + [guid]::NewGuid())
+$temp = Join-Path ([System.IO.Path]::GetTempPath()) ("glorp-" + [guid]::NewGuid())
 $zip = Join-Path $temp $archive
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
     Invoke-WebRequest -Uri $url -OutFile $zip
     Expand-Archive -Path $zip -DestinationPath $temp -Force
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    Copy-Item (Join-Path $temp 'gh-watch.exe') (Join-Path $installDir 'gh-watch.exe') -Force
+    Copy-Item (Join-Path $temp 'glorp.exe') (Join-Path $installDir 'glorp.exe') -Force
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($null -eq $userPath) { $userPath = '' }
     if (($userPath -split ';') -notcontains $installDir) {
         [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $installDir).Trim(';')), 'User')
     }
     & npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y
-    Write-Host "Installed gh-watch to $installDir\gh-watch.exe and gh-fix globally."
+    Write-Host "Installed glorp to $installDir\glorp.exe and gh-fix globally."
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
 }

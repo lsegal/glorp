@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${GH_WATCH_REPO:-lsegal/gh-watch}"
-version="${GH_WATCH_VERSION:-latest}"
-bin_dir="${GH_WATCH_BIN_DIR:-$HOME/.local/bin}"
+repo="${GLORP_REPO:-lsegal/glorp}"
+version="${GLORP_VERSION:-latest}"
+bin_dir="${GLORP_BIN_DIR:-$HOME/.local/bin}"
 command -v gh >/dev/null 2>&1 || { echo "gh CLI is required: https://cli.github.com/" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 mkdir -p "$bin_dir"
@@ -15,12 +15,12 @@ os_name="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m)"
 [[ "$arch" == "x86_64" ]] && arch="amd64"
 [[ "$arch" == "aarch64" || "$arch" == "arm64" ]] && arch="arm64"
-archive="gh-watch_${version#v}_${os_name}_${arch}.tar.gz"
+archive="glorp_${version#v}_${os_name}_${arch}.tar.gz"
 url="https://github.com/$repo/releases/download/$version/$archive"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$url" -o "$tmp/$archive"
 tar -xzf "$tmp/$archive" -C "$tmp"
-install "$tmp/gh-watch" "$bin_dir/gh-watch"
+install "$tmp/glorp" "$bin_dir/glorp"
 npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y
-echo "Installed gh-watch to $bin_dir/gh-watch and gh-fix globally."
+echo "Installed glorp to $bin_dir/glorp and gh-fix globally."

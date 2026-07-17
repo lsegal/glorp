@@ -35,13 +35,15 @@ func main() {
 	webhookSecret := flag.String("webhook-secret", "", "optional GitHub webhook secret")
 	ngrokBinary := flag.String("ngrok-binary", "ngrok", "ngrok executable")
 	ngrokAPI := flag.String("ngrok-api", "http://127.0.0.1:4040", "ngrok local API URL")
+	noUI := flag.Bool("no-ui", false, "disable the interactive terminal UI")
+	yolo := flag.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
 	model := flag.String("model", "", "model to use for the agent")
 	modelLevel := flag.String("model-level", "", "model reasoning level: low, medium, or high")
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
-	statePath := flag.String("state", ".gh-watch.json", "file used to remember handled issue numbers")
+	statePath := flag.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	filter := filterFlag{values: []string{defaultIssueFilter}}
 	flag.Var(&filter, "filter", "GitHub issue search filter (repeatable)")
 	allIssues := flag.Bool("all-issues", false, "disable the default issue filter")
@@ -51,7 +53,7 @@ func main() {
 		return
 	}
 	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: gh-watch [flags] TARGET [TARGET ...]")
+		fmt.Fprintln(os.Stderr, "usage: glorp [flags] TARGET [TARGET ...]")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
@@ -83,7 +85,7 @@ func main() {
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
-	if isTerminal(os.Stdout) {
+	if shouldUseUI(*noUI, os.Stdout) {
 		ui = NewTerminalUI()
 		output = ui.Writer()
 		go func() { _ = ui.Run(ctx) }()
@@ -97,7 +99,7 @@ func main() {
 		quotaReader := &codexQuotaReader{Binary: binary}
 		quota = quotaReader.Read
 	}
-	w := &Watcher{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: ui, Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0]}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: ui, Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		server = &http.Server{Addr: *listen, Handler: WebhookHandler{Events: events, Secret: *webhookSecret, WebhookPath: *webhookPath}}
@@ -153,6 +155,10 @@ func main() {
 func isTerminal(file *os.File) bool {
 	fd := file.Fd()
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+func shouldUseUI(disabled bool, output *os.File) bool {
+	return !disabled && isTerminal(output)
 }
 
 type GHCLI struct {
@@ -456,6 +462,7 @@ func projectStatusError(number int, err error, detail string) error {
 type CommandRunner struct {
 	Binary, Agent, Model, ModelLevel, Repo string
 	Output                                 io.Writer
+	Yolo                                   bool
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
@@ -463,7 +470,11 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 	if r.Agent == "codex" {
 		// JSONL keeps Codex's progress events flowing when stdout is a pipe,
 		// which is how the dashboard captures agent output.
-		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json"}
+		args := []string{"exec"}
+		if r.Yolo {
+			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		}
+		args = append(args, "--json")
 		if r.Model != "" {
 			args = append(args, "--model", r.Model)
 		}
@@ -472,7 +483,10 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 		}
 		return append(args, prompt)
 	}
-	args := []string{"-p", "--dangerously-skip-permissions"}
+	args := []string{"-p"}
+	if r.Yolo {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)
 	}

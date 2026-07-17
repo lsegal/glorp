@@ -33,11 +33,11 @@ func TestVersionDefaultsToDevelopment(t *testing.T) {
 
 func TestParseTargetURLs(t *testing.T) {
 	for _, input := range []string{
-		"https://github.com/lsegal/gh-watch",
-		"https://github.com/lsegal/gh-watch/",
+		"https://github.com/lsegal/glorp",
+		"https://github.com/lsegal/glorp/",
 	} {
 		got, err := parseTarget(input)
-		if err != nil || got.repo != "lsegal/gh-watch" || got.isProject {
+		if err != nil || got.repo != "lsegal/glorp" || got.isProject {
 			t.Fatalf("parseTarget(%q) = %#v, %v", input, got, err)
 		}
 	}
@@ -48,15 +48,15 @@ func TestParseTargetURLs(t *testing.T) {
 }
 
 func TestIssueRepositoryUsesProjectItemRepository(t *testing.T) {
-	issue := Issue{Number: 32, Repository: "lsegal/gh-watch"}
-	if got := issueRepository("https://github.com/users/lsegal/projects/3", issue); got != "lsegal/gh-watch" {
+	issue := Issue{Number: 32, Repository: "lsegal/glorp"}
+	if got := issueRepository("https://github.com/users/lsegal/projects/3", issue); got != "lsegal/glorp" {
 		t.Fatalf("issue repository = %q", got)
 	}
 }
 
 func TestIssueRepositoryNormalizesRepositoryURL(t *testing.T) {
 	issue := Issue{Number: 32}
-	if got := issueRepository("https://github.com/lsegal/gh-watch", issue); got != "lsegal/gh-watch" {
+	if got := issueRepository("https://github.com/lsegal/glorp", issue); got != "lsegal/glorp" {
 		t.Fatalf("issue repository = %q", got)
 	}
 }
@@ -173,5 +173,14 @@ func TestIsTerminalUsesTTYDetection(t *testing.T) {
 	want := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 	if got := isTerminal(os.Stdout); got != want {
 		t.Fatalf("isTerminal = %v, want %v", got, want)
+	}
+}
+
+func TestShouldUseUIDisablesTerminalDetection(t *testing.T) {
+	if shouldUseUI(true, os.Stdout) {
+		t.Fatal("shouldUseUI enabled the UI when disabled")
+	}
+	if got, want := shouldUseUI(false, os.Stdout), isTerminal(os.Stdout); got != want {
+		t.Fatalf("shouldUseUI = %v, want %v", got, want)
 	}
 }

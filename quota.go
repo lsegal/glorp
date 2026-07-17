@@ -90,7 +90,7 @@ func readCodexQuota(ctx context.Context, binary string) (string, error) {
 
 func codexQuotaRequests() []string {
 	return []string{
-		`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"gh-watch","title":"gh-watch","version":"dev"}}}`,
+		`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"glorp","title":"glorp","version":"dev"}}}`,
 		`{"method":"initialized","params":{}}`,
 		`{"id":2,"method":"account/rateLimits/read"}`,
 	}
@@ -108,7 +108,7 @@ func formatCodexQuota(primary *codexPrimaryRateLimit) string {
 	return fmt.Sprintf("%s %d%% left", window, remaining)
 }
 
-func quotaText(snapshot WatchSnapshot) string {
+func quotaText(snapshot GlorpSnapshot) string {
 	if strings.TrimSpace(snapshot.Quota) != "" {
 		return "quota: " + snapshot.Quota
 	}

@@ -15,7 +15,7 @@ func TestDashboardShowsStatusAndTargets(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = updated.(dashboard)
-	updated, _ = m.Update(snapshotMsg(WatchSnapshot{
+	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{
 		Targets: []string{"o/one"}, IssueCounts: map[string]int{"o/one": 4},
 		Concurrency: 3, Running: 1, Queued: 1, Completed: 2, UseWebhooks: true,
 		WebhookURL: "https://robot.example/webhook", WebhookOnline: true,
@@ -33,7 +33,7 @@ func TestDashboardShowsStatusAndTargets(t *testing.T) {
 func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{{Number: 7, Title: "UI", Status: "active", Log: "line 1\nline 2\nline 3\nline 4\nline 5"}}}))
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{Number: 7, Title: "UI", Status: "active", Log: "line 1\nline 2\nline 3\nline 4\nline 5"}}}))
 	m = updated.(dashboard)
 	if _, ok := m.jobs[7]; !ok {
 		t.Fatal("agent viewport was not created")
@@ -54,7 +54,7 @@ func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
 		{Number: 7, Title: "UI", Status: "active", Log: "working on it"},
 	}}))
 	view := updated.(dashboard).View()
@@ -70,7 +70,7 @@ func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
 func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
 		{Number: 7, Title: "UI", Status: "complete", Log: "finished"},
 	}}))
 	view := updated.(dashboard).View()
@@ -91,7 +91,7 @@ func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
 func TestDashboardTruncatesAgentTitleToCardWidth(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Jobs: []JobSnapshot{{
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
 		Number: 7, Title: "This is a deliberately long agent issue title", Status: "active",
 	}}}))
 	view := updated.(dashboard).View()
@@ -161,7 +161,7 @@ func TestDashboardKeepsLogsInDedicatedPanel(t *testing.T) {
 func TestDashboardShowsQuota(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Quota: "weekly 87% left"}))
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Quota: "weekly 87% left"}))
 	if !strings.Contains(updated.(dashboard).View(), "quota: weekly 87% left") {
 		t.Fatal("dashboard did not show quota")
 	}
@@ -199,7 +199,7 @@ func TestDashboardTrimsOldestJobs(t *testing.T) {
 	for i := range jobs {
 		jobs[i] = JobSnapshot{Number: i + 1, Title: "job", Status: "complete", Started: time.Unix(int64(i), 0)}
 	}
-	updated, _ = m.Update(snapshotMsg(WatchSnapshot{Concurrency: 3, Jobs: jobs}))
+	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{Concurrency: 3, Jobs: jobs}))
 	view := updated.(dashboard).View()
 	if strings.Contains(view, "#1 ") || strings.Contains(view, "#4 ") || !strings.Contains(view, "#10 ") {
 		t.Fatalf("dashboard did not keep newest six jobs: %s", view)
@@ -227,7 +227,7 @@ func TestDashboardAddsGuttersBetweenSections(t *testing.T) {
 func TestStatusBarCountsAreOneSelfContainedCell(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(WatchSnapshot{Concurrency: 3, Running: 1, Queued: 1, Completed: 2}))
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Concurrency: 3, Running: 1, Queued: 1, Completed: 2}))
 	view := updated.(dashboard).View()
 	if !strings.Contains(view, "jobs: 1 idle 2 active 4 total") {
 		t.Fatalf("dashboard status counts were not rendered as one cell: %s", view)
@@ -259,7 +259,7 @@ func TestJobCountCellBackgroundCoversEveryCharacter(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
 
-	cell := renderStatusBar([]string{renderJobCounts(WatchSnapshot{
+	cell := renderStatusBar([]string{renderJobCounts(GlorpSnapshot{
 		Concurrency: 3,
 		Running:     1,
 		Completed:   2,

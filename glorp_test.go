@@ -50,10 +50,10 @@ func (fakeOutputRunner) RunWithOutput(_ context.Context, _ Issue, output io.Writ
 
 type snapshotReporter struct {
 	mu        sync.Mutex
-	snapshots []WatchSnapshot
+	snapshots []GlorpSnapshot
 }
 
-func (r *snapshotReporter) Snapshot(snapshot WatchSnapshot) {
+func (r *snapshotReporter) Snapshot(snapshot GlorpSnapshot) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.snapshots = append(r.snapshots, snapshot)
@@ -120,13 +120,13 @@ func TestParseIssues(t *testing.T) {
 		t.Fatalf("%v %#v", err, got)
 	}
 }
-func TestWatcherRunsUnseenIssuesWithLimit(t *testing.T) {
+func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 1}, {Number: 2}}, {{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4}}}}
 	r := &fakeRunner{release: make(chan struct{})}
 	var logs bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Watcher{Repo: "o/r", Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: &logs}
+	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: &logs}
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 	time.Sleep(20 * time.Millisecond)
@@ -159,9 +159,9 @@ func TestWatcherRunsUnseenIssuesWithLimit(t *testing.T) {
 	}
 }
 
-func TestWatcherShowsAgentOutputInJobSnapshot(t *testing.T) {
+func TestGlorpShowsAgentOutputInJobSnapshot(t *testing.T) {
 	reporter := &snapshotReporter{}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
 		Issues: &fakeSource{batches: [][]Issue{{{Number: 1, Title: "bug"}}}},
 		Runner: fakeOutputRunner{}, UI: reporter,
@@ -187,12 +187,12 @@ func TestWatcherShowsAgentOutputInJobSnapshot(t *testing.T) {
 	}
 	t.Fatalf("agent output was not included in snapshots: %+v", reporter.snapshots)
 }
-func TestWatcherTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
+func TestGlorpTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().Add(-time.Hour)
 	src := &fakeSource{batches: [][]Issue{{{Number: 1, CreatedAt: old}}}}
 	r := &fakeRunner{release: make(chan struct{})}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
 		StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r,
 	}
@@ -216,10 +216,10 @@ func TestWatcherTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	}
 }
 
-func TestWatcherUpdatesProjectStatus(t *testing.T) {
+func TestGlorpUpdatesProjectStatus(t *testing.T) {
 	r := &fakeRunner{release: make(chan struct{})}
 	status := &fakeIssueStatuser{}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
 		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Status: status,
 	}
@@ -241,11 +241,11 @@ func TestWatcherUpdatesProjectStatus(t *testing.T) {
 	}
 }
 
-func TestWatcherDoesNotLabelProjectIssues(t *testing.T) {
+func TestGlorpDoesNotLabelProjectIssues(t *testing.T) {
 	r := &fakeRunner{release: make(chan struct{})}
 	labels := &fakeIssueLabeler{}
 	status := &fakeIssueStatuser{}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
 		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Labels: labels, Status: status,
 	}
@@ -270,17 +270,17 @@ func TestWatcherDoesNotLabelProjectIssues(t *testing.T) {
 	}
 }
 func TestInvalidRepo(t *testing.T) {
-	w := &Watcher{Repo: "bad", Interval: time.Second, Concurrency: 1}
+	w := &Glorp{Repo: "bad", Interval: time.Second, Concurrency: 1}
 	if w.Run(context.Background()) == nil {
 		t.Fatal("expected error")
 	}
 }
 
-func TestWatcherEnsuresLabelsOnStart(t *testing.T) {
+func TestGlorpEnsuresLabelsOnStart(t *testing.T) {
 	labels := &fakeLabelEnsurer{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	w := &Watcher{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels, Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})}}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels, Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})}}
 	if err := w.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -289,15 +289,15 @@ func TestWatcherEnsuresLabelsOnStart(t *testing.T) {
 	}
 }
 
-func TestWatcherStopsWhenLabelEnsuringFails(t *testing.T) {
+func TestGlorpStopsWhenLabelEnsuringFails(t *testing.T) {
 	labels := &fakeLabelEnsurer{err: context.Canceled}
-	w := &Watcher{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels}
 	if err := w.Run(context.Background()); err != context.Canceled {
 		t.Fatalf("expected label error, got %v", err)
 	}
 }
 
-func TestWatcherResetsFailedWorkOnStart(t *testing.T) {
+func TestGlorpResetsFailedWorkOnStart(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	if err := saveWorkState(statePath, map[int]workState{7: {Status: "failed"}, 8: {Status: "completed"}}); err != nil {
@@ -305,7 +305,7 @@ func TestWatcherResetsFailedWorkOnStart(t *testing.T) {
 	}
 	labels := &fakeIssueLabeler{}
 	status := &fakeIssueStatuser{}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})},
 		Labels: labels, Status: status,
@@ -325,7 +325,7 @@ func TestWatcherResetsFailedWorkOnStart(t *testing.T) {
 	}
 }
 
-func TestWatcherResetsFailedProjectWorkOnStart(t *testing.T) {
+func TestGlorpResetsFailedProjectWorkOnStart(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	if err := saveWorkState(statePath, map[int]workState{7: {Status: "failed"}}); err != nil {
@@ -333,7 +333,7 @@ func TestWatcherResetsFailedProjectWorkOnStart(t *testing.T) {
 	}
 	labels := &fakeIssueLabeler{}
 	status := &fakeIssueStatuser{}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})},
 		Labels: labels, Status: status,
@@ -353,40 +353,50 @@ func TestWatcherResetsFailedProjectWorkOnStart(t *testing.T) {
 	}
 }
 
-func TestWatcherIgnoresMissingProjectIssueWhenResettingFailedWork(t *testing.T) {
+func TestGlorpIgnoresMissingProjectIssueWhenResettingFailedWork(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	if err := saveWorkState(statePath, map[int]workState{7: {Status: "failed"}}); err != nil {
 		t.Fatal(err)
 	}
 	status := &fakeIssueStatuser{err: errProjectIssueNotFound}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})}, Status: status,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := w.Run(ctx); err != nil {
-		t.Fatalf("missing project issue should not stop watcher: %v", err)
+		t.Fatalf("missing project issue should not stop glorp: %v", err)
 	}
 }
 
 func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}); len(got) != 4 || got[0] != "exec" || got[1] != "--dangerously-bypass-approvals-and-sandbox" || got[2] != "--json" || got[3] != prompt {
+	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", "--json", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args: %#v", got)
 	}
-	if got := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}); len(got) != 3 || got[0] != "-p" || got[1] != "--dangerously-skip-permissions" || got[2] != prompt {
+	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args: %#v", got)
+	}
+}
+
+func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
+	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", prompt}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex yolo args = %#v, want %#v", got, want)
+	}
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", prompt}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("claude yolo args = %#v, want %#v", got, want)
 	}
 }
 
 func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--json", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--model", "claude-sonnet", "--effort", "medium", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--model", "claude-sonnet", "--effort", "medium", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
 	}
 }
@@ -442,7 +452,7 @@ func TestScopedWorkStateKeepsTargetsSeparate(t *testing.T) {
 	}
 }
 
-func TestWatcherKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
+func TestGlorpKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{
 		{},                         // initial baseline
@@ -452,7 +462,7 @@ func TestWatcherKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 	}}
 	r := &fakeRunner{release: make(chan struct{})}
 	events := make(chan WebhookEvent, 2)
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "o/r", Interval: 40 * time.Millisecond, Concurrency: 2,
 		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
 		UseWebhooks: true, Events: events,
@@ -498,7 +508,7 @@ func TestWatcherKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 	t.Fatal("webhook follow-up did not dispatch the latest issue")
 }
 
-func TestWatcherReloadsChangedStateAfterDebounce(t *testing.T) {
+func TestGlorpReloadsChangedStateAfterDebounce(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	if err := saveWorkState(statePath, map[int]workState{1: {Status: "completed"}}); err != nil {
@@ -506,7 +516,7 @@ func TestWatcherReloadsChangedStateAfterDebounce(t *testing.T) {
 	}
 	src := &fakeSource{batches: [][]Issue{{{Number: 1}}, {{Number: 1}, {Number: 2}}}}
 	r := &fakeRunner{release: make(chan struct{})}
-	w := &Watcher{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath, Issues: src, Runner: r}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath, Issues: src, Runner: r}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -564,12 +574,12 @@ func TestIssueKeyUsesTargetAndNumber(t *testing.T) {
 	}
 }
 
-func TestWatcherPersistsSessionIDAfterCompletion(t *testing.T) {
+func TestGlorpPersistsSessionIDAfterCompletion(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
 	r := &fakeRunner{release: make(chan struct{})}
-	w := &Watcher{
+	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
 		StatePath: statePath, Issues: src, Runner: r,
 	}

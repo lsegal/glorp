@@ -44,13 +44,13 @@ jobs:
           version="${TAG#v}"
           for target in "linux amd64 tar.gz" "linux arm64 tar.gz" "darwin amd64 tar.gz" "darwin arm64 tar.gz" "windows amd64 zip" "windows arm64 zip"; do
             read -r goos goarch extension <<< "$target"
-            name="gh-watch_${version}_${goos}_${goarch}"
-            GOOS="$goos" GOARCH="$goarch" go build -ldflags "-X main.version=$version" -o "dist/$name/gh-watch" .
+            name="glorp_${version}_${goos}_${goarch}"
+            GOOS="$goos" GOARCH="$goarch" go build -ldflags "-X main.version=$version" -o "dist/$name/glorp" .
             if [[ "$goos" == "windows" ]]; then
-              mv "dist/$name/gh-watch" "dist/$name/gh-watch.exe"
-              (cd "dist/$name" && zip -q -r "../${name}.${extension}" gh-watch.exe)
+              mv "dist/$name/glorp" "dist/$name/glorp.exe"
+              (cd "dist/$name" && zip -q -r "../${name}.${extension}" glorp.exe)
             else
-              tar -czf "dist/${name}.${extension}" -C "dist/$name" gh-watch
+              tar -czf "dist/${name}.${extension}" -C "dist/$name" glorp
             fi
           done
           cp install.sh dist/install.sh

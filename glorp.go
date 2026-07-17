@@ -71,10 +71,10 @@ type AgentOutputRunner interface {
 	RunWithOutput(context.Context, Issue, io.Writer) error
 }
 type UIReporter interface {
-	Snapshot(WatchSnapshot)
+	Snapshot(GlorpSnapshot)
 	Log(string)
 }
-type Watcher struct {
+type Glorp struct {
 	Repo        string
 	Targets     []string
 	Interval    time.Duration
@@ -132,7 +132,7 @@ func (s *taskState) snapshot() (running, queued, completed, failed int) {
 	return s.running, s.queued, s.completed, s.failed
 }
 
-func (w *Watcher) logf(format string, args ...interface{}) {
+func (w *Glorp) logf(format string, args ...interface{}) {
 	w.logMu.Lock()
 	defer w.logMu.Unlock()
 	line := fmt.Sprintf("%s "+format, append([]interface{}{time.Now().Format("2006-01-02 15:04:05")}, args...)...)
@@ -142,7 +142,7 @@ func (w *Watcher) logf(format string, args ...interface{}) {
 	}
 }
 
-func (w *Watcher) Run(ctx context.Context) error {
+func (w *Glorp) Run(ctx context.Context) error {
 	targets := append([]string(nil), w.Targets...)
 	if len(targets) == 0 && w.Repo != "" {
 		targets = []string{w.Repo}
@@ -219,7 +219,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		if w.Quota != nil {
 			quota = w.Quota(ctx)
 		}
-		w.UI.Snapshot(WatchSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quota: quota, Jobs: list})
+		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quota: quota, Jobs: list})
 	}
 	pollNumber := 0
 	poll := func() error {
@@ -550,7 +550,7 @@ func stateFileFingerprint(path string) string {
 	return string(b)
 }
 
-func (w *Watcher) logWebhookEvent(event WebhookEvent) {
+func (w *Glorp) logWebhookEvent(event WebhookEvent) {
 	switch event.Kind {
 	case "push":
 		w.logf("webhook push received (repository: %s, ref: %s, before: %s, after: %s, commits: %d)", event.Repository, event.Ref, event.Before, event.After, event.CommitCount)
@@ -561,7 +561,7 @@ func (w *Watcher) logWebhookEvent(event WebhookEvent) {
 	}
 }
 
-func (w *Watcher) resetFailedWork(ctx context.Context, work map[string]workState, labeler IssueLabeler) error {
+func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState, labeler IssueLabeler) error {
 	for key, state := range work {
 		if state.Status != "failed" {
 			continue
