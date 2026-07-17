@@ -2,42 +2,17 @@
 
 ## Unreleased
 
-- Stream Codex JSONL progress events so agent output appears reliably in the dashboard.
-- Render completed-job checkmarks on the issue title line in green.
--Always remove isolated clone directories when the issue-fix workflow exits.
-- Reliably enable the agent output dashboard on supported terminal sessions.
-- Show agent progress in dashboard cards and replace it with a checkmark when complete.
-- Colorize the dashboard's idle, active, and total job counts.
-- Preserve the dashboard status-bar background across colored job counts and their labels.
-- Reload and resynchronize when `.gh-watch.json` changes.
-- Default issue watching to open issues assigned to the current user.
-- Use the current user's authored issues as the default issue filter.
-- Make the watcher concurrency-limit test wait for dispatches instead of relying on timing.
-- Use the project item discovered during polling when updating its board status.
-- Avoid piping stdin to launched agents so Codex does not report additional input.
-- Keep watching when a failed project issue has been removed from the board.
-- Use the available dashboard card width for agent issue titles.
-- Fix dashboard status backgrounds, agent title backgrounds, and spacing between panels.
-- Use dark, borderless dashboard viewports with distinct status-line backgrounds.
-- Drop support for the legacy `label=` issue filter syntax.
-- Support repeated `--filter` arguments and GitHub issue search syntax.
-- Prevent launched agents from waiting for additional input on stdin.
-- Increase the default agent output viewport height so more than one line is visible at a time.
-- Use scrollable Bubble Tea viewports for agent output and logs, with clearer light-gray dashboard windows and status indicators.
-- Limit the dashboard agent grid to six two-column cards and keep agent output in its card instead of the Logs panel.
-- Ask launched agents to summarize changes without printing code diffs or large code blocks.
-- Show agent output in its dashboard job card.
-- Do not retain agent output outside the interactive dashboard.
-- Show the Codex weekly quota remaining in the dashboard status bar.
-- Fix the Codex quota status showing as unavailable.
-- Keep the Codex app-server stream open until the quota response is received.
-- Improve the terminal dashboard with titled panels, a dedicated scrolling log area, and clearer status boundaries.
-- Log webhook delivery details and retry webhook-triggered issue refreshes after GitHub indexing catches up.
-- Preserve pending webhook follow-up refreshes so newly created issues are not skipped when deliveries arrive close together.
 - Watch multiple repository or project targets in one process.
-- Support GitHub webhooks as the default issue refresh mechanism, with polling available through `--poll`.
-- Manage an ngrok tunnel and synchronize GitHub webhooks for watched repositories.
-- Show an interactive Bubble Tea dashboard with job cards, status counts, targets, and push or polling state when attached to a terminal.
+- Use synchronized GitHub webhooks over a managed ngrok tunnel by default, with polling available through `--poll`.
+- Show an interactive terminal dashboard with job cards, status counts, targets, scrolling logs, and push or polling state.
+- Stream Codex progress into dashboard job cards, show completed jobs with a green checkmark, and display the weekly quota remaining.
+- Reload and resynchronize when `.gh-watch.json` changes.
+- Default issue watching to open issues authored by the current user.
+- Support repeated `--filter` arguments using GitHub issue search syntax and drop the legacy `label=` syntax.
+- Prevent launched agents from waiting for or reporting additional stdin input.
+- Ask launched agents to summarize changes without printing code diffs or large code blocks.
+- Reliably update project-board status and keep watching when a failed issue has been removed from the board.
+- Always remove isolated clone directories when the issue-fix workflow exits.
 
 ## v1.0.0 - 2026-07-15
 
