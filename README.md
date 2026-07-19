@@ -4,7 +4,7 @@
 
 # glorp
 
-**Git Loop fOr Robot Patchers** &emdash; a near automated loop for building. Open issues on GitHub, let the 🤖s handle the rest.
+**Git Loop fOr Robot Patchers** — a near automated loop for building. Open issues on GitHub, let the 🤖s handle the rest.
 
 glorp runs a daemon that watches (push or poll) GitHub repositories or project boards for issues and spins up a Claude or Codex agent for each detected issue with a configurable concurrency, tracking the issue to completion.
 
