@@ -19,6 +19,7 @@ const (
 	stateFilePollInterval = 100 * time.Millisecond
 	stateReloadDebounce   = 5 * time.Second
 	pushFallbackInterval  = 90 * time.Second
+	webhookRetryLimit     = 3
 	workClosureInterval   = 10 * time.Second
 )
 
@@ -645,6 +646,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 	var tick <-chan time.Time
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
+	retriesRemaining := 0
 	var stateReloadTimer *time.Timer
 	var stateReload <-chan time.Time
 	defer func() {
@@ -692,6 +694,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if retryTimer == nil {
 				retryTimer = time.NewTimer(w.Interval)
 				retry = retryTimer.C
+				retriesRemaining = webhookRetryLimit
 			}
 		case <-retry:
 			retryTimer = nil
@@ -699,7 +702,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if err := poll(); err != nil && ctx.Err() == nil {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
 			}
-			retry = nil
+			retriesRemaining--
+			if retriesRemaining > 0 {
+				retryTimer = time.NewTimer(w.Interval)
+				retry = retryTimer.C
+			} else {
+				retry = nil
+			}
 		case <-stateChanges:
 			if stateReloadTimer == nil {
 				stateReloadTimer = time.NewTimer(stateReloadDebounce)

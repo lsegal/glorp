@@ -200,6 +200,65 @@ func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 	}
 }
 
+func TestGlorpRetriesWebhookRefreshUntilIssueIsIndexed(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{
+		{},            // initial poll
+		{},            // webhook-triggered poll
+		{},            // first retry
+		{},            // second retry
+		{{Number: 7}}, // delayed GitHub issue index
+	}}
+	runner := &fakeRunner{release: make(chan struct{})}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events <- WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 7}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		runner.mu.Lock()
+		got := append([]int(nil), runner.got...)
+		runner.mu.Unlock()
+		if len(got) > 0 {
+			if got[0] != 7 {
+				t.Fatalf("runner received issue #%d, want #7", got[0])
+			}
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	runner.mu.Lock()
+	dispatched := len(runner.got) > 0
+	runner.mu.Unlock()
+	if !dispatched {
+		t.Fatal("webhook retries did not dispatch the delayed issue")
+	}
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
