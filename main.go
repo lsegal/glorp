@@ -119,6 +119,12 @@ func main() {
 			os.Exit(1)
 		}
 		webServer = &http.Server{Handler: webUI}
+		stopFrontend, err := startWebUIFrontend(ctx, output)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "start web UI frontend: %v\n", err)
+			os.Exit(1)
+		}
+		defer stopFrontend()
 		go func() {
 			if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)

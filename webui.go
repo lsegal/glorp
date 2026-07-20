@@ -1,10 +1,8 @@
 package main
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,15 +12,12 @@ import (
 
 const defaultWebUIPort = 8765
 
-//go:embed web/dist/*
-var webUIAssets embed.FS
-
 type webUIState struct {
 	Snapshot GlorpSnapshot `json:"snapshot"`
 	Logs     []string      `json:"logs"`
 }
 
-// WebUI keeps the browser dashboard's state and serves the embedded React SPA.
+// WebUI keeps the browser dashboard's state and serves its frontend.
 type WebUI struct {
 	mu       sync.RWMutex
 	snapshot GlorpSnapshot
@@ -31,11 +26,7 @@ type WebUI struct {
 }
 
 func NewWebUI() (*WebUI, error) {
-	dist, err := fs.Sub(webUIAssets, "web/dist")
-	if err != nil {
-		return nil, fmt.Errorf("load web UI assets: %w", err)
-	}
-	return &WebUI{assets: http.FileServer(http.FS(dist))}, nil
+	return &WebUI{assets: newWebUIAssets()}, nil
 }
 
 func (ui *WebUI) Snapshot(snapshot GlorpSnapshot) {
@@ -61,11 +52,6 @@ func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
-	}
-	if r.URL.Path != "/" {
-		if _, err := fs.Stat(webUIAssets, "web/dist"+r.URL.Path); err != nil {
-			r.URL.Path = "/"
-		}
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	ui.assets.ServeHTTP(w, r)

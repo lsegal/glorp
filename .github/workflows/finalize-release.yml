@@ -18,6 +18,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
       - run: go test ./...
       - run: go vet ./...
       - name: Select release tag
@@ -45,7 +54,7 @@ jobs:
           for target in "linux amd64 tar.gz" "linux arm64 tar.gz" "darwin amd64 tar.gz" "darwin arm64 tar.gz" "windows amd64 zip" "windows arm64 zip"; do
             read -r goos goarch extension <<< "$target"
             name="glorp_${version}_${goos}_${goarch}"
-            GOOS="$goos" GOARCH="$goarch" go build -ldflags "-X main.version=$version" -o "dist/$name/glorp" .
+            GOOS="$goos" GOARCH="$goarch" go build -tags production -ldflags "-X main.version=$version" -o "dist/$name/glorp" .
             if [[ "$goos" == "windows" ]]; then
               mv "dist/$name/glorp" "dist/$name/glorp.exe"
               (cd "dist/$name" && zip -q -r "../${name}.${extension}" glorp.exe)

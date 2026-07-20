@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -60,18 +59,15 @@ func TestWebUIStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
 	}
 }
 
-func TestWebUIServesReactAppAndSPAFallback(t *testing.T) {
+func TestWebUIRejectsUnsupportedMethods(t *testing.T) {
 	ui, err := NewWebUI()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/", "/dashboard"} {
-		response := httptest.NewRecorder()
-		ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-		body, _ := io.ReadAll(response.Result().Body)
-		if response.Code != http.StatusOK || !strings.Contains(string(body), "<div id=\"root\"></div>") {
-			t.Fatalf("GET %s = %d, %q", path, response.Code, body)
-		}
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", nil))
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST / = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 	}
 }
 
