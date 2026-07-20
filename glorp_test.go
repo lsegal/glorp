@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -470,6 +471,28 @@ func TestGlorpIgnoresMissingProjectIssueWhenResettingFailedWork(t *testing.T) {
 	cancel()
 	if err := w.Run(ctx); err != nil {
 		t.Fatalf("missing project issue should not stop glorp: %v", err)
+	}
+}
+
+func TestGlorpKeepsWatchingWhenProjectResetFails(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := saveWorkState(statePath, map[int]workState{7: {Status: "failed"}}); err != nil {
+		t.Fatal(err)
+	}
+	status := &fakeIssueStatuser{err: errors.New("list project items: exit status 1")}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})}, Status: status, Out: &logs,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("project reset failure should not stop glorp: %v", err)
+	}
+	if !strings.Contains(logs.String(), "reset failed issue #7 project status: list project items: exit status 1") {
+		t.Fatalf("project reset failure was not logged:\n%s", logs.String())
 	}
 }
 
