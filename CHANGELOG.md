@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Keep polling project boards after their initial issue scan, including when repository webhooks are enabled.
+- Keep polling repositories and project boards after their initial issue scan, including when webhooks are enabled, so inconsistent issue state can be resynchronized.
 - Support push-mode refreshes for organization-owned GitHub Project boards.
 - Allow project boards to configure their ready status, defaulting to case-insensitive `Todo` and `Ready` matching.
 - Use an available random webhook port by default and report the actual address passed to ngrok.

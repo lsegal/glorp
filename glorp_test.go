@@ -189,6 +189,46 @@ func TestGlorpKeepsPollingProjectTargetsInWebhookMode(t *testing.T) {
 	t.Fatal("project target did not receive a second poll")
 }
 
+func TestGlorpPeriodicPollResyncsRepositoryIssueInWebhookMode(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := saveWorkState(statePath, map[int]workState{7: {Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{batches: [][]Issue{
+		{{Number: 7}},
+		{{Number: 7, Labels: []IssueLabel{{Name: agentStartedLabel}}}},
+	}}
+	r := &fakeRunner{release: make(chan struct{})}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: r, UseWebhooks: true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		got := append([]int(nil), r.got...)
+		r.mu.Unlock()
+		if reflect.DeepEqual(got, []int{7}) {
+			close(r.release)
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("periodic poll did not reclaim repository issue with agent-started label")
+}
+
 func TestGlorpShowsAgentOutputInJobSnapshot(t *testing.T) {
 	reporter := &snapshotReporter{}
 	w := &Glorp{

@@ -439,6 +439,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 			stateReloadTimer.Stop()
 		}
 	}()
+	// Keep periodic reconciliation active in webhook mode so issue state that
+	// changes without a delivery can still be recovered.
 	ticker = time.NewTicker(w.Interval)
 	defer ticker.Stop()
 	tick = ticker.C
