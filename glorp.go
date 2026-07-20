@@ -18,6 +18,7 @@ import (
 const (
 	stateFilePollInterval = 100 * time.Millisecond
 	stateReloadDebounce   = 5 * time.Second
+	pushFallbackInterval  = 90 * time.Second
 )
 
 type Issue struct {
@@ -101,11 +102,23 @@ type Glorp struct {
 	Issues      IssueSource
 	Runner      AgentRunner
 	Out         io.Writer
-	Labels      LabelEnsurer
-	Status      IssueStatuser
-	UI          UIReporter
-	Quota       func(context.Context) string
-	logMu       sync.Mutex
+	// fallbackInterval overrides the push-mode polling fallback in tests.
+	fallbackInterval time.Duration
+	Labels           LabelEnsurer
+	Status           IssueStatuser
+	UI               UIReporter
+	Quota            func(context.Context) string
+	logMu            sync.Mutex
+}
+
+func (w *Glorp) periodicPollInterval() time.Duration {
+	if w.UseWebhooks {
+		if w.fallbackInterval > 0 {
+			return w.fallbackInterval
+		}
+		return pushFallbackInterval
+	}
+	return w.Interval
 }
 
 const agentStartedLabel = "agent-started"
@@ -530,7 +543,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 	}()
 	// Keep periodic reconciliation active in webhook mode so issue state that
 	// changes without a delivery can still be recovered.
-	ticker = time.NewTicker(w.Interval)
+	periodicInterval := w.periodicPollInterval()
+	ticker = time.NewTicker(periodicInterval)
 	defer ticker.Stop()
 	tick = ticker.C
 	for {
@@ -549,7 +563,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("stopped")
 					return nil
 				}
-				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, w.Interval)
+				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, periodicInterval)
 			}
 		case event := <-w.Events:
 			w.logWebhookEvent(event)

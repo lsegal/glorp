@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Poll every 90 seconds as a fallback in push mode to reduce GitHub CLI load.
+
 ## v1.0.3 - 2026-07-20
 
 - Show each agent's actual isolated clone directory in the dashboard and persist it for resumed sessions.
