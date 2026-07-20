@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Keep watching when a failed project item's status cannot be reset.
+- Require issue-fixing agents to provide screenshots or recordings for completed UI changes.
 
 ## v1.0.2 - 2026-07-20
 
