@@ -274,9 +274,6 @@ func (m dashboard) viewportRegions() []viewportRegion {
 	regions := make([]viewportRegion, 0, len(m.snapshot.Jobs)+1)
 	cardRenderWidth := lipgloss.Width(panel.Copy().Padding(0, 1).Width(jobCardWidth(m.width)).Height(jobCardHeight).Render(""))
 	for i, job := range m.snapshot.Jobs {
-		if job.Status == "complete" {
-			continue
-		}
 		view, ok := m.jobs[job.Number]
 		if !ok {
 			continue
@@ -312,16 +309,12 @@ func (m dashboard) View() string {
 			jobViewport.SetContent("waiting for output...")
 		}
 		progress := renderViewport(jobViewport)
-		if status == "complete" {
-			progress = done.Render("✅")
-		}
 		indicator := " "
 		if status == "active" {
 			indicator = m.spinner.View()
 		}
 		if status == "complete" {
 			indicator = done.Render("✓")
-			progress = ""
 		}
 		cardWidth := jobCardWidth(m.width)
 		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
