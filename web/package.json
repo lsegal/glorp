@@ -2,6 +2,7 @@
 	"name": "glorp-web-ui",
 	"private": true,
 	"version": "0.0.0",
+	"packageManager": "pnpm@10.34.4",
 	"type": "module",
 	"scripts": {
 		"build": "vite build",
