@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.0.3 - 2026-07-20
+
 - Show each agent's actual isolated clone directory in the dashboard and persist it for resumed sessions.
 - Resume interrupted Codex and Claude sessions with their original agent and working directory.
 - Keep each dashboard viewport pinned to new output only while it is at the bottom, with per-pane mouse scrolling, draggable scrollbars, and a clickable more indicator.
