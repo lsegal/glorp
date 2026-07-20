@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a localhost React browser dashboard that mirrors terminal job viewports, logs, scrolling, and status, with configurable port selection and an option to disable it.
 - Create individual follow-up issues for unresolved TODOs and known issues after merging an issue-fix pull request, preserving origin links and project membership.
 - Preserve completed agents' viewport scrollback and scroll position in the dashboard.
 - Open issue-fix pull requests as linked drafts immediately, push development checkpoints every five minutes, and mark them ready when implementation is complete.

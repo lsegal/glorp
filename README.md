@@ -91,6 +91,13 @@ Run without ngrok or managed webhooks by polling every 30 seconds:
 glorp --poll --interval 30s owner/repo
 ```
 
+The browser dashboard is available at `http://localhost:8765` by default. If that port is occupied, glorp uses the next available port and logs the selected URL. Choose a different starting port or disable the browser dashboard entirely:
+
+```sh
+glorp --web-ui-port 9000 owner/repo
+glorp --no-web-ui owner/repo
+```
+
 Disable the interactive dashboard and print normal timestamped logs even when stdout is a terminal:
 
 ```sh
@@ -133,7 +140,7 @@ Organization-owned Projects use GitHub's `projects_v2_item` organization webhook
 
 Handled issues and active sessions are stored in `.glorp.json` by default. This prevents duplicate work after a restart and allows glorp to resume interrupted Codex or Claude sessions with the original agent, even when the new process selects a different `--agent`. If the original working directory is gone, the resumed agent is told to regenerate its missing work. Issues that declare dependencies using `depends on #123` or GitHub's issue-dependency relationship remain blocked until those dependencies close.
 
-When stdout is a terminal, glorp displays an interactive dashboard unless `--no-ui` is set. With `--no-ui` or non-terminal output, it writes timestamped progress to stdout, including issue counts, queued and active jobs, webhook events, retries, completions, failures, and shutdown progress.
+Glorp also serves a localhost-only browser dashboard that mirrors the terminal dashboard's agent cards, output viewports, scrolling behavior, daemon logs, job counts, quota, delivery mode, and target status. When stdout is a terminal, glorp displays the interactive terminal dashboard unless `--no-ui` is set. With `--no-ui` or non-terminal output, it writes timestamped progress to stdout, including issue counts, queued and active jobs, webhook events, retries, completions, failures, and shutdown progress. Use `--no-web-ui` separately to disable the browser dashboard.
 
 ## CLI reference
 
@@ -158,9 +165,11 @@ glorp [options] TARGET [TARGET ...]
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | URL of the ngrok local API used to discover the public tunnel. |
 | `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. |
 | `--no-ui` | `false` | Disable the interactive terminal dashboard and write normal logs to stdout. |
+| `--no-web-ui` | `false` | Disable the localhost browser dashboard and log that it is disabled. |
 | `--poll` | `false` | Use polling without starting ngrok or configuring GitHub webhooks. |
 | `--ready-state NAME` | auto (`Todo` or `Ready`) | Project status that marks an issue ready for an agent; matching is case-insensitive. |
 | `--state PATH` | `.glorp.json` | File used to persist handled issues and active session state. |
+| `--web-ui-port PORT` | `8765` | Starting localhost port for the browser dashboard; glorp uses the next available port if occupied. |
 | `--webhook-path PATH` | `/webhook` | HTTP path that accepts GitHub webhook deliveries. |
 | `--webhook-secret SECRET` | empty | Shared secret used to verify GitHub `X-Hub-Signature-256` signatures. The same secret is set when glorp creates each webhook. |
 | `--yolo` | `false` | Disable the selected agent's sandbox, approval, and permission checks. Codex receives `--dangerously-bypass-approvals-and-sandbox`; Claude receives `--dangerously-skip-permissions`. |

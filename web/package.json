@@ -1,0 +1,17 @@
+{
+  "name": "glorp-web-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+		"lucide-react": "1.25.0",
+		"react": "19.2.7",
+		"react-dom": "19.2.7",
+		"vite": "8.1.5"
+  },
+  "devDependencies": {}
+}

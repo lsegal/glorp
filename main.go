@@ -41,6 +41,8 @@ func main() {
 	ngrokBinary := flag.String("ngrok-binary", "ngrok", "ngrok executable")
 	ngrokAPI := flag.String("ngrok-api", "http://127.0.0.1:4040", "ngrok local API URL")
 	noUI := flag.Bool("no-ui", false, "disable the interactive terminal UI")
+	noWebUI := flag.Bool("no-web-ui", false, "disable the browser UI")
+	webUIPort := flag.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
 	yolo := flag.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
@@ -65,6 +67,10 @@ func main() {
 	}
 	if *interval <= 0 || *concurrency < 0 {
 		fmt.Fprintln(os.Stderr, "interval must be positive and concurrency cannot be negative")
+		os.Exit(2)
+	}
+	if !*noWebUI && (*webUIPort < 1 || *webUIPort > 65535) {
+		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
 		os.Exit(2)
 	}
 	if *agent != "codex" && *agent != "claude" {
@@ -96,6 +102,33 @@ func main() {
 		output = ui.Writer()
 		go func() { _ = ui.Run(ctx) }()
 	}
+	var webUI *WebUI
+	var webServer *http.Server
+	if *noWebUI {
+		fmt.Fprintln(output, "web UI disabled")
+	} else {
+		var err error
+		webUI, err = NewWebUI()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		listener, port, err := listenForWebUI(*webUIPort)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		webServer = &http.Server{Handler: webUI}
+		go func() {
+			if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
+			}
+		}()
+		defer webServer.Close()
+		webURL := fmt.Sprintf("http://localhost:%d", port)
+		fmt.Fprintf(output, "web UI listening on %s\n", webURL)
+		webUI.Log("web UI listening on " + webURL)
+	}
 	wOut := output
 	if ui != nil {
 		wOut = io.Discard
@@ -105,7 +138,7 @@ func main() {
 		quotaReader := &codexQuotaReader{Binary: binary}
 		quota = quotaReader.Read
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: terminalUIReporter(ui), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)

@@ -1,7 +1,8 @@
 .glorp.json
 glorp
 glorp.exe
-dist/
+/dist/
+web/node_modules/
 public/
 resources/
 .hugo_build.lock
