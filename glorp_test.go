@@ -187,11 +187,31 @@ func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 	}
 }
 
+func TestGlorpPeriodicPollInterval(t *testing.T) {
+	tests := []struct {
+		name        string
+		useWebhooks bool
+		want        time.Duration
+	}{
+		{name: "poll mode", want: 12 * time.Second},
+		{name: "push mode", useWebhooks: true, want: 90 * time.Second},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := &Glorp{Interval: 12 * time.Second, UseWebhooks: test.useWebhooks}
+			if got := w.periodicPollInterval(); got != test.want {
+				t.Fatalf("periodic poll interval = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
 func TestGlorpKeepsPollingProjectTargetsInWebhookMode(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{}}}
 	w := &Glorp{
 		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
 		Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, UseWebhooks: true,
+		fallbackInterval: time.Millisecond,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -231,6 +251,7 @@ func TestGlorpPeriodicPollResyncsRepositoryIssueInWebhookMode(t *testing.T) {
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: statePath,
 		Issues: src, Runner: r, UseWebhooks: true,
+		fallbackInterval: time.Millisecond,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
