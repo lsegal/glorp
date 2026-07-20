@@ -159,6 +159,36 @@ func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 	}
 }
 
+func TestGlorpKeepsPollingProjectTargetsInWebhookMode(t *testing.T) {
+	src := &fakeSource{batches: [][]Issue{{}}}
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
+		Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, UseWebhooks: true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 2 {
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("project target did not receive a second poll")
+}
+
 func TestGlorpShowsAgentOutputInJobSnapshot(t *testing.T) {
 	reporter := &snapshotReporter{}
 	w := &Glorp{

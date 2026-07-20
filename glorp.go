@@ -438,11 +438,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 			stateReloadTimer.Stop()
 		}
 	}()
-	if !w.UseWebhooks {
-		ticker = time.NewTicker(w.Interval)
-		defer ticker.Stop()
-		tick = ticker.C
-	}
+	ticker = time.NewTicker(w.Interval)
+	defer ticker.Stop()
+	tick = ticker.C
 	for {
 		select {
 		case <-ctx.Done():
