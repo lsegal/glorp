@@ -855,6 +855,10 @@ func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
 	if decodeErr != nil {
 		return nil, decodeErr
 	}
+	return issuesFromProjectItems(items), nil
+}
+
+func issuesFromProjectItems(items []projectItem) []Issue {
 	issues := make([]Issue, 0, len(items))
 	for _, item := range items {
 		if item.Content != nil && item.Content.Type == "Issue" {
@@ -864,7 +868,7 @@ func decodeProjectIssues(data []byte, err error) ([]Issue, error) {
 			issues = append(issues, issue)
 		}
 	}
-	return issues, nil
+	return issues
 }
 
 func isProjectTarget(repo string) bool {

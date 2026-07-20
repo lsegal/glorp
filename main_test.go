@@ -101,6 +101,42 @@ func TestProjectListArgsOmitsDefaultFilter(t *testing.T) {
 	}
 }
 
+func TestUserProjectListUsesURLOwnerType(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte(`{"data":{"user":{"projectV2":{"items":{"nodes":[{"id":"PVTI_item","fieldValueByName":{"name":"Todo"},"content":{"__typename":"Issue","number":171,"title":"bug","body":"details","state":"OPEN","createdAt":"2026-07-20T17:38:43Z","repository":{"nameWithOwner":"lsegal/glorp"},"labels":{"nodes":[{"name":"agent-started"}]}}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor"}}}}}}`), nil
+	}}
+	issues, err := gh.ListIssues(context.Background(), "https://github.com/users/lsegal/projects/3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || len(calls[0]) < 4 || calls[0][0] != "api" || calls[0][1] != "graphql" || !strings.Contains(calls[0][3], "user(login:$login)") {
+		t.Fatalf("gh calls = %#v, want typed user GraphQL query", calls)
+	}
+	if len(issues) != 1 || issues[0].Number != 171 || issues[0].Repository != "lsegal/glorp" || issues[0].ProjectStatus != "Todo" || issues[0].ProjectItemID != "PVTI_item" || len(issues[0].Labels) != 1 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestOrganizationProjectListUsesURLOwnerTypeAndPaginates(t *testing.T) {
+	responses := [][]byte{
+		[]byte(`{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}}`),
+		[]byte(`{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":"done"}}}}}}`),
+	}
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return responses[len(calls)-1], nil
+	}}
+	if _, err := gh.ListIssues(context.Background(), "https://github.com/orgs/example/projects/4"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || !strings.Contains(calls[0][3], "organization(login:$login)") || !slices.Contains(calls[1], "after=next") {
+		t.Fatalf("gh calls = %#v, want paginated organization GraphQL queries", calls)
+	}
+}
+
 func TestDecodeProjectIssues(t *testing.T) {
 	got, err := decodeProjectIssues([]byte(`{"items":[{"id":"PVTI_item","status":"In Progress","content":{"number":7,"title":"bug","repository":"owner/repo","type":"Issue"}},{"content":{"number":8,"type":"PullRequest"}}]}`), nil)
 	if err != nil || len(got) != 1 || got[0].Number != 7 || got[0].Repository != "owner/repo" || got[0].ProjectStatus != "In Progress" || got[0].ProjectItemID != "PVTI_item" {
