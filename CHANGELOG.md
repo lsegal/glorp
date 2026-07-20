@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require issue-fixing agents to provide screenshots or recordings for completed UI changes.
+
 ## v1.0.2 - 2026-07-20
 
 - Reset stale locally completed or active issues and requeue them when their remote state no longer matches.

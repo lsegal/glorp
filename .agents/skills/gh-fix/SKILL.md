@@ -34,6 +34,17 @@ The cleanup must be unconditional: use a deferred/finally-style cleanup guard as
 5. Run focused tests first, then the repository's broader required checks. Resolve failures caused by the change. Do not publish a known-broken fix.
 6. Review status and the complete diff. Include only files needed for the issue, its tests, and changelog note.
 
+## Capture UI evidence
+
+After implementation is complete, and only then, determine whether any changed file affects a user interface. If so:
+
+1. Capture screenshots that show the completed UI change in representative final states. When the change includes animation, interaction, or a state transition, capture a screen recording that demonstrates the behavior instead of or in addition to screenshots.
+2. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture the evidence.
+3. For non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to record the evidence.
+4. Attach the resulting screenshots or recording to the pull request, or add stable links to them. Treat missing required UI evidence as a blocker to opening or merging the pull request.
+
+Skip this section only when the completed diff does not affect UI code in any way.
+
 ## Commit and push
 
 Create a focused commit after local checks pass. Use a concise imperative subject and put the closing keyword on its own line in the body:
@@ -52,7 +63,7 @@ Before pushing, verify that the commit contains the intended code, tests, and ch
 
 1. Open a ready-for-review PR against the current default branch; do not create a draft because CI and merge are part of this workflow.
 2. Use a concise title describing the complete fix.
-3. Write a real Markdown body that explains the root cause, change, user impact, changelog entry, and tests. Include `Closes #<ISSUENUMBER>` on its own line so the PR itself also references and closes the original issue when merged.
+3. Write a real Markdown body that explains the root cause, change, user impact, changelog entry, tests, and any required UI evidence. Include `Closes #<ISSUENUMBER>` on its own line so the PR itself also references and closes the original issue when merged.
 4. Record the PR number and URL, then confirm the head branch, base branch, and changed-file scope are correct.
 
 ## Drive CI to completion
@@ -73,7 +84,7 @@ Continue until every required check completes successfully:
 
 ## Merge and verify
 
-1. Before merging, fetch the latest PR state and confirm all required checks are successful, the PR is mergeable, no required review or unresolved conversation blocks it, and the head SHA is the one that passed CI.
+1. Before merging, fetch the latest PR state and confirm all required checks are successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI evidence is present, and the head SHA is the one that passed CI.
 2. Merge using the repository's required or established merge method. Prefer a normal merge or rebase when allowed because it preserves the commit containing `Closes #N`. If squash merge is required, keep the PR body's standalone closing reference and set the final squash commit body to include `Closes #<ISSUENUMBER>`.
 3. Delete the remote issue branch after a successful merge when repository policy permits.
 4. After confirming the merge, remove the workflow labels from the originating issue with `gh issue edit <ISSUENUMBER> --repo <OWNER/REPO> --remove-label agent-ready --remove-label agent-started`. Treat a failure to remove either label as an actionable error and retry it; do not remove labels before the PR is merged.
@@ -81,7 +92,7 @@ Continue until every required check completes successfully:
 
 ## Report the result
 
-Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, and completed CI checks. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log evidence, and the remaining requirement; preserve the isolated clone and branch for continuation.
+Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, completed CI checks, and UI evidence or confirmation that it was not applicable. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log evidence, and the remaining requirement; preserve the isolated clone and branch for continuation.
 
 ## Clean up the clone
 
