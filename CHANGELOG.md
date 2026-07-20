@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show each agent's checkout directory and session ID in its dashboard viewport, including after completion or failure.
+
 ## v1.0.1 - 2026-07-17
 
 - Prevent `--no-ui` from crashing when normal log messages are written.

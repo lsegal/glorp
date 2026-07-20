@@ -187,6 +187,38 @@ func TestGlorpShowsAgentOutputInJobSnapshot(t *testing.T) {
 	}
 	t.Fatalf("agent output was not included in snapshots: %+v", reporter.snapshots)
 }
+
+func TestGlorpPreservesAgentMetadataAfterCompletion(t *testing.T) {
+	reporter := &snapshotReporter{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 1, Title: "bug"}}}},
+		Runner: fakeOutputRunner{}, UI: reporter,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	for _, snapshot := range reporter.snapshots {
+		for _, job := range snapshot.Jobs {
+			if job.Number == 1 && job.Status == "complete" {
+				if job.CheckoutDirectory == "" || job.SessionID == "" {
+					t.Fatalf("completed job metadata was not preserved: %+v", job)
+				}
+				return
+			}
+		}
+	}
+	t.Fatalf("completed job snapshot was not published: %+v", reporter.snapshots)
+}
 func TestGlorpTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().Add(-time.Hour)

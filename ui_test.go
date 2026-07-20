@@ -67,6 +67,24 @@ func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
 	}
 }
 
+func TestDashboardKeepsAgentMetadataVisibleForEveryStatus(t *testing.T) {
+	for _, status := range []string{"active", "failed", "complete"} {
+		t.Run(status, func(t *testing.T) {
+			m := newDashboard()
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+			updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+				Number: 7, Title: "UI", Status: status,
+				CheckoutDirectory: "/tmp/glorp-gh-fix-126", SessionID: "session-126",
+			}}}))
+			view := updated.(dashboard).View()
+			lines := strings.Split(view, "\n")
+			if len(lines) < 3 || !strings.Contains(lines[0], "UI") || strings.TrimSpace(lines[1]) != "checkout: /tmp/glorp-gh-fix-126" || strings.TrimSpace(lines[2]) != "session: session-126" {
+				t.Fatalf("dashboard did not show agent metadata on separate lines for %s job: %s", status, view)
+			}
+		})
+	}
+}
+
 func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
