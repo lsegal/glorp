@@ -498,7 +498,7 @@ func TestGlorpKeepsWatchingWhenProjectResetFails(t *testing.T) {
 
 func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", "--json", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args: %#v", got)
 	}
 	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", prompt}; !reflect.DeepEqual(got, want) {
@@ -510,7 +510,7 @@ func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
 	prompt := "/gh-fix 12\n\nRepository: owner/repo\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Repository: "owner/repo", Target: "https://github.com/users/owner/projects/3"}
 	got := commandArgs(CommandRunner{Agent: "codex", Repo: "wrong/repo"}, issue)
-	want := []string{"exec", "--json", prompt}
+	want := []string{"exec", prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
@@ -518,7 +518,7 @@ func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
 
 func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex yolo args = %#v, want %#v", got, want)
 	}
 	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", prompt}; !reflect.DeepEqual(got, want) {
@@ -528,7 +528,7 @@ func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 
 func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--json", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
 	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--model", "claude-sonnet", "--effort", "medium", prompt}; !reflect.DeepEqual(got, want) {
@@ -544,42 +544,6 @@ func TestCommandRunnerUsesTerminalAgentStdin(t *testing.T) {
 	}
 	if !terminal && cmd.Stdin != nil {
 		t.Fatal("agent stdin must use the null device in headless mode")
-	}
-}
-
-func TestCodexJSONOutputWriterFormatsProgress(t *testing.T) {
-	var output bytes.Buffer
-	w := newCodexJSONOutputWriter(&output)
-	chunks := []string{
-		`{"type":"thread.started","thread_id":"thread-1"}` + "\n" + `{"type":"item.compl`,
-		`eted","item":{"type":"agent_message","text":"I found the root cause."}}` + "\n" +
-			`{"type":"item.started","item":{"type":"command_execution","command":"go test ./..."}}` + "\n" +
-			`{"type":"item.completed","item":{"type":"reasoning","text":"The focused tests pass."}}`,
-	}
-	for _, chunk := range chunks {
-		if _, err := w.Write([]byte(chunk)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := w.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	want := "I found the root cause.\nRunning: go test ./...\nThe focused tests pass.\n"
-	if got := output.String(); got != want {
-		t.Fatalf("formatted Codex output = %q, want %q", got, want)
-	}
-}
-
-func TestCodexJSONOutputWriterPreservesPlainOutputAndErrors(t *testing.T) {
-	var output bytes.Buffer
-	w := newCodexJSONOutputWriter(&output)
-	input := "plain diagnostic\n" + `{"type":"turn.failed","error":{"message":"request failed"}}` + "\n"
-	if _, err := w.Write([]byte(input)); err != nil {
-		t.Fatal(err)
-	}
-	want := "plain diagnostic\nAgent error: request failed\n"
-	if got := output.String(); got != want {
-		t.Fatalf("formatted Codex output = %q, want %q", got, want)
 	}
 }
 

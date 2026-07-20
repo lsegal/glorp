@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -592,82 +591,6 @@ type CommandRunner struct {
 	Yolo                                   bool
 }
 
-type codexJSONOutputWriter struct {
-	output io.Writer
-	buffer []byte
-}
-
-type codexJSONEvent struct {
-	Type string `json:"type"`
-	Item struct {
-		Type    string `json:"type"`
-		Text    string `json:"text"`
-		Command string `json:"command"`
-	} `json:"item"`
-	Message string `json:"message"`
-	Error   struct {
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-func newCodexJSONOutputWriter(output io.Writer) *codexJSONOutputWriter {
-	return &codexJSONOutputWriter{output: output}
-}
-
-func (w *codexJSONOutputWriter) Write(p []byte) (int, error) {
-	w.buffer = append(w.buffer, p...)
-	for {
-		newline := bytes.IndexByte(w.buffer, '\n')
-		if newline < 0 {
-			break
-		}
-		line := append([]byte(nil), w.buffer[:newline]...)
-		w.buffer = w.buffer[newline+1:]
-		if err := w.writeLine(line); err != nil {
-			return 0, err
-		}
-	}
-	return len(p), nil
-}
-
-func (w *codexJSONOutputWriter) Flush() error {
-	if len(w.buffer) == 0 {
-		return nil
-	}
-	line := append([]byte(nil), w.buffer...)
-	w.buffer = nil
-	return w.writeLine(line)
-}
-
-func (w *codexJSONOutputWriter) writeLine(line []byte) error {
-	line = bytes.TrimSpace(line)
-	if len(line) == 0 {
-		return nil
-	}
-	var event codexJSONEvent
-	if err := json.Unmarshal(line, &event); err != nil {
-		_, err = fmt.Fprintln(w.output, string(line))
-		return err
-	}
-	var text string
-	switch {
-	case event.Type == "item.completed" && (event.Item.Type == "agent_message" || event.Item.Type == "reasoning"):
-		text = event.Item.Text
-	case event.Type == "item.started" && event.Item.Type == "command_execution" && event.Item.Command != "":
-		text = "Running: " + event.Item.Command
-	case event.Type == "turn.failed" && event.Error.Message != "":
-		text = "Agent error: " + event.Error.Message
-	case event.Type == "error" && event.Message != "":
-		text = "Agent error: " + event.Message
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	_, err := fmt.Fprintln(w.output, text)
-	return err
-}
-
 func commandArgs(r CommandRunner, issue Issue) []string {
 	target := issue.Target
 	if target == "" {
@@ -679,13 +602,10 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 	}
 	prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	if r.Agent == "codex" {
-		// JSONL keeps Codex's progress events flowing when stdout is a pipe,
-		// which is how the dashboard captures agent output.
 		args := []string{"exec"}
 		if r.Yolo {
 			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 		}
-		args = append(args, "--json")
 		if r.Model != "" {
 			args = append(args, "--model", r.Model)
 		}
@@ -733,14 +653,8 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, jobOutput io.Writer
 	cmd := newAgentCommand(ctx, r.Binary, args...)
 	stdout := io.Writer(io.Discard)
 	stderr := io.Writer(io.Discard)
-	var codexOutput *codexJSONOutputWriter
 	if jobOutput != nil {
-		jobStdout := jobOutput
-		if r.Agent == "codex" {
-			codexOutput = newCodexJSONOutputWriter(jobOutput)
-			jobStdout = codexOutput
-		}
-		stdout = io.MultiWriter(stdout, jobStdout)
+		stdout = io.MultiWriter(stdout, jobOutput)
 		stderr = io.MultiWriter(stderr, jobOutput)
 	}
 	if r.Output != nil {
@@ -749,11 +663,6 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, jobOutput io.Writer
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	runErr := cmd.Run()
-	if codexOutput != nil {
-		if err := codexOutput.Flush(); runErr == nil && err != nil {
-			runErr = err
-		}
-	}
 	if runErr != nil {
 		repo := r.Repo
 		if issue.Target != "" {
