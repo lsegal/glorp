@@ -1,6 +1,6 @@
 ---
 name: gh-fix
-description: "Fix a numbered GitHub issue end to end from an isolated clone: understand the issue, create a dedicated branch, implement and test the fix, update the changelog, commit with a standalone `Closes #N` line, push, open a pull request referencing the issue, monitor and repair CI until it passes, and merge the successful PR. Use when the user invokes `/gh-fix ISSUENUMBER`, `$gh-fix ISSUENUMBER`, or asks for this complete GitHub issue-to-merge workflow."
+description: "Fix a numbered GitHub issue end to end from an isolated clone: understand the issue, create a dedicated branch and linked draft pull request, push progress checkpoints, implement and test the fix, update the changelog, mark the pull request ready, monitor and repair CI until it passes, and merge the successful PR. Use when the user invokes `/gh-fix ISSUENUMBER`, `$gh-fix ISSUENUMBER`, or asks for this complete GitHub issue-to-merge workflow."
 ---
 
 # Fix a GitHub Issue Through Merge
@@ -26,14 +26,24 @@ Treat `/gh-fix ISSUENUMBER` as authorization to implement, publish, continuously
 
 The cleanup must be unconditional: use a deferred/finally-style cleanup guard as soon as each clone is created, and make cleanup errors visible while preserving the original failure when one exists.
 
+## Open the draft pull request
+
+Immediately after creating the branch, publish it and open a draft pull request so progress is visible throughout development:
+
+1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER>`, then push the new branch with upstream tracking. Never force-push.
+2. Open a draft PR against the current default branch with a concise title describing the intended fix.
+3. Write a real Markdown body that summarizes the issue and planned work. Include `Closes #<ISSUENUMBER>` on its own line so the draft links to and will close the original issue when merged.
+4. Record the PR number and URL, then confirm the head and base branches are correct.
+
 ## Implement the fix
 
 1. Reproduce or otherwise verify the reported behavior when practical.
 2. Inspect the relevant code and history, then implement the smallest complete fix consistent with repository conventions.
 3. Add or update focused tests that would fail without the fix when the repository has a relevant test framework.
 4. Locate the existing changelog case-insensitively, including project-specific paths and names. Add a concise user-facing note under its current unreleased section and follow its formatting. If the project has no changelog, create `CHANGELOG.md` with `# Changelog`, an `## Unreleased` section, and the note unless repository instructions specify another location or forbid creating one. Only add changelog entries for user-visible changes; do not add internal-only notes. Do not add entry for a fix of another unreleased changelog entry.
-5. Run focused tests first, then the repository's broader required checks. Resolve failures caused by the change. Do not publish a known-broken fix.
-6. Review status and the complete diff. Include only files needed for the issue, its tests, and changelog note.
+5. During active development, create and push a checkpoint commit at least once every five minutes when the working tree has changes. Use a message such as `Checkpoint issue #<ISSUENUMBER> progress`; do not wait for implementation or tests to finish before publishing the next checkpoint to the draft PR. Never include secrets, generated build artifacts, or unrelated changes. If there are no changes at the checkpoint, skip the empty commit and check again after the next development interval.
+6. Run focused tests first, then the repository's broader required checks. Resolve failures caused by the change. Do not mark a known-broken fix ready for review.
+7. Review status and the complete diff. Include only files needed for the issue, its tests, and changelog note.
 
 ## Capture UI evidence
 
@@ -50,7 +60,7 @@ Skip if you run into 2+ errors trying to capture results and mention this in the
 
 ## Commit and push
 
-Create a focused commit after local checks pass. Use a concise imperative subject and put the closing keyword on its own line in the body:
+After local checks pass, create a final implementation commit with a concise imperative subject and put the closing keyword on its own line in the body. If the latest checkpoint already contains every final change, use an empty commit so the checked implementation still has this unambiguous closing commit:
 
 ```text
 Fix <concise issue summary>
@@ -60,14 +70,13 @@ Closes #<ISSUENUMBER>
 
 For example, `git commit -m "Fix parser handling of empty input" -m "Closes #123"` creates the required separate body line. Use exactly the target issue number and capitalize `Closes` as shown.
 
-Before pushing, verify that the commit contains the intended code, tests, and changelog note; its message contains a standalone `Closes #<ISSUENUMBER>` line; the working tree is clean; and local checks passed. Push the new branch with upstream tracking. Never force-push.
+Before the final push, verify that the branch contains the intended code, tests, and changelog note; the final implementation commit contains a standalone `Closes #<ISSUENUMBER>` line; the working tree is clean; and local checks passed. Push normally. Never force-push.
 
-## Open the pull request
+## Mark the pull request ready
 
-1. Open a ready-for-review PR against the current default branch; do not create a draft because CI and merge are part of this workflow.
-2. Use a concise title describing the complete fix.
-3. Write a real Markdown body that explains the root cause, change, user impact, changelog entry, tests, and any required UI evidence. Include `Closes #<ISSUENUMBER>` on its own line so the PR itself also references and closes the original issue when merged.
-4. Record the PR number and URL, then confirm the head branch, base branch, and changed-file scope are correct.
+1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI evidence. Preserve `Closes #<ISSUENUMBER>` on its own line.
+2. Confirm the head branch, base branch, and changed-file scope are correct.
+3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI evidence are complete.
 
 ## Drive CI to completion
 
