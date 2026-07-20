@@ -44,7 +44,7 @@ h1 span { color: var(--muted); font-weight: 400; }
 .log-title svg { width: 14px; }
 .status-bar { margin-top: auto; display: flex; flex-wrap: wrap; border-radius: 6px; overflow: hidden; font: 11px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .status-cell { min-height: 28px; display: flex; align-items: center; padding: 4px 10px; }
-.jobs { background: #075985; }
+.jobs { background: #075985; gap: 4px; }
 .quota { background: #701a75; }
 .delivery { background: #047857; gap: 5px; }
 .delivery svg { width: 12px; }

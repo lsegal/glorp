@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restore readable spacing between metrics in the web dashboard status bar.
+
 ## v1.0.4 - 2026-07-20
 
 - Add a localhost React browser dashboard that mirrors terminal job viewports, logs, scrolling, and status, with configurable port selection and an option to disable it.
