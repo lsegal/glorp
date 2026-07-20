@@ -194,6 +194,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 	var workMu sync.Mutex
 	active := make(map[string]string)
 	jobs := make(map[string]JobSnapshot)
+	checkoutDirectory, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get agent checkout directory: %w", err)
+	}
 	issueCounts := make(map[string]int)
 	var jobMu sync.Mutex
 	publish := func() {
@@ -293,7 +297,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			key := issueKey(issue)
 			active[key] = session
 			jobMu.Lock()
-			jobs[key] = JobSnapshot{Number: issue.Number, Title: issue.Title, Status: "queued", Started: time.Now()}
+			jobs[key] = JobSnapshot{Number: issue.Number, Title: issue.Title, Status: "queued", CheckoutDirectory: checkoutDirectory, SessionID: session, Started: time.Now()}
 			jobMu.Unlock()
 			work[key] = workState{Status: "active", SessionID: session}
 			err = saveScopedWorkState(w.StatePath, work, targets)
@@ -317,7 +321,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 				running = tasks.running
 				tasks.mu.Unlock()
 				jobMu.Lock()
-				jobs[issueKey(issue)] = JobSnapshot{Number: issue.Number, Title: issue.Title, Status: "active", Started: jobs[issueKey(issue)].Started}
+				job := jobs[issueKey(issue)]
+				job.Status = "active"
+				jobs[issueKey(issue)] = job
 				jobMu.Unlock()
 				publish()
 			case <-ctx.Done():
@@ -363,7 +369,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 					key := issueKey(i)
 					delete(active, key)
 					jobMu.Lock()
-					jobs[key] = JobSnapshot{Number: i.Number, Title: i.Title, Status: "failed", Started: jobs[key].Started, Log: jobs[key].Log + runErr.Error()}
+					job := jobs[key]
+					job.Status = "failed"
+					job.Log += runErr.Error()
+					jobs[key] = job
 					jobMu.Unlock()
 					work[key] = workState{Status: "failed", SessionID: work[key].SessionID}
 					_ = saveScopedWorkState(w.StatePath, work, targets)
@@ -388,7 +397,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					key := issueKey(i)
 					delete(active, key)
 					jobMu.Lock()
-					jobs[key] = JobSnapshot{Number: i.Number, Title: i.Title, Status: "complete", Started: jobs[key].Started, Log: jobs[key].Log}
+					job := jobs[key]
+					job.Status = "complete"
+					jobs[key] = job
 					jobMu.Unlock()
 					work[key] = workState{Status: "completed", SessionID: work[key].SessionID}
 					_ = saveScopedWorkState(w.StatePath, work, targets)
