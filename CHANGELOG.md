@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve completed agents' viewport scrollback and scroll position in the dashboard.
+
 ## v1.0.3 - 2026-07-20
 
 - Show each agent's actual isolated clone directory in the dashboard and persist it for resumed sessions.
