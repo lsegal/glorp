@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -102,7 +104,7 @@ func main() {
 		quotaReader := &codexQuotaReader{Binary: binary}
 		quota = quotaReader.Read
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: terminalUIReporter(ui), Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: terminalUIReporter(ui), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -586,53 +588,90 @@ func projectStatusError(number int, err error, detail string) error {
 }
 
 type CommandRunner struct {
-	Binary, Agent, Model, ModelLevel, Repo string
-	Output                                 io.Writer
-	Yolo                                   bool
+	Binary, CodexBinary, ClaudeBinary string
+	Agent, Model, ModelLevel, Repo    string
+	Output                            io.Writer
+	Yolo                              bool
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
+	return commandArgsForSession(r, issue, AgentSession{})
+}
+
+func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) []string {
 	target := issue.Target
 	if target == "" {
 		target = r.Repo
 	}
-	prompt := fmt.Sprintf("/gh-fix %d", issue.Number)
-	if repo := issueRepository(target, issue); repo != "" {
-		prompt += "\n\nRepository: " + repo
+	prompt := "continue"
+	if !session.Resume {
+		prompt = fmt.Sprintf("/gh-fix %d", issue.Number)
+		if repo := issueRepository(target, issue); repo != "" {
+			prompt += "\n\nRepository: " + repo
+		}
+		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	} else if session.CheckoutDirectory != "" {
+		if _, err := os.Stat(session.CheckoutDirectory); os.IsNotExist(err) {
+			prompt += "\n\nThe original repository directory no longer exists. Regenerate any missing work before continuing."
+		}
 	}
-	prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if r.Agent == "codex" {
+	agent := session.Agent
+	if agent == "" {
+		agent = r.Agent
+	}
+	if agent == "codex" {
 		args := []string{"exec"}
+		if session.Resume {
+			args = append(args, "resume")
+		}
 		if r.Yolo {
 			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 		}
-		if r.Model != "" {
+		if !session.Resume && r.Model != "" {
 			args = append(args, "--model", r.Model)
 		}
-		if r.ModelLevel != "" {
+		if !session.Resume && r.ModelLevel != "" {
 			args = append(args, "-c", "model_reasoning_effort="+r.ModelLevel)
+		}
+		if session.Resume {
+			args = append(args, session.ID)
 		}
 		return append(args, prompt)
 	}
 	args := []string{"-p"}
+	if session.Resume {
+		args = append(args, "--resume", session.ID)
+	} else if session.ID != "" {
+		args = append(args, "--session-id", session.ID)
+	}
 	if r.Yolo {
 		args = append(args, "--dangerously-skip-permissions")
 	}
-	if r.Model != "" {
+	if !session.Resume && r.Model != "" {
 		args = append(args, "--model", r.Model)
 	}
-	if r.ModelLevel != "" {
+	if !session.Resume && r.ModelLevel != "" {
 		args = append(args, "--effort", r.ModelLevel)
 	}
 	return append(args, prompt)
 }
 
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
-	return r.run(ctx, issue, nil)
+	return r.run(ctx, issue, AgentSession{}, nil, nil)
 }
 
 func (r CommandRunner) RunWithOutput(ctx context.Context, issue Issue, output io.Writer) error {
-	return r.run(ctx, issue, output)
+	return r.run(ctx, issue, AgentSession{}, nil, output)
+}
+
+func (r CommandRunner) AgentName() string { return r.Agent }
+
+func (r CommandRunner) RunSession(ctx context.Context, issue Issue, session AgentSession, updateSession func(string)) error {
+	return r.run(ctx, issue, session, updateSession, nil)
+}
+
+func (r CommandRunner) RunSessionWithOutput(ctx context.Context, issue Issue, session AgentSession, updateSession func(string), output io.Writer) error {
+	return r.run(ctx, issue, session, updateSession, output)
 }
 
 func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.Cmd {
@@ -648,21 +687,94 @@ func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.C
 	return cmd
 }
 
-func (r CommandRunner) run(ctx context.Context, issue Issue, jobOutput io.Writer) error {
-	args := commandArgs(r, issue)
-	cmd := newAgentCommand(ctx, r.Binary, args...)
-	stdout := io.Writer(io.Discard)
-	stderr := io.Writer(io.Discard)
+type sessionIDCaptureWriter struct {
+	mu        sync.Mutex
+	output    io.Writer
+	buffer    []byte
+	onSession func(string)
+	captured  bool
+}
+
+var codexSessionIDPattern = regexp.MustCompile(`(?i)session id:\s*([0-9a-f]{8}-[0-9a-f-]{27,})`)
+
+func (w *sessionIDCaptureWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, err := w.output.Write(p); err != nil {
+		return 0, err
+	}
+	w.buffer = append(w.buffer, p...)
+	for {
+		newline := bytes.IndexByte(w.buffer, '\n')
+		if newline < 0 {
+			break
+		}
+		w.captureLine(string(w.buffer[:newline]))
+		w.buffer = w.buffer[newline+1:]
+	}
+	return len(p), nil
+}
+
+func (w *sessionIDCaptureWriter) captureLine(line string) {
+	if w.captured {
+		return
+	}
+	match := codexSessionIDPattern.FindStringSubmatch(line)
+	if len(match) != 2 {
+		return
+	}
+	w.captured = true
+	w.onSession(match[1])
+}
+
+func (w *sessionIDCaptureWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buffer) != 0 {
+		w.captureLine(string(w.buffer))
+		w.buffer = nil
+	}
+}
+
+func (r CommandRunner) binary(agent string) string {
+	if agent == "codex" && r.CodexBinary != "" {
+		return r.CodexBinary
+	}
+	if agent == "claude" && r.ClaudeBinary != "" {
+		return r.ClaudeBinary
+	}
+	return r.Binary
+}
+
+func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSession, updateSession func(string), jobOutput io.Writer) error {
+	agent := session.Agent
+	if agent == "" {
+		agent = r.Agent
+	}
+	args := commandArgsForSession(r, issue, session)
+	cmd := newAgentCommand(ctx, r.binary(agent), args...)
+	if session.CheckoutDirectory != "" {
+		if info, err := os.Stat(session.CheckoutDirectory); err == nil && info.IsDir() {
+			cmd.Dir = session.CheckoutDirectory
+		}
+	}
+	agentOutput := io.Writer(io.Discard)
 	if jobOutput != nil {
-		stdout = io.MultiWriter(stdout, jobOutput)
-		stderr = io.MultiWriter(stderr, jobOutput)
+		agentOutput = io.MultiWriter(agentOutput, jobOutput)
 	}
 	if r.Output != nil {
-		stdout = io.MultiWriter(stdout, r.Output)
-		stderr = io.MultiWriter(stderr, r.Output)
+		agentOutput = io.MultiWriter(agentOutput, r.Output)
 	}
-	cmd.Stdout, cmd.Stderr = stdout, stderr
+	var sessionOutput *sessionIDCaptureWriter
+	if agent == "codex" && !session.Resume && updateSession != nil {
+		sessionOutput = &sessionIDCaptureWriter{output: agentOutput, onSession: updateSession}
+		agentOutput = sessionOutput
+	}
+	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := cmd.Run()
+	if sessionOutput != nil {
+		sessionOutput.Flush()
+	}
 	if runErr != nil {
 		repo := r.Repo
 		if issue.Target != "" {

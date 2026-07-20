@@ -49,6 +49,23 @@ func (fakeOutputRunner) RunWithOutput(_ context.Context, _ Issue, output io.Writ
 	return err
 }
 
+type fakeSessionRunner struct {
+	agent    string
+	sessions chan AgentSession
+	reported string
+}
+
+func (f *fakeSessionRunner) AgentName() string                { return f.agent }
+func (f *fakeSessionRunner) Run(context.Context, Issue) error { return nil }
+func (f *fakeSessionRunner) RunSession(ctx context.Context, _ Issue, session AgentSession, update func(string)) error {
+	f.sessions <- session
+	if f.reported != "" {
+		update(f.reported)
+	}
+	<-ctx.Done()
+	return nil
+}
+
 type snapshotReporter struct {
 	mu        sync.Mutex
 	snapshots []GlorpSnapshot
@@ -536,6 +553,59 @@ func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
+	dir := t.TempDir()
+	codex := CommandRunner{Agent: "claude", Yolo: true, Model: "saved-model", ModelLevel: "high"}
+	session := AgentSession{ID: "session-7", Agent: "codex", CheckoutDirectory: dir, Resume: true}
+	wantCodex := []string{"exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "session-7", "continue"}
+	if got := commandArgsForSession(codex, Issue{Number: 7}, session); !reflect.DeepEqual(got, wantCodex) {
+		t.Fatalf("Codex resume args = %#v, want %#v", got, wantCodex)
+	}
+
+	claude := CommandRunner{Agent: "codex", Yolo: true, Model: "saved-model", ModelLevel: "medium"}
+	session.Agent = "claude"
+	wantClaude := []string{"-p", "--resume", "session-7", "--dangerously-skip-permissions", "continue"}
+	if got := commandArgsForSession(claude, Issue{Number: 7}, session); !reflect.DeepEqual(got, wantClaude) {
+		t.Fatalf("Claude resume args = %#v, want %#v", got, wantClaude)
+	}
+}
+
+func TestCommandRunnerStartsClaudeWithPersistedSessionID(t *testing.T) {
+	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	session := AgentSession{ID: "session-12", Agent: "claude"}
+	want := []string{"-p", "--session-id", "session-12", prompt}
+	if got := commandArgsForSession(CommandRunner{Agent: "codex"}, Issue{Number: 12}, session); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Claude initial args = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerRegeneratesWorkWhenCheckoutIsMissing(t *testing.T) {
+	session := AgentSession{ID: "session-7", Agent: "codex", CheckoutDirectory: filepath.Join(t.TempDir(), "missing"), Resume: true}
+	args := commandArgsForSession(CommandRunner{Agent: "claude"}, Issue{Number: 7}, session)
+	prompt := args[len(args)-1]
+	if !strings.HasPrefix(prompt, "continue") || !strings.Contains(prompt, "repository directory no longer exists") || !strings.Contains(prompt, "Regenerate") {
+		t.Fatalf("missing-checkout prompt = %q", prompt)
+	}
+}
+
+func TestSessionIDCaptureWriterPreservesOutputAndCapturesCodexSession(t *testing.T) {
+	var output bytes.Buffer
+	var sessionID string
+	w := &sessionIDCaptureWriter{output: &output, onSession: func(id string) { sessionID = id }}
+	chunks := []string{"OpenAI Codex\nsession ", "id: 0199a213-81c0-7800-8aa1-bbab2a035a53\nworking\n"}
+	for _, chunk := range chunks {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := output.String(), strings.Join(chunks, ""); got != want {
+		t.Fatalf("forwarded output = %q, want %q", got, want)
+	}
+	if sessionID != "0199a213-81c0-7800-8aa1-bbab2a035a53" {
+		t.Fatalf("captured session ID = %q", sessionID)
+	}
+}
+
 func TestCommandRunnerUsesTerminalAgentStdin(t *testing.T) {
 	cmd := newAgentCommand(context.Background(), "test-agent")
 	terminal := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
@@ -561,7 +631,7 @@ func TestStateRoundTrip(t *testing.T) {
 
 func TestWorkStateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	want := map[int]workState{7: {Status: "active", SessionID: "session-7"}}
+	want := map[int]workState{7: {Status: "active", SessionID: "session-7", Agent: "codex", CheckoutDirectory: "/tmp/repo"}}
 	if err := saveWorkState(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -569,6 +639,73 @@ func TestWorkStateRoundTrip(t *testing.T) {
 	if err != nil || got[7] != want[7] {
 		t.Fatalf("state error=%v value=%v", err, got)
 	}
+}
+
+func TestGlorpResumesPersistedSessionWithOriginalAgent(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	want := workState{Status: "active", SessionID: "session-7", Agent: "codex", CheckoutDirectory: dir}
+	if err := saveWorkState(statePath, map[int]workState{7: want}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 1)}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7, Labels: []IssueLabel{{Name: agentStartedLabel}}}}}}, Runner: runner,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case got := <-runner.sessions:
+		if !got.Resume || got.ID != want.SessionID || got.Agent != want.Agent || got.CheckoutDirectory != want.CheckoutDirectory {
+			t.Fatalf("resumed session = %#v, want persisted %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("persisted session was not resumed")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpPersistsSessionReportedByCodex(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1), reported: "codex-session"}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: runner,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case session := <-runner.sessions:
+		if session.Resume || session.ID != "" || session.Agent != "codex" {
+			t.Fatalf("new Codex session = %#v", session)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new Codex session was not started")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].SessionID == "codex-session" && state[7].Agent == "codex" {
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("Codex session ID was not persisted")
 }
 
 func TestScopedWorkStateKeepsTargetsSeparate(t *testing.T) {

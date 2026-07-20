@@ -131,7 +131,7 @@ glorp creates and manages the `agent-ready` and `agent-started` labels for repos
 
 Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--poll` to avoid starting an unused webhook tunnel for those targets.
 
-Handled issues and active sessions are stored in `.glorp.json` by default. This prevents duplicate work after a restart and allows glorp to reclaim interrupted jobs. Issues that declare dependencies using `depends on #123` or GitHub's issue-dependency relationship remain blocked until those dependencies close.
+Handled issues and active sessions are stored in `.glorp.json` by default. This prevents duplicate work after a restart and allows glorp to resume interrupted Codex or Claude sessions with the original agent, even when the new process selects a different `--agent`. If the original working directory is gone, the resumed agent is told to regenerate its missing work. Issues that declare dependencies using `depends on #123` or GitHub's issue-dependency relationship remain blocked until those dependencies close.
 
 When stdout is a terminal, glorp displays an interactive dashboard unless `--no-ui` is set. With `--no-ui` or non-terminal output, it writes timestamped progress to stdout, including issue counts, queued and active jobs, webhook events, retries, completions, failures, and shutdown progress.
 

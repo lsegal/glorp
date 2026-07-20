@@ -70,6 +70,21 @@ type AgentRunner interface {
 type AgentOutputRunner interface {
 	RunWithOutput(context.Context, Issue, io.Writer) error
 }
+type AgentSession struct {
+	ID                string
+	Agent             string
+	CheckoutDirectory string
+	Resume            bool
+}
+type SessionAgentRunner interface {
+	RunSession(context.Context, Issue, AgentSession, func(string)) error
+}
+type SessionAgentOutputRunner interface {
+	RunSessionWithOutput(context.Context, Issue, AgentSession, func(string), io.Writer) error
+}
+type AgentIdentifier interface {
+	AgentName() string
+}
 type UIReporter interface {
 	Snapshot(GlorpSnapshot)
 	Log(string)
@@ -96,8 +111,10 @@ type Glorp struct {
 const agentStartedLabel = "agent-started"
 
 type workState struct {
-	Status    string `json:"status"`
-	SessionID string `json:"sessionId,omitempty"`
+	Status            string `json:"status"`
+	SessionID         string `json:"sessionId,omitempty"`
+	Agent             string `json:"agent,omitempty"`
+	CheckoutDirectory string `json:"checkoutDirectory,omitempty"`
 }
 
 func issueKey(issue Issue) string {
@@ -253,7 +270,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 		}
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
-		newIssues := make([]Issue, 0)
+		type pendingIssue struct {
+			issue   Issue
+			session AgentSession
+		}
+		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
 			if blocked, reason := issueBlocked(issue); blocked {
 				w.logf("issue #%d not picked up: %s", issue.Number, reason)
@@ -264,10 +285,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			state := work[key]
 			staleRestoredState := restored[key] && !workStateMatchesRemote(issue.Target, issue, state)
 			if staleRestoredState {
+				staleStatus := state.Status
 				delete(work, key)
 				delete(seen, key)
 				delete(restored, key)
-				w.logf("issue #%d reset stale local %s state", issue.Number, state.Status)
+				state = work[key]
+				w.logf("issue #%d reset stale local %s state", issue.Number, staleStatus)
 			}
 			_, isActive := active[key]
 			wasActive := work[key].Status == "active"
@@ -275,7 +298,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if issue.Number > 0 && ((staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, seen[key], w.ReadyState)) {
 				seen[key] = true
 				delete(restored, key)
-				newIssues = append(newIssues, issue)
+				newIssues = append(newIssues, pendingIssue{issue: issue, session: AgentSession{
+					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
+					Resume: state.Status == "active" && state.SessionID != "" && state.Agent != "",
+				}})
 			}
 		}
 		workMu.Lock()
@@ -289,11 +315,28 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("poll #%d complete; no new issues (tasks: %d running, %d queued)", n, running, queued)
 			return nil
 		}
-		w.logf("poll #%d discovered %d new issue(s): %s", n, len(newIssues), issueNumbers(newIssues))
-		for _, issue := range newIssues {
-			session, err := newSessionID()
-			if err != nil {
-				return err
+		issuesToLog := make([]Issue, len(newIssues))
+		for i := range newIssues {
+			issuesToLog[i] = newIssues[i].issue
+		}
+		w.logf("poll #%d discovered %d new issue(s): %s", n, len(newIssues), issueNumbers(issuesToLog))
+		for _, pending := range newIssues {
+			issue := pending.issue
+			session := pending.session
+			if !session.Resume {
+				session.Agent = ""
+				if identified, ok := w.Runner.(AgentIdentifier); ok {
+					session.Agent = identified.AgentName()
+				}
+				session.CheckoutDirectory = checkoutDirectory
+				// Claude accepts a caller-provided session ID. Other runners retain
+				// the historical generated ID unless they replace it after launch.
+				if session.Agent != "codex" {
+					session.ID, err = newSessionID()
+					if err != nil {
+						return err
+					}
+				}
 			}
 			if labeler != nil && !isProjectTarget(issue.Target) {
 				if err := labeler.SetIssueLabel(ctx, issueRepository(issue.Target, issue), issue.Number, true); err != nil {
@@ -307,11 +350,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			workMu.Lock()
 			key := issueKey(issue)
-			active[key] = session
+			active[key] = session.ID
 			jobMu.Lock()
-			jobs[key] = JobSnapshot{Number: issue.Number, Title: issue.Title, Status: "queued", CheckoutDirectory: checkoutDirectory, SessionID: session, Started: time.Now()}
+			jobs[key] = JobSnapshot{Number: issue.Number, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Started: time.Now()}
 			jobMu.Unlock()
-			work[key] = workState{Status: "active", SessionID: session}
+			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory}
 			err = saveScopedWorkState(w.StatePath, work, targets)
 			workMu.Unlock()
 			if err != nil {
@@ -346,7 +389,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			startedRunning, startedQueued := running, queued
 			wg.Add(1)
-			go func(i Issue, running, queued int) {
+			go func(i Issue, agentSession AgentSession, running, queued int) {
 				defer wg.Done()
 				defer func() { <-sem }()
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
@@ -358,13 +401,39 @@ func (w *Glorp) Run(ctx context.Context) error {
 					jobMu.Unlock()
 					publish()
 				}}
+				updateSession := func(sessionID string) {
+					if sessionID == "" {
+						return
+					}
+					workMu.Lock()
+					key := issueKey(i)
+					state := work[key]
+					state.SessionID = sessionID
+					work[key] = state
+					active[key] = sessionID
+					saveErr := saveScopedWorkState(w.StatePath, work, targets)
+					workMu.Unlock()
+					if saveErr != nil {
+						w.logf("issue #%d failed to save agent session: %v", i.Number, saveErr)
+					}
+					jobMu.Lock()
+					job := jobs[key]
+					job.SessionID = sessionID
+					jobs[key] = job
+					jobMu.Unlock()
+					publish()
+				}
 				var runErr error
 				if w.UI != nil {
-					if runner, ok := w.Runner.(AgentOutputRunner); ok {
+					if runner, ok := w.Runner.(SessionAgentOutputRunner); ok {
+						runErr = runner.RunSessionWithOutput(ctx, i, agentSession, updateSession, jobOutput)
+					} else if runner, ok := w.Runner.(AgentOutputRunner); ok {
 						runErr = runner.RunWithOutput(ctx, i, jobOutput)
 					} else {
 						runErr = w.Runner.Run(ctx, i)
 					}
+				} else if runner, ok := w.Runner.(SessionAgentRunner); ok {
+					runErr = runner.RunSession(ctx, i, agentSession, updateSession)
 				} else {
 					runErr = w.Runner.Run(ctx, i)
 				}
@@ -386,7 +455,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					job.Log += runErr.Error()
 					jobs[key] = job
 					jobMu.Unlock()
-					work[key] = workState{Status: "failed", SessionID: work[key].SessionID}
+					state := work[key]
+					state.Status = "failed"
+					work[key] = state
 					_ = saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
 					tasks.mu.Lock()
@@ -413,7 +484,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					job.Status = "complete"
 					jobs[key] = job
 					jobMu.Unlock()
-					work[key] = workState{Status: "completed", SessionID: work[key].SessionID}
+					state := work[key]
+					state.Status = "completed"
+					work[key] = state
 					_ = saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
 					tasks.mu.Lock()
@@ -424,7 +497,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d completed (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
 					publish()
 				}
-			}(issue, startedRunning, startedQueued)
+			}(issue, session, startedRunning, startedQueued)
 		}
 		running, queued, _, _ = tasks.snapshot()
 		w.logf("poll #%d complete; dispatched %d issue(s) (tasks: %d running, %d queued)", n, len(newIssues), running, queued)
@@ -520,7 +593,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			workMu.Lock()
 			for key, session := range active {
-				reloaded[key] = workState{Status: "active", SessionID: session}
+				state := work[key]
+				state.Status = "active"
+				state.SessionID = session
+				reloaded[key] = state
 			}
 			work = reloaded
 			seen = make(map[string]bool, len(work))
