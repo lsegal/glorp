@@ -102,9 +102,20 @@ Continue until every required check completes successfully:
 4. After confirming the merge, remove the workflow labels from the originating issue with `gh issue edit <ISSUENUMBER> --repo <OWNER/REPO> --remove-label agent-ready --remove-label agent-started`. Treat a failure to remove either label as an actionable error and retry it; do not remove labels before the PR is merged.
 5. Verify the PR is merged, the merged commit is reachable from the remote default branch, and GitHub closed issue `#<ISSUENUMBER>`. Allow for a brief GitHub processing delay, but do not claim closure without checking.
 
+## Create follow-up issues
+
+Only after the pull request is merged, review its body, review comments, and conversation for every explicit TODO or known issue that remains unresolved by the merged change:
+
+1. Turn each distinct, actionable item into its own issue in the same repository. Do not create issues for completed work, vague observations, or items that already have an equivalent open issue; link the existing issue instead.
+2. Give each new issue a focused title and enough context and acceptance criteria to be actionable without rereading the pull request.
+3. Associate every new issue with both the originating issue and merged pull request. Prefer repository or project relationship metadata when it is supported; otherwise include `Addresses #<ISSUENUMBER> and #<PRNUMBER>` in the issue body.
+4. Inspect the originating issue's project items. When it belongs to one or more GitHub Projects, add every new follow-up issue to the same project or projects. If it has no project, leave the new issues in the repository without adding them to a board.
+5. Record the URLs of all new or reused follow-up issues for the final report. If no qualifying items exist, explicitly record that no follow-up issues were needed.
+6. Treat failures to create an issue, establish its origin links, or copy its project membership as actionable errors and retry them. Do not report the workflow complete while required follow-up issue work is unfinished.
+
 ## Report the result
 
-Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, completed CI checks, and UI evidence or confirmation that it was not applicable. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log evidence, and the remaining requirement; preserve the isolated clone and branch for continuation.
+Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, completed CI checks, follow-up issue URLs or confirmation that none were needed, and UI evidence or confirmation that it was not applicable. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log evidence, and the remaining requirement; preserve the isolated clone and branch for continuation.
 
 ## Clean up the clone
 
