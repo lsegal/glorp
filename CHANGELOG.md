@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retry webhook-triggered refreshes when GitHub's issue index lags, so newly pushed issues are not skipped.
+
 ## v1.0.4 - 2026-07-20
 
 - Add a localhost React browser dashboard that mirrors terminal job viewports, logs, scrolling, and status, with configurable port selection and an option to disable it.
