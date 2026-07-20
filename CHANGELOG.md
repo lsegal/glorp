@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Restore readable spacing between metrics in the web dashboard status bar.
 - Retry webhook-triggered refreshes when GitHub's issue index lags, so newly pushed issues are not skipped.
 
 ## v1.0.4 - 2026-07-20
