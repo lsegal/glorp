@@ -118,7 +118,11 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !ok {
 				jobViewport = viewport.New(max(1, m.width/jobGridColumns-7), max(1, jobCardHeight-4))
 			}
+			followOutput := !ok || jobViewport.AtBottom()
 			jobViewport.SetContent(job.Log)
+			if followOutput {
+				jobViewport.GotoBottom()
+			}
 			m.jobs[job.Number] = jobViewport
 		}
 	case logMsg:

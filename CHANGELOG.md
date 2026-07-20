@@ -4,6 +4,7 @@
 
 - Keep watching when a failed project item's status cannot be reset.
 - Require issue-fixing agents to provide screenshots or recordings for completed UI changes.
+- Render live Codex progress as readable dashboard text instead of raw JSON protocol events.
 
 ## v1.0.2 - 2026-07-20
 

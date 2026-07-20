@@ -547,6 +547,42 @@ func TestCommandRunnerUsesTerminalAgentStdin(t *testing.T) {
 	}
 }
 
+func TestCodexJSONOutputWriterFormatsProgress(t *testing.T) {
+	var output bytes.Buffer
+	w := newCodexJSONOutputWriter(&output)
+	chunks := []string{
+		`{"type":"thread.started","thread_id":"thread-1"}` + "\n" + `{"type":"item.compl`,
+		`eted","item":{"type":"agent_message","text":"I found the root cause."}}` + "\n" +
+			`{"type":"item.started","item":{"type":"command_execution","command":"go test ./..."}}` + "\n" +
+			`{"type":"item.completed","item":{"type":"reasoning","text":"The focused tests pass."}}`,
+	}
+	for _, chunk := range chunks {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	want := "I found the root cause.\nRunning: go test ./...\nThe focused tests pass.\n"
+	if got := output.String(); got != want {
+		t.Fatalf("formatted Codex output = %q, want %q", got, want)
+	}
+}
+
+func TestCodexJSONOutputWriterPreservesPlainOutputAndErrors(t *testing.T) {
+	var output bytes.Buffer
+	w := newCodexJSONOutputWriter(&output)
+	input := "plain diagnostic\n" + `{"type":"turn.failed","error":{"message":"request failed"}}` + "\n"
+	if _, err := w.Write([]byte(input)); err != nil {
+		t.Fatal(err)
+	}
+	want := "plain diagnostic\nAgent error: request failed\n"
+	if got := output.String(); got != want {
+		t.Fatalf("formatted Codex output = %q, want %q", got, want)
+	}
+}
+
 func TestStateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	want := map[int]bool{3: true, 9: true}

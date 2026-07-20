@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -498,6 +499,82 @@ type CommandRunner struct {
 	Yolo                                   bool
 }
 
+type codexJSONOutputWriter struct {
+	output io.Writer
+	buffer []byte
+}
+
+type codexJSONEvent struct {
+	Type string `json:"type"`
+	Item struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Command string `json:"command"`
+	} `json:"item"`
+	Message string `json:"message"`
+	Error   struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func newCodexJSONOutputWriter(output io.Writer) *codexJSONOutputWriter {
+	return &codexJSONOutputWriter{output: output}
+}
+
+func (w *codexJSONOutputWriter) Write(p []byte) (int, error) {
+	w.buffer = append(w.buffer, p...)
+	for {
+		newline := bytes.IndexByte(w.buffer, '\n')
+		if newline < 0 {
+			break
+		}
+		line := append([]byte(nil), w.buffer[:newline]...)
+		w.buffer = w.buffer[newline+1:]
+		if err := w.writeLine(line); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+func (w *codexJSONOutputWriter) Flush() error {
+	if len(w.buffer) == 0 {
+		return nil
+	}
+	line := append([]byte(nil), w.buffer...)
+	w.buffer = nil
+	return w.writeLine(line)
+}
+
+func (w *codexJSONOutputWriter) writeLine(line []byte) error {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return nil
+	}
+	var event codexJSONEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		_, err = fmt.Fprintln(w.output, string(line))
+		return err
+	}
+	var text string
+	switch {
+	case event.Type == "item.completed" && (event.Item.Type == "agent_message" || event.Item.Type == "reasoning"):
+		text = event.Item.Text
+	case event.Type == "item.started" && event.Item.Type == "command_execution" && event.Item.Command != "":
+		text = "Running: " + event.Item.Command
+	case event.Type == "turn.failed" && event.Error.Message != "":
+		text = "Agent error: " + event.Error.Message
+	case event.Type == "error" && event.Message != "":
+		text = "Agent error: " + event.Message
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	_, err := fmt.Fprintln(w.output, text)
+	return err
+}
+
 func commandArgs(r CommandRunner, issue Issue) []string {
 	target := issue.Target
 	if target == "" {
@@ -561,24 +638,39 @@ func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.C
 func (r CommandRunner) run(ctx context.Context, issue Issue, jobOutput io.Writer) error {
 	args := commandArgs(r, issue)
 	cmd := newAgentCommand(ctx, r.Binary, args...)
-	agentOutput := io.Writer(io.Discard)
+	stdout := io.Writer(io.Discard)
+	stderr := io.Writer(io.Discard)
+	var codexOutput *codexJSONOutputWriter
 	if jobOutput != nil {
-		agentOutput = io.MultiWriter(agentOutput, jobOutput)
+		jobStdout := jobOutput
+		if r.Agent == "codex" {
+			codexOutput = newCodexJSONOutputWriter(jobOutput)
+			jobStdout = codexOutput
+		}
+		stdout = io.MultiWriter(stdout, jobStdout)
+		stderr = io.MultiWriter(stderr, jobOutput)
 	}
 	if r.Output != nil {
-		agentOutput = io.MultiWriter(agentOutput, r.Output)
+		stdout = io.MultiWriter(stdout, r.Output)
+		stderr = io.MultiWriter(stderr, r.Output)
 	}
-	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
-	if err := cmd.Run(); err != nil {
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	runErr := cmd.Run()
+	if codexOutput != nil {
+		if err := codexOutput.Flush(); runErr == nil && err != nil {
+			runErr = err
+		}
+	}
+	if runErr != nil {
 		repo := r.Repo
 		if issue.Target != "" {
 			repo = issueRepository(issue.Target, issue)
 		}
 		report, reportErr := bugReportURL(repo, issue, args)
 		if reportErr != nil {
-			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", err, reportErr)
+			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", runErr, reportErr)
 		}
-		return fmt.Errorf("agent failed: %w; bug report: %s", err, report)
+		return fmt.Errorf("agent failed: %w; bug report: %s", runErr, report)
 	}
 	return nil
 }

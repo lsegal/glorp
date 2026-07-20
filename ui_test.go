@@ -51,6 +51,20 @@ func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 	}
 }
 
+func TestDashboardFollowsStreamingAgentOutput(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "UI", Status: "active", Log: strings.Join([]string{
+			"line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8", "line 9", "latest progress",
+		}, "\n"),
+	}}}))
+	m = updated.(dashboard)
+	if !m.jobs[7].AtBottom() || !strings.Contains(m.View(), "latest progress") {
+		t.Fatalf("dashboard did not follow the latest agent output: %s", m.View())
+	}
+}
+
 func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
