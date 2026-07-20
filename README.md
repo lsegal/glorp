@@ -120,7 +120,7 @@ The concurrency limit is shared across all targets. GitHub webhook deliveries ca
 
 In the default mode, glorp:
 
-1. Starts a webhook listener on `:8080/webhook`.
+1. Starts a webhook listener on a randomly assigned available port.
 2. Starts an ngrok tunnel for that listener.
 3. Creates a GitHub webhook for each repository target and removes stale ngrok webhooks previously managed for it.
 4. Queries GitHub for matching open issues and queues previously unhandled work.
@@ -149,7 +149,7 @@ glorp [options] TARGET [TARGET ...]
 | `--concurrency N` | `0` | Maximum concurrent agents across all targets. `0` is normalized to `3`; negative values are invalid. |
 | `--filter QUERY` | `is:issue state:open author:@me` | GitHub issue-search filter. Repeat the option to combine terms. The default author filter applies to repository targets; Project targets default to all open project issues. |
 | `--interval DURATION` | `30s` | Periodic GitHub synchronization interval. Uses Go duration syntax such as `10s`, `2m`, or `1h30m`; must be positive. |
-| `--listen ADDRESS` | `:8080` | Address for the local GitHub webhook HTTP server. |
+| `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
 | `--model MODEL` | agent default | Model passed to the selected agent. |
 | `--model-level LEVEL` | agent default | Reasoning or effort level passed to the selected agent. Supported values are `low`, `medium`, and `high`. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | URL of the ngrok local API used to discover the public tunnel. |

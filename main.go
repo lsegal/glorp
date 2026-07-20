@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,7 +31,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	poll := flag.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
-	listen := flag.String("listen", ":8080", "address for the GitHub webhook server")
+	listen := flag.String("listen", ":0", "address for the GitHub webhook server")
 	webhookPath := flag.String("webhook-path", "/webhook", "path for GitHub webhook deliveries")
 	webhookSecret := flag.String("webhook-secret", "", "optional GitHub webhook secret")
 	ngrokBinary := flag.String("ngrok-binary", "ngrok", "ngrok executable")
@@ -102,16 +103,22 @@ func main() {
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: terminalUIReporter(ui), Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
 	var server *http.Server
 	if !*poll {
+		listener, err := listenForWebhooks(*listen)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		server = &http.Server{Addr: *listen, Handler: WebhookHandler{Events: events, Secret: *webhookSecret, WebhookPath: *webhookPath}}
 		go func() {
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "webhook server: %v\n", err)
 			}
 		}()
 		defer server.Close()
-		fmt.Fprintf(output, "webhook server listening on %s%s\n", *listen, *webhookPath)
-		fmt.Fprintf(output, "starting ngrok tunnel for %s\n", *listen)
-		tunnel, err := startNgrok(ctx, *ngrokBinary, *listen, *ngrokAPI, output)
+		listenAddr := listener.Addr().String()
+		fmt.Fprintf(output, "webhook server listening on %s%s\n", listenAddr, *webhookPath)
+		fmt.Fprintf(output, "starting ngrok tunnel for %s\n", listenAddr)
+		tunnel, err := startNgrok(ctx, *ngrokBinary, listenAddr, *ngrokAPI, output)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -150,6 +157,14 @@ func main() {
 	if ui != nil {
 		ui.program.Quit()
 	}
+}
+
+func listenForWebhooks(address string) (net.Listener, error) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("listen for webhooks on %s: %w", address, err)
+	}
+	return listener, nil
 }
 
 func isTerminal(file *os.File) bool {

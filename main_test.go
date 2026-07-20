@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"reflect"
@@ -12,6 +13,22 @@ import (
 
 	"github.com/mattn/go-isatty"
 )
+
+func TestListenForWebhooksAssignsRandomPort(t *testing.T) {
+	listener, err := listenForWebhooks("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port == "0" || port == "" {
+		t.Fatalf("listener address = %q, want an assigned port", listener.Addr())
+	}
+}
 
 func TestValidRepo(t *testing.T) {
 	for _, s := range []string{"owner/repo", "a/b"} {
