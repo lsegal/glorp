@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Resume interrupted Codex and Claude sessions with their original agent and working directory.
+- Keep each dashboard viewport pinned to new output only while it is at the bottom, with per-pane mouse scrolling, draggable scrollbars, and a clickable more indicator.
 - Update attached GitHub Project statuses when repository-watched issues start, finish, or reset.
 - Keep watching when a failed project item's status cannot be reset.
 - Require issue-fixing agents to provide screenshots or recordings for completed UI changes.
