@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const maxVisibleJobs = 6
@@ -51,6 +52,19 @@ type GlorpSnapshot struct {
 type snapshotMsg GlorpSnapshot
 type logMsg string
 
+type viewportTarget struct {
+	jobNumber int
+	logs      bool
+}
+
+type viewportRegion struct {
+	target     viewportTarget
+	x, y       int
+	width      int
+	height     int
+	contentEnd int
+}
+
 type dashboard struct {
 	snapshot GlorpSnapshot
 	viewport viewport.Model
@@ -60,6 +74,7 @@ type dashboard struct {
 	width    int
 	height   int
 	ready    bool
+	dragging *viewportTarget
 }
 
 var (
@@ -94,18 +109,29 @@ func (m dashboard) Init() tea.Cmd { return spinner.Tick }
 func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		followLogs := !m.ready || m.viewport.AtBottom()
+		followJobs := make(map[int]bool, len(m.jobs))
+		for number, jobViewport := range m.jobs {
+			followJobs[number] = jobViewport.AtBottom()
+		}
 		m.width, m.height = msg.Width, msg.Height
 		logHeight := max(3, msg.Height/3)
 		if !m.ready {
-			m.viewport = viewport.New(max(1, msg.Width-2), max(1, logHeight-3))
+			m.viewport = viewport.New(max(1, msg.Width-3), max(1, logHeight-3))
 			m.ready = true
 		} else {
-			m.viewport.Width, m.viewport.Height = max(1, msg.Width-2), max(1, logHeight-3)
+			m.viewport.Width, m.viewport.Height = max(1, msg.Width-3), max(1, logHeight-3)
 		}
 		for number, jobViewport := range m.jobs {
 			jobViewport.Width = max(1, msg.Width/jobGridColumns-7)
 			jobViewport.Height = max(1, jobCardHeight-4)
+			if followJobs[number] {
+				jobViewport.GotoBottom()
+			}
 			m.jobs[number] = jobViewport
+		}
+		if followLogs {
+			m.viewport.GotoBottom()
 		}
 	case snapshotMsg:
 		m.snapshot = GlorpSnapshot(msg)
@@ -126,11 +152,15 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.jobs[job.Number] = jobViewport
 		}
 	case logMsg:
+		followOutput := m.viewport.AtBottom()
 		m.logs = append(m.logs, string(msg))
 		if len(m.logs) > 200 {
 			m.logs = m.logs[len(m.logs)-200:]
 		}
 		m.viewport.SetContent(strings.Join(m.logs, "\n"))
+		if followOutput {
+			m.viewport.GotoBottom()
+		}
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -149,8 +179,125 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, cmd
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	}
 	return m, nil
+}
+
+func (m dashboard) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	event := tea.MouseEvent(msg)
+	if event.Action == tea.MouseActionRelease {
+		m.dragging = nil
+		return m, nil
+	}
+	if m.dragging != nil && event.Action == tea.MouseActionMotion {
+		m.scrollToMouse(*m.dragging, event.Y)
+		return m, nil
+	}
+	region, ok := m.viewportAt(event.X, event.Y)
+	if !ok {
+		return m, nil
+	}
+	view := m.viewportFor(region.target)
+	if event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft {
+		if event.X == region.contentEnd {
+			target := region.target
+			m.dragging = &target
+			m.scrollToMouse(target, event.Y)
+			return m, nil
+		}
+		if !view.AtBottom() && event.Y == region.y+region.height-1 && event.X >= region.contentEnd-moreIndicatorWidth {
+			view.GotoBottom()
+			m.setViewport(region.target, view)
+		}
+		return m, nil
+	}
+	if event.IsWheel() {
+		updated, cmd := view.Update(msg)
+		m.setViewport(region.target, updated)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *dashboard) scrollToMouse(target viewportTarget, mouseY int) {
+	region, ok := m.regionFor(target)
+	if !ok {
+		return
+	}
+	view := m.viewportFor(target)
+	maxOffset := max(0, view.TotalLineCount()-view.Height)
+	row := min(max(mouseY-region.y, 0), max(0, region.height-1))
+	if region.height > 1 {
+		view.SetYOffset((row*maxOffset + (region.height-1)/2) / (region.height - 1))
+	} else {
+		view.SetYOffset(maxOffset)
+	}
+	m.setViewport(target, view)
+}
+
+func (m dashboard) viewportFor(target viewportTarget) viewport.Model {
+	if target.logs {
+		return m.viewport
+	}
+	return m.jobs[target.jobNumber]
+}
+
+func (m *dashboard) setViewport(target viewportTarget, view viewport.Model) {
+	if target.logs {
+		m.viewport = view
+		return
+	}
+	m.jobs[target.jobNumber] = view
+}
+
+func (m dashboard) viewportAt(x, y int) (viewportRegion, bool) {
+	for _, region := range m.viewportRegions() {
+		if x >= region.x && x < region.x+region.width && y >= region.y && y < region.y+region.height {
+			return region, true
+		}
+	}
+	return viewportRegion{}, false
+}
+
+func (m dashboard) regionFor(target viewportTarget) (viewportRegion, bool) {
+	for _, region := range m.viewportRegions() {
+		if region.target == target {
+			return region, true
+		}
+	}
+	return viewportRegion{}, false
+}
+
+func (m dashboard) viewportRegions() []viewportRegion {
+	regions := make([]viewportRegion, 0, len(m.snapshot.Jobs)+1)
+	cardRenderWidth := lipgloss.Width(panel.Copy().Padding(0, 1).Width(jobCardWidth(m.width)).Height(jobCardHeight).Render(""))
+	for i, job := range m.snapshot.Jobs {
+		if job.Status == "complete" {
+			continue
+		}
+		view, ok := m.jobs[job.Number]
+		if !ok {
+			continue
+		}
+		x := (i%jobGridColumns)*(cardRenderWidth+dashboardGap) + 1
+		y := (i/jobGridColumns)*(jobCardHeight+dashboardGap) + 3
+		regions = append(regions, viewportRegion{
+			target: viewportTarget{jobNumber: job.Number}, x: x, y: y,
+			width: view.Width + 1, height: view.Height, contentEnd: x + view.Width,
+		})
+	}
+	gridRows := (len(m.snapshot.Jobs) + jobGridColumns - 1) / jobGridColumns
+	logsY := 1
+	if gridRows > 0 {
+		logsY = gridRows*jobCardHeight + (gridRows-1)*dashboardGap + dashboardGap + 1
+	}
+	regions = append(regions, viewportRegion{
+		target: viewportTarget{logs: true}, x: 0, y: logsY,
+		width: m.viewport.Width + 1, height: m.viewport.Height, contentEnd: m.viewport.Width,
+	})
+	return regions
 }
 
 func (m dashboard) View() string {
@@ -164,7 +311,7 @@ func (m dashboard) View() string {
 		if job.Log == "" {
 			jobViewport.SetContent("waiting for output...")
 		}
-		progress := jobViewport.View()
+		progress := renderViewport(jobViewport)
 		if status == "complete" {
 			progress = done.Render("✅")
 		}
@@ -192,7 +339,7 @@ func (m dashboard) View() string {
 	}
 	grid := joinVerticalWithGap(rows, dashboardGap)
 	logHeight := max(3, m.height/3)
-	logs := logPanel.Copy().Width(max(1, m.width-2)).Height(max(1, logHeight-2)).Render(muted.Render("Logs") + "\n" + m.viewport.View())
+	logs := logPanel.Copy().Width(max(1, m.width-2)).Height(max(1, logHeight-2)).Render(muted.Render("Logs") + "\n" + renderViewport(m.viewport))
 	counts := renderJobCounts(m.snapshot)
 	tokens := quotaText(m.snapshot)
 	push := "polling every " + m.snapshot.Interval.String()
@@ -207,7 +354,48 @@ func (m dashboard) View() string {
 	}
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
 	footer := renderStatusBar([]string{counts, tokens, push, targets})
-	return joinVerticalWithGap([]string{grid, logs, footer}, dashboardGap)
+	sections := []string{logs, footer}
+	if grid != "" {
+		sections = append([]string{grid}, sections...)
+	}
+	return joinVerticalWithGap(sections, dashboardGap)
+}
+
+const moreIndicator = "more ↓"
+
+var moreIndicatorWidth = lipgloss.Width(moreIndicator)
+
+func renderViewport(view viewport.Model) string {
+	content := view.View()
+	if !view.AtBottom() {
+		lines := strings.Split(content, "\n")
+		last := len(lines) - 1
+		prefixWidth := max(0, view.Width-moreIndicatorWidth)
+		lines[last] = ansi.Truncate(lines[last], prefixWidth, "") + active.Render(moreIndicator)
+		content = strings.Join(lines, "\n")
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, content, renderScrollbar(view))
+}
+
+func renderScrollbar(view viewport.Model) string {
+	height := max(1, view.Height)
+	total := max(1, view.TotalLineCount())
+	thumbHeight := height
+	if total > height {
+		thumbHeight = max(1, height*height/total)
+	}
+	thumbTop := 0
+	if travel := height - thumbHeight; travel > 0 {
+		thumbTop = int(view.ScrollPercent()*float64(travel) + 0.5)
+	}
+	lines := make([]string, height)
+	for i := range lines {
+		lines[i] = muted.Render("│")
+		if i >= thumbTop && i < thumbTop+thumbHeight {
+			lines[i] = active.Render("█")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderJobCounts(snapshot GlorpSnapshot) string {
@@ -283,7 +471,7 @@ type TerminalUI struct {
 
 func NewTerminalUI() *TerminalUI {
 	ui := &TerminalUI{}
-	ui.program = tea.NewProgram(newDashboard(), tea.WithAltScreen())
+	ui.program = tea.NewProgram(newDashboard(), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	return ui
 }
 func (ui *TerminalUI) Run(ctx context.Context) error {

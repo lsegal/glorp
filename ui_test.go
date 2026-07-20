@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 )
 
@@ -63,6 +66,153 @@ func TestDashboardFollowsStreamingAgentOutput(t *testing.T) {
 	if !m.jobs[7].AtBottom() || !strings.Contains(m.View(), "latest progress") {
 		t.Fatalf("dashboard did not follow the latest agent output: %s", m.View())
 	}
+}
+
+func TestDashboardPausesAgentAutoscrollAndMoreReturnsToBottom(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	log := numberedLines(14)
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "UI", Status: "active", Log: log,
+	}}}))
+	m = updated.(dashboard)
+	region, ok := m.regionFor(viewportTarget{jobNumber: 7})
+	if !ok {
+		t.Fatal("agent viewport region was not found")
+	}
+	updated, _ = m.Update(tea.MouseMsg{X: region.x, Y: region.y, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m = updated.(dashboard)
+	pausedOffset := m.jobs[7].YOffset
+	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "UI", Status: "active", Log: log + "\nnew output",
+	}}}))
+	m = updated.(dashboard)
+	if m.jobs[7].YOffset != pausedOffset || m.jobs[7].AtBottom() {
+		t.Fatalf("agent viewport resumed autoscroll: offset = %d, want %d", m.jobs[7].YOffset, pausedOffset)
+	}
+	if !strings.Contains(m.View(), moreIndicator) {
+		t.Fatalf("paused agent viewport did not show %q: %s", moreIndicator, m.View())
+	}
+	region, _ = m.regionFor(viewportTarget{jobNumber: 7})
+	updated, _ = m.Update(tea.MouseMsg{
+		X: region.contentEnd - moreIndicatorWidth, Y: region.y + region.height - 1,
+		Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+	})
+	m = updated.(dashboard)
+	if !m.jobs[7].AtBottom() {
+		t.Fatal("clicking the more indicator did not return the agent viewport to the bottom")
+	}
+}
+
+func TestDashboardLogViewportBottomLock(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(dashboard)
+	for i := 0; i < 12; i++ {
+		updated, _ = m.Update(logMsg(fmt.Sprintf("log %d", i)))
+		m = updated.(dashboard)
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatal("log viewport did not follow appended output")
+	}
+	region, _ := m.regionFor(viewportTarget{logs: true})
+	updated, _ = m.Update(tea.MouseMsg{X: region.x, Y: region.y, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m = updated.(dashboard)
+	pausedOffset := m.viewport.YOffset
+	updated, _ = m.Update(logMsg("new output"))
+	m = updated.(dashboard)
+	if m.viewport.YOffset != pausedOffset || m.viewport.AtBottom() {
+		t.Fatalf("log viewport resumed autoscroll: offset = %d, want %d", m.viewport.YOffset, pausedOffset)
+	}
+}
+
+func TestDashboardMouseWheelOnlyScrollsViewportUnderPointer(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
+		{Number: 7, Title: "first", Status: "active", Started: time.Unix(2, 0), Log: numberedLines(14)},
+		{Number: 8, Title: "second", Status: "active", Started: time.Unix(1, 0), Log: numberedLines(14)},
+	}}))
+	m = updated.(dashboard)
+	firstBefore, secondBefore, logsBefore := m.jobs[7].YOffset, m.jobs[8].YOffset, m.viewport.YOffset
+	region, _ := m.regionFor(viewportTarget{jobNumber: 7})
+	updated, _ = m.Update(tea.MouseMsg{X: region.x, Y: region.y, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m = updated.(dashboard)
+	if m.jobs[7].YOffset >= firstBefore {
+		t.Fatal("pointed agent viewport did not scroll up")
+	}
+	if m.jobs[8].YOffset != secondBefore || m.viewport.YOffset != logsBefore {
+		t.Fatal("mouse wheel scrolled a viewport that was not under the pointer")
+	}
+}
+
+func TestDashboardMouseRegionsAlignWithRenderedScrollbars(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
+		{Number: 7, Title: "first", Status: "active", Started: time.Unix(2, 0), Log: numberedLines(14)},
+		{Number: 8, Title: "second", Status: "active", Started: time.Unix(1, 0), Log: numberedLines(14)},
+	}}))
+	m = updated.(dashboard)
+	updated, _ = m.Update(logMsg("dashboard ready"))
+	m = updated.(dashboard)
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	for _, target := range []viewportTarget{{jobNumber: 7}, {jobNumber: 8}, {logs: true}} {
+		region, ok := m.regionFor(target)
+		if !ok || region.y >= len(lines) {
+			t.Fatalf("viewport region %+v is outside the rendered dashboard", target)
+		}
+		runes := []rune(lines[region.y])
+		if region.contentEnd >= len(runes) || (runes[region.contentEnd] != '│' && runes[region.contentEnd] != '█') {
+			t.Fatalf("viewport region %+v points to %q instead of its rendered scrollbar", target, lines[region.y])
+		}
+	}
+}
+
+func TestDashboardScrollbarCanBeDragged(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "UI", Status: "active", Log: numberedLines(30),
+	}}}))
+	m = updated.(dashboard)
+	region, _ := m.regionFor(viewportTarget{jobNumber: 7})
+	updated, _ = m.Update(tea.MouseMsg{X: region.contentEnd, Y: region.y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	m = updated.(dashboard)
+	if !m.jobs[7].AtTop() || m.dragging == nil {
+		t.Fatal("pressing the top of the scrollbar did not start a drag at the top")
+	}
+	updated, _ = m.Update(tea.MouseMsg{X: region.contentEnd, Y: region.y + region.height - 1, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion})
+	m = updated.(dashboard)
+	if !m.jobs[7].AtBottom() {
+		t.Fatal("dragging the scrollbar to the last row did not reach the bottom")
+	}
+	updated, _ = m.Update(tea.MouseMsg{X: region.contentEnd, Y: region.y + region.height - 1, Button: tea.MouseButtonNone, Action: tea.MouseActionRelease})
+	if updated.(dashboard).dragging != nil {
+		t.Fatal("releasing the scrollbar did not stop the drag")
+	}
+}
+
+func TestRenderViewportAlwaysShowsScrollbar(t *testing.T) {
+	view := viewport.New(10, 3)
+	view.SetContent("one line")
+	rendered := renderViewport(view)
+	if !strings.Contains(rendered, "█") {
+		t.Fatalf("unscrollable viewport did not render a scrollbar: %q", rendered)
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(line) != 11 {
+			t.Fatalf("viewport line width = %d, want 11: %q", lipgloss.Width(line), line)
+		}
+	}
+}
+
+func numberedLines(count int) string {
+	lines := make([]string, count)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
