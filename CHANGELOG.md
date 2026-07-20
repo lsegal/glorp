@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use the owner type encoded in GitHub Project URLs when polling, avoiding intermittent GitHub CLI owner-detection failures.
 - Create individual follow-up issues for unresolved TODOs and known issues after merging an issue-fix pull request, preserving origin links and project membership.
 - Preserve completed agents' viewport scrollback and scroll position in the dashboard.
 - Open issue-fix pull requests as linked drafts immediately, push development checkpoints every five minutes, and mark them ready when implementation is complete.

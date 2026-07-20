@@ -242,6 +242,48 @@ type projectView struct {
 	ID string `json:"id"`
 }
 
+type projectItemsPage struct {
+	Data struct {
+		User         projectItemsOwner `json:"user"`
+		Organization projectItemsOwner `json:"organization"`
+	} `json:"data"`
+}
+
+type projectItemsOwner struct {
+	Project projectItemsProject `json:"projectV2"`
+}
+
+type projectItemsProject struct {
+	Items struct {
+		Nodes    []projectGraphQLItem `json:"nodes"`
+		PageInfo struct {
+			HasNextPage bool   `json:"hasNextPage"`
+			EndCursor   string `json:"endCursor"`
+		} `json:"pageInfo"`
+	} `json:"items"`
+}
+
+type projectGraphQLItem struct {
+	ID               string `json:"id"`
+	FieldValueByName struct {
+		Name string `json:"name"`
+	} `json:"fieldValueByName"`
+	Content struct {
+		Type       string    `json:"__typename"`
+		Number     int       `json:"number"`
+		Title      string    `json:"title"`
+		Body       string    `json:"body"`
+		State      string    `json:"state"`
+		CreatedAt  time.Time `json:"createdAt"`
+		Repository struct {
+			NameWithOwner string `json:"nameWithOwner"`
+		} `json:"repository"`
+		Labels struct {
+			Nodes []IssueLabel `json:"nodes"`
+		} `json:"labels"`
+	} `json:"content"`
+}
+
 type repositoryProjectItem struct {
 	ID      string `json:"id"`
 	Project struct {
@@ -299,6 +341,19 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 	target, err := parseTarget(repo)
 	if err != nil {
 		return nil, err
+	}
+	if target.isProject && target.projectOwnerType != "" {
+		items, err := g.listProjectItems(ctx, target, g.Filter, g.AllIssues)
+		if err != nil {
+			return nil, err
+		}
+		issues := issuesFromProjectItems(items)
+		for i := range issues {
+			if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+				return nil, err
+			}
+		}
+		return issues, nil
 	}
 	args := issueListArgs(repo, g.Filter, g.AllIssues)
 	if target.isProject {
@@ -364,11 +419,101 @@ func parseTarget(value string) (target, error) {
 
 func projectListArgs(t target, filter string, allIssues bool) []string {
 	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
+	return append(args, "--query", projectItemQuery(filter, allIssues))
+}
+
+func projectItemQuery(filter string, allIssues bool) string {
 	query := "is:issue is:open"
 	if !allIssues && filter != "" && filter != defaultIssueFilter {
 		query += " " + filter
 	}
-	return append(args, "--query", query)
+	return query
+}
+
+func (g GHCLI) listProjectItems(ctx context.Context, target target, filter string, allIssues bool) ([]projectItem, error) {
+	ownerField := target.projectOwnerType
+	if ownerField == "users" {
+		ownerField = "user"
+	} else if ownerField == "orgs" {
+		ownerField = "organization"
+	} else {
+		return nil, fmt.Errorf("unknown project owner type %q", target.projectOwnerType)
+	}
+	query := fmt.Sprintf(`query($login:String!,$number:Int!,$first:Int!,$after:String,$itemQuery:String!,$statusField:String!){
+  %s(login:$login){
+    projectV2(number:$number){
+      items(first:$first,after:$after,query:$itemQuery){
+        nodes{
+          id
+          fieldValueByName(name:$statusField){... on ProjectV2ItemFieldSingleSelectValue{name}}
+          content{
+            __typename
+            ... on Issue{number title body state createdAt repository{nameWithOwner} labels(first:100){nodes{name}}}
+          }
+        }
+        pageInfo{hasNextPage endCursor}
+      }
+    }
+  }
+}`, ownerField)
+
+	var items []projectItem
+	cursor := ""
+	for len(items) < 1000 {
+		args := []string{"api", "graphql", "-f", "query=" + query, "-F", "login=" + target.owner, "-F", "number=" + target.projectID, "-F", "first=100", "-F", "itemQuery=" + projectItemQuery(filter, allIssues), "-F", "statusField=Status"}
+		if cursor != "" {
+			args = append(args, "-F", "after="+cursor)
+		}
+		output, err := g.run(ctx, args...)
+		if err != nil {
+			return nil, projectItemListError(output, err)
+		}
+		var page projectItemsPage
+		if err := json.Unmarshal(output, &page); err != nil {
+			return nil, fmt.Errorf("decode project items: %w", err)
+		}
+		project := page.Data.User.Project
+		if ownerField == "organization" {
+			project = page.Data.Organization.Project
+		}
+		for _, item := range project.Items.Nodes {
+			if len(items) == 1000 {
+				break
+			}
+			converted := projectItem{ID: item.ID, Status: item.FieldValueByName.Name}
+			if item.Content.Type == "Issue" {
+				converted.Content = &projectContent{Issue: Issue{
+					Number:     item.Content.Number,
+					Repository: item.Content.Repository.NameWithOwner,
+					Title:      item.Content.Title,
+					Body:       item.Content.Body,
+					State:      item.Content.State,
+					CreatedAt:  item.Content.CreatedAt,
+					Labels:     item.Content.Labels.Nodes,
+				}, Type: "Issue"}
+			}
+			items = append(items, converted)
+		}
+		if !project.Items.PageInfo.HasNextPage {
+			return items, nil
+		}
+		if project.Items.PageInfo.EndCursor == "" || project.Items.PageInfo.EndCursor == cursor {
+			return nil, fmt.Errorf("list project items: pagination did not advance")
+		}
+		cursor = project.Items.PageInfo.EndCursor
+	}
+	return items, nil
+}
+
+func projectItemListError(output []byte, err error) error {
+	detail := strings.TrimSpace(string(output))
+	if strings.Contains(detail, "missing required scopes") && strings.Contains(detail, "read:project") {
+		return fmt.Errorf("list project items: %w; authenticate with the read:project scope using `gh auth refresh -s read:project`", err)
+	}
+	if detail != "" {
+		return fmt.Errorf("list project items: %w: %s", err, detail)
+	}
+	return fmt.Errorf("list project items: %w", err)
 }
 
 func decodeIssues(data []byte, err error) ([]Issue, error) {
