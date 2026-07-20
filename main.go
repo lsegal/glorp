@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -666,11 +667,11 @@ func (r CommandRunner) RunWithOutput(ctx context.Context, issue Issue, output io
 
 func (r CommandRunner) AgentName() string { return r.Agent }
 
-func (r CommandRunner) RunSession(ctx context.Context, issue Issue, session AgentSession, updateSession func(string)) error {
+func (r CommandRunner) RunSession(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession)) error {
 	return r.run(ctx, issue, session, updateSession, nil)
 }
 
-func (r CommandRunner) RunSessionWithOutput(ctx context.Context, issue Issue, session AgentSession, updateSession func(string), output io.Writer) error {
+func (r CommandRunner) RunSessionWithOutput(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession), output io.Writer) error {
 	return r.run(ctx, issue, session, updateSession, output)
 }
 
@@ -687,17 +688,21 @@ func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.C
 	return cmd
 }
 
-type sessionIDCaptureWriter struct {
-	mu        sync.Mutex
-	output    io.Writer
-	buffer    []byte
-	onSession func(string)
-	captured  bool
+type sessionMetadataCaptureWriter struct {
+	mu               sync.Mutex
+	output           io.Writer
+	buffer           []byte
+	onUpdate         func(AgentSession)
+	captureSession   bool
+	sessionCaptured  bool
+	checkoutCaptured bool
 }
 
 var codexSessionIDPattern = regexp.MustCompile(`(?i)session id:\s*([0-9a-f]{8}-[0-9a-f-]{27,})`)
 
-func (w *sessionIDCaptureWriter) Write(p []byte) (int, error) {
+const checkoutDirectoryMarker = "GLORP_CHECKOUT_DIRECTORY="
+
+func (w *sessionMetadataCaptureWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, err := w.output.Write(p); err != nil {
@@ -715,19 +720,34 @@ func (w *sessionIDCaptureWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *sessionIDCaptureWriter) captureLine(line string) {
-	if w.captured {
+func (w *sessionMetadataCaptureWriter) captureLine(line string) {
+	if w.captureSession && !w.sessionCaptured {
+		match := codexSessionIDPattern.FindStringSubmatch(line)
+		if len(match) == 2 {
+			w.sessionCaptured = true
+			w.onUpdate(AgentSession{ID: match[1]})
+		}
+	}
+	if w.checkoutCaptured {
 		return
 	}
-	match := codexSessionIDPattern.FindStringSubmatch(line)
-	if len(match) != 2 {
+	marker := strings.Index(line, checkoutDirectoryMarker)
+	if marker < 0 {
 		return
 	}
-	w.captured = true
-	w.onSession(match[1])
+	checkout := strings.TrimSpace(line[marker+len(checkoutDirectoryMarker):])
+	if !filepath.IsAbs(checkout) {
+		return
+	}
+	info, err := os.Stat(checkout)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	w.checkoutCaptured = true
+	w.onUpdate(AgentSession{CheckoutDirectory: checkout})
 }
 
-func (w *sessionIDCaptureWriter) Flush() {
+func (w *sessionMetadataCaptureWriter) Flush() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.buffer) != 0 {
@@ -746,7 +766,7 @@ func (r CommandRunner) binary(agent string) string {
 	return r.Binary
 }
 
-func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSession, updateSession func(string), jobOutput io.Writer) error {
+func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession), jobOutput io.Writer) error {
 	agent := session.Agent
 	if agent == "" {
 		agent = r.Agent
@@ -765,15 +785,18 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 	if r.Output != nil {
 		agentOutput = io.MultiWriter(agentOutput, r.Output)
 	}
-	var sessionOutput *sessionIDCaptureWriter
-	if agent == "codex" && !session.Resume && updateSession != nil {
-		sessionOutput = &sessionIDCaptureWriter{output: agentOutput, onSession: updateSession}
-		agentOutput = sessionOutput
+	var metadataOutput *sessionMetadataCaptureWriter
+	if updateSession != nil {
+		metadataOutput = &sessionMetadataCaptureWriter{
+			output: agentOutput, onUpdate: updateSession,
+			captureSession: agent == "codex" && !session.Resume,
+		}
+		agentOutput = metadataOutput
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := cmd.Run()
-	if sessionOutput != nil {
-		sessionOutput.Flush()
+	if metadataOutput != nil {
+		metadataOutput.Flush()
 	}
 	if runErr != nil {
 		repo := r.Repo

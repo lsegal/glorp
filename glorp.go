@@ -77,10 +77,10 @@ type AgentSession struct {
 	Resume            bool
 }
 type SessionAgentRunner interface {
-	RunSession(context.Context, Issue, AgentSession, func(string)) error
+	RunSession(context.Context, Issue, AgentSession, func(AgentSession)) error
 }
 type SessionAgentOutputRunner interface {
-	RunSessionWithOutput(context.Context, Issue, AgentSession, func(string), io.Writer) error
+	RunSessionWithOutput(context.Context, Issue, AgentSession, func(AgentSession), io.Writer) error
 }
 type AgentIdentifier interface {
 	AgentName() string
@@ -214,10 +214,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 	var workMu sync.Mutex
 	active := make(map[string]string)
 	jobs := make(map[string]JobSnapshot)
-	checkoutDirectory, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("get agent checkout directory: %w", err)
-	}
 	issueCounts := make(map[string]int)
 	var jobMu sync.Mutex
 	publish := func() {
@@ -328,7 +324,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if identified, ok := w.Runner.(AgentIdentifier); ok {
 					session.Agent = identified.AgentName()
 				}
-				session.CheckoutDirectory = checkoutDirectory
 				// Claude accepts a caller-provided session ID. Other runners retain
 				// the historical generated ID unless they replace it after launch.
 				if session.Agent != "codex" {
@@ -401,16 +396,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 					jobMu.Unlock()
 					publish()
 				}}
-				updateSession := func(sessionID string) {
-					if sessionID == "" {
+				updateSession := func(update AgentSession) {
+					if update.ID == "" && update.CheckoutDirectory == "" {
 						return
 					}
 					workMu.Lock()
 					key := issueKey(i)
 					state := work[key]
-					state.SessionID = sessionID
+					if update.ID != "" {
+						state.SessionID = update.ID
+						active[key] = update.ID
+					}
+					if update.CheckoutDirectory != "" {
+						state.CheckoutDirectory = update.CheckoutDirectory
+					}
 					work[key] = state
-					active[key] = sessionID
 					saveErr := saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
 					if saveErr != nil {
@@ -418,7 +418,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 					}
 					jobMu.Lock()
 					job := jobs[key]
-					job.SessionID = sessionID
+					if update.ID != "" {
+						job.SessionID = update.ID
+					}
+					if update.CheckoutDirectory != "" {
+						job.CheckoutDirectory = update.CheckoutDirectory
+					}
 					jobs[key] = job
 					jobMu.Unlock()
 					publish()

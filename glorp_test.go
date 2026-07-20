@@ -40,26 +40,36 @@ type fakeRunner struct {
 	release     chan struct{}
 }
 
-type fakeOutputRunner struct{}
+type fakeOutputRunner struct {
+	reported AgentSession
+}
 
+func (fakeOutputRunner) AgentName() string                { return "codex" }
 func (fakeOutputRunner) Run(context.Context, Issue) error { return nil }
 
-func (fakeOutputRunner) RunWithOutput(_ context.Context, _ Issue, output io.Writer) error {
+func (f fakeOutputRunner) RunWithOutput(_ context.Context, _ Issue, output io.Writer) error {
 	_, err := io.WriteString(output, "agent output\n")
 	return err
+}
+
+func (f fakeOutputRunner) RunSessionWithOutput(_ context.Context, _ Issue, _ AgentSession, update func(AgentSession), output io.Writer) error {
+	if f.reported.ID != "" || f.reported.CheckoutDirectory != "" {
+		update(f.reported)
+	}
+	return f.RunWithOutput(context.Background(), Issue{}, output)
 }
 
 type fakeSessionRunner struct {
 	agent    string
 	sessions chan AgentSession
-	reported string
+	reported AgentSession
 }
 
 func (f *fakeSessionRunner) AgentName() string                { return f.agent }
 func (f *fakeSessionRunner) Run(context.Context, Issue) error { return nil }
-func (f *fakeSessionRunner) RunSession(ctx context.Context, _ Issue, session AgentSession, update func(string)) error {
+func (f *fakeSessionRunner) RunSession(ctx context.Context, _ Issue, session AgentSession, update func(AgentSession)) error {
 	f.sessions <- session
-	if f.reported != "" {
+	if f.reported.ID != "" || f.reported.CheckoutDirectory != "" {
 		update(f.reported)
 	}
 	<-ctx.Done()
@@ -277,11 +287,12 @@ func TestGlorpShowsAgentOutputInJobSnapshot(t *testing.T) {
 }
 
 func TestGlorpPreservesAgentMetadataAfterCompletion(t *testing.T) {
+	checkout := t.TempDir()
 	reporter := &snapshotReporter{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
 		Issues: &fakeSource{batches: [][]Issue{{{Number: 1, Title: "bug"}}}},
-		Runner: fakeOutputRunner{}, UI: reporter,
+		Runner: fakeOutputRunner{reported: AgentSession{ID: "session-1", CheckoutDirectory: checkout}}, UI: reporter,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -298,7 +309,7 @@ func TestGlorpPreservesAgentMetadataAfterCompletion(t *testing.T) {
 	for _, snapshot := range reporter.snapshots {
 		for _, job := range snapshot.Jobs {
 			if job.Number == 1 && job.Status == "complete" {
-				if job.CheckoutDirectory == "" || job.SessionID == "" {
+				if job.CheckoutDirectory != checkout || job.SessionID != "session-1" {
 					t.Fatalf("completed job metadata was not preserved: %+v", job)
 				}
 				return
@@ -588,11 +599,19 @@ func TestCommandRunnerRegeneratesWorkWhenCheckoutIsMissing(t *testing.T) {
 	}
 }
 
-func TestSessionIDCaptureWriterPreservesOutputAndCapturesCodexSession(t *testing.T) {
+func TestSessionMetadataCaptureWriterPreservesOutputAndCapturesCodexSessionAndCheckout(t *testing.T) {
+	checkout := t.TempDir()
 	var output bytes.Buffer
-	var sessionID string
-	w := &sessionIDCaptureWriter{output: &output, onSession: func(id string) { sessionID = id }}
-	chunks := []string{"OpenAI Codex\nsession ", "id: 0199a213-81c0-7800-8aa1-bbab2a035a53\nworking\n"}
+	var updates []AgentSession
+	w := &sessionMetadataCaptureWriter{
+		output: &output, captureSession: true,
+		onUpdate: func(update AgentSession) { updates = append(updates, update) },
+	}
+	chunks := []string{
+		"OpenAI Codex\nsession ",
+		"id: 0199a213-81c0-7800-8aa1-bbab2a035a53\nworking\nGLORP_CHECKOUT_",
+		"DIRECTORY=" + checkout + "\n",
+	}
 	for _, chunk := range chunks {
 		if _, err := w.Write([]byte(chunk)); err != nil {
 			t.Fatal(err)
@@ -601,8 +620,22 @@ func TestSessionIDCaptureWriterPreservesOutputAndCapturesCodexSession(t *testing
 	if got, want := output.String(), strings.Join(chunks, ""); got != want {
 		t.Fatalf("forwarded output = %q, want %q", got, want)
 	}
-	if sessionID != "0199a213-81c0-7800-8aa1-bbab2a035a53" {
-		t.Fatalf("captured session ID = %q", sessionID)
+	w.Flush()
+	want := []AgentSession{{ID: "0199a213-81c0-7800-8aa1-bbab2a035a53"}, {CheckoutDirectory: checkout}}
+	if !reflect.DeepEqual(updates, want) {
+		t.Fatalf("captured metadata = %#v, want %#v", updates, want)
+	}
+}
+
+func TestSessionMetadataCaptureWriterIgnoresInvalidCheckout(t *testing.T) {
+	var updates []AgentSession
+	w := &sessionMetadataCaptureWriter{
+		output:   io.Discard,
+		onUpdate: func(update AgentSession) { updates = append(updates, update) },
+	}
+	_, _ = io.WriteString(w, "GLORP_CHECKOUT_DIRECTORY=relative/path\nGLORP_CHECKOUT_DIRECTORY="+filepath.Join(t.TempDir(), "missing")+"\n")
+	if len(updates) != 0 {
+		t.Fatalf("invalid checkout metadata was captured: %#v", updates)
 	}
 }
 
@@ -674,7 +707,11 @@ func TestGlorpResumesPersistedSessionWithOriginalAgent(t *testing.T) {
 func TestGlorpPersistsSessionReportedByCodex(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
-	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1), reported: "codex-session"}
+	checkout := filepath.Join(dir, "glorp-gh-fix-7")
+	if err := os.Mkdir(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1), reported: AgentSession{ID: "codex-session", CheckoutDirectory: checkout}}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: runner,
@@ -685,7 +722,7 @@ func TestGlorpPersistsSessionReportedByCodex(t *testing.T) {
 
 	select {
 	case session := <-runner.sessions:
-		if session.Resume || session.ID != "" || session.Agent != "codex" {
+		if session.Resume || session.ID != "" || session.Agent != "codex" || session.CheckoutDirectory != "" {
 			t.Fatalf("new Codex session = %#v", session)
 		}
 	case <-time.After(time.Second):
@@ -694,7 +731,7 @@ func TestGlorpPersistsSessionReportedByCodex(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		state, err := loadWorkState(statePath)
-		if err == nil && state[7].SessionID == "codex-session" && state[7].Agent == "codex" {
+		if err == nil && state[7].SessionID == "codex-session" && state[7].Agent == "codex" && state[7].CheckoutDirectory == checkout {
 			cancel()
 			if err := <-done; err != nil {
 				t.Fatal(err)
