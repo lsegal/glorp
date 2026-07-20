@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Open issue-fix pull requests as linked drafts immediately, push development checkpoints every five minutes, and mark them ready when implementation is complete.
+- Poll every 90 seconds as a fallback in push mode to reduce GitHub CLI load.
 
 ## v1.0.3 - 2026-07-20
 
