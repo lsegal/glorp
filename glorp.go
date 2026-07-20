@@ -19,7 +19,10 @@ const (
 	stateFilePollInterval = 100 * time.Millisecond
 	stateReloadDebounce   = 5 * time.Second
 	pushFallbackInterval  = 90 * time.Second
+	workClosureInterval   = 10 * time.Second
 )
+
+var errWorkClosedByUser = errors.New("work closed by user")
 
 type Issue struct {
 	Number        int               `json:"number"`
@@ -55,6 +58,21 @@ type IssueDependency struct {
 }
 type IssueSource interface {
 	ListIssues(context.Context, string) ([]Issue, error)
+}
+
+type PullRequestWorkState struct {
+	Number int
+	State  string
+	Merged bool
+}
+
+type OriginatingWorkState struct {
+	IssueState   string
+	PullRequests []PullRequestWorkState
+}
+
+type WorkClosureChecker interface {
+	OriginatingWorkState(context.Context, string, int) (OriginatingWorkState, error)
 }
 type LabelEnsurer interface {
 	EnsureLabels(context.Context, string) error
@@ -104,11 +122,13 @@ type Glorp struct {
 	Out         io.Writer
 	// fallbackInterval overrides the push-mode polling fallback in tests.
 	fallbackInterval time.Duration
-	Labels           LabelEnsurer
-	Status           IssueStatuser
-	UI               UIReporter
-	Quota            func(context.Context) string
-	logMu            sync.Mutex
+	// closureInterval overrides active-work closure polling in tests.
+	closureInterval time.Duration
+	Labels          LabelEnsurer
+	Status          IssueStatuser
+	UI              UIReporter
+	Quota           func(context.Context) string
+	logMu           sync.Mutex
 }
 
 func (w *Glorp) periodicPollInterval() time.Duration {
@@ -119,6 +139,73 @@ func (w *Glorp) periodicPollInterval() time.Duration {
 		return pushFallbackInterval
 	}
 	return w.Interval
+}
+
+func (w *Glorp) activeWorkClosureInterval() time.Duration {
+	if w.closureInterval > 0 {
+		return w.closureInterval
+	}
+	return workClosureInterval
+}
+
+func (w *Glorp) watchForClosedWork(ctx context.Context, checker WorkClosureChecker, issue Issue, cancel context.CancelCauseFunc, ready chan<- struct{}) {
+	repo := issueRepository(issue.Target, issue)
+	previous, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
+	if err != nil && ctx.Err() == nil {
+		w.logf("issue #%d initial closure check failed: %v", issue.Number, err)
+	}
+	close(ready)
+	if reason := closedWorkReason(OriginatingWorkState{}, previous, issue.Number); err == nil && strings.EqualFold(previous.IssueState, "closed") && reason != "" {
+		cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
+		w.logf("issue #%d stopping agent: %s", issue.Number, reason)
+		cancel(cause)
+		return
+	}
+	ticker := time.NewTicker(w.activeWorkClosureInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			current, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
+			if err != nil {
+				if ctx.Err() == nil {
+					w.logf("issue #%d closure check failed: %v", issue.Number, err)
+				}
+				continue
+			}
+			if reason := closedWorkReason(previous, current, issue.Number); reason != "" {
+				cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
+				w.logf("issue #%d stopping agent: %s", issue.Number, reason)
+				cancel(cause)
+				return
+			}
+			previous = current
+		}
+	}
+}
+
+func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) string {
+	if strings.EqualFold(current.IssueState, "closed") && !strings.EqualFold(previous.IssueState, "closed") {
+		for _, pullRequest := range current.PullRequests {
+			if pullRequest.Merged {
+				return ""
+			}
+		}
+		return fmt.Sprintf("issue #%d was closed without a merge", issueNumber)
+	}
+	previousPullRequests := make(map[int]PullRequestWorkState, len(previous.PullRequests))
+	for _, pullRequest := range previous.PullRequests {
+		previousPullRequests[pullRequest.Number] = pullRequest
+	}
+	for _, pullRequest := range current.PullRequests {
+		old, existed := previousPullRequests[pullRequest.Number]
+		if !pullRequest.Merged && strings.EqualFold(pullRequest.State, "closed") && (!existed || !strings.EqualFold(old.State, "closed")) {
+			return fmt.Sprintf("pull request #%d was closed without merging", pullRequest.Number)
+		}
+	}
+	return ""
 }
 
 const agentStartedLabel = "agent-started"
@@ -211,6 +298,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		return err
 	}
 	labeler, _ := w.Labels.(IssueLabeler)
+	closureChecker, _ := w.Issues.(WorkClosureChecker)
 	if err := w.resetFailedWork(context.Background(), work, labeler); err != nil {
 		return err
 	}
@@ -404,6 +492,20 @@ func (w *Glorp) Run(ctx context.Context) error {
 			go func(i Issue, agentSession AgentSession, running, queued int) {
 				defer wg.Done()
 				defer func() { <-sem }()
+				runCtx, cancelRun := context.WithCancelCause(ctx)
+				defer cancelRun(nil)
+				var closureReady <-chan struct{}
+				if closureChecker != nil {
+					ready := make(chan struct{})
+					closureReady = ready
+					go w.watchForClosedWork(runCtx, closureChecker, i, cancelRun, ready)
+				}
+				if closureReady != nil {
+					select {
+					case <-closureReady:
+					case <-runCtx.Done():
+					}
+				}
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
 				jobOutput := jobOutputWriter{write: func(text string) {
 					jobMu.Lock()
@@ -446,18 +548,23 @@ func (w *Glorp) Run(ctx context.Context) error {
 					publish()
 				}
 				var runErr error
-				if w.UI != nil {
+				if cause := context.Cause(runCtx); errors.Is(cause, errWorkClosedByUser) {
+					runErr = cause
+				} else if w.UI != nil {
 					if runner, ok := w.Runner.(SessionAgentOutputRunner); ok {
-						runErr = runner.RunSessionWithOutput(ctx, i, agentSession, updateSession, jobOutput)
+						runErr = runner.RunSessionWithOutput(runCtx, i, agentSession, updateSession, jobOutput)
 					} else if runner, ok := w.Runner.(AgentOutputRunner); ok {
-						runErr = runner.RunWithOutput(ctx, i, jobOutput)
+						runErr = runner.RunWithOutput(runCtx, i, jobOutput)
 					} else {
-						runErr = w.Runner.Run(ctx, i)
+						runErr = w.Runner.Run(runCtx, i)
 					}
 				} else if runner, ok := w.Runner.(SessionAgentRunner); ok {
-					runErr = runner.RunSession(ctx, i, agentSession, updateSession)
+					runErr = runner.RunSession(runCtx, i, agentSession, updateSession)
 				} else {
-					runErr = w.Runner.Run(ctx, i)
+					runErr = w.Runner.Run(runCtx, i)
+				}
+				if cause := context.Cause(runCtx); errors.Is(cause, errWorkClosedByUser) {
+					runErr = cause
 				}
 				if runErr != nil {
 					if w.Status != nil {

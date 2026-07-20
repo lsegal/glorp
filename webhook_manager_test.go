@@ -50,7 +50,7 @@ func TestWebhookSpecPreservesRepositoryEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.apiPath != "repos/owner/repo/hooks" || !reflect.DeepEqual(spec.events, []string{"issues", "push", "ping"}) {
+	if spec.apiPath != "repos/owner/repo/hooks" || !reflect.DeepEqual(spec.events, []string{"issues", "pull_request", "push", "ping"}) {
 		t.Fatalf("webhook spec = %#v", spec)
 	}
 }

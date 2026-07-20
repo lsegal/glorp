@@ -22,6 +22,19 @@ type fakeSource struct {
 	batches [][]Issue
 }
 
+type fakeClosureSource struct {
+	*fakeSource
+	mu    sync.Mutex
+	state OriginatingWorkState
+	err   error
+}
+
+func (f *fakeClosureSource) OriginatingWorkState(_ context.Context, _ string, _ int) (OriginatingWorkState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.state, f.err
+}
+
 func (f *fakeSource) ListIssues(_ context.Context, _ string) ([]Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -184,6 +197,67 @@ func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("logs missing %q:\n%s", want, logs.String())
 		}
+	}
+}
+
+func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	runner := &fakeRunner{release: make(chan struct{})}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		runner.mu.Lock()
+		started := len(runner.got) == 1
+		runner.mu.Unlock()
+		if started {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	src.mu.Lock()
+	src.state = OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Number: 9, State: "CLOSED"}}}
+	src.mu.Unlock()
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "failed" {
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(logs.String(), "stopping agent: pull request #9 was closed without merging") || !strings.Contains(logs.String(), "work closed by user") {
+				t.Fatalf("closure failure was not logged:\n%s", logs.String())
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatalf("closed originating work did not stop the agent:\n%s", logs.String())
+}
+
+func TestClosedWorkReasonIgnoresPullRequestsAlreadyClosedAtStart(t *testing.T) {
+	closed := PullRequestWorkState{Number: 8, State: "CLOSED"}
+	previous := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{closed}}
+	current := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{closed, {Number: 9, State: "OPEN"}}}
+	if reason := closedWorkReason(previous, current, 7); reason != "" {
+		t.Fatalf("preexisting closed pull request stopped work: %s", reason)
+	}
+	current.PullRequests[1].State = "CLOSED"
+	if reason := closedWorkReason(previous, current, 7); reason != "pull request #9 was closed without merging" {
+		t.Fatalf("newly closed pull request reason = %q", reason)
 	}
 }
 

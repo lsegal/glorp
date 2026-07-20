@@ -236,6 +236,64 @@ func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, g.Binary, args...).CombinedOutput()
 }
 
+func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
+	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number))
+	if err != nil {
+		return OriginatingWorkState{}, fmt.Errorf("read issue #%d state: %w: %s", number, err, strings.TrimSpace(string(output)))
+	}
+	var issue struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(output, &issue); err != nil {
+		return OriginatingWorkState{}, fmt.Errorf("decode issue #%d state: %w", number, err)
+	}
+	output, err = g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline")
+	if err != nil {
+		return OriginatingWorkState{}, fmt.Errorf("read issue #%d timeline: %w: %s", number, err, strings.TrimSpace(string(output)))
+	}
+	var events []struct {
+		Event  string `json:"event"`
+		Source struct {
+			Issue struct {
+				Number      int    `json:"number"`
+				State       string `json:"state"`
+				Body        string `json:"body"`
+				PullRequest *struct {
+					MergedAt *time.Time `json:"merged_at"`
+				} `json:"pull_request"`
+			} `json:"issue"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(output, &events); err != nil {
+		return OriginatingWorkState{}, fmt.Errorf("decode issue #%d timeline: %w", number, err)
+	}
+	state := OriginatingWorkState{IssueState: issue.State}
+	for _, event := range events {
+		pullRequest := event.Source.Issue
+		if event.Event != "cross-referenced" || pullRequest.PullRequest == nil || !closesIssue(pullRequest.Body, repo, number) {
+			continue
+		}
+		output, err := g.run(ctx, "api", "repos/"+repo+"/pulls/"+strconv.Itoa(pullRequest.Number))
+		if err != nil {
+			return OriginatingWorkState{}, fmt.Errorf("read pull request #%d state for issue #%d: %w: %s", pullRequest.Number, number, err, strings.TrimSpace(string(output)))
+		}
+		var currentPullRequest struct {
+			State    string     `json:"state"`
+			MergedAt *time.Time `json:"merged_at"`
+		}
+		if err := json.Unmarshal(output, &currentPullRequest); err != nil {
+			return OriginatingWorkState{}, fmt.Errorf("decode pull request #%d state for issue #%d: %w", pullRequest.Number, number, err)
+		}
+		state.PullRequests = append(state.PullRequests, PullRequestWorkState{Number: pullRequest.Number, State: currentPullRequest.State, Merged: currentPullRequest.MergedAt != nil})
+	}
+	return state, nil
+}
+
+func closesIssue(body, repo string, number int) bool {
+	pattern := `(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:` + regexp.QuoteMeta(repo) + `)?#` + strconv.Itoa(number) + `\b`
+	return regexp.MustCompile(pattern).MatchString(body)
+}
+
 const defaultIssueFilter = "is:issue state:open author:@me"
 
 type filterFlag struct {

@@ -32,6 +32,59 @@ func TestListenForWebhooksAssignsRandomPort(t *testing.T) {
 	}
 }
 
+func TestOriginatingWorkStateLoadsLinkedPullRequest(t *testing.T) {
+	responses := [][]byte{
+		[]byte(`{"state":"OPEN"}`),
+		[]byte(`[{"event":"cross-referenced","source":{"issue":{"number":9,"body":"Closes #7","pull_request":{"merged_at":null}}}}]`),
+		[]byte(`{"state":"closed","merged_at":null}`),
+	}
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return responses[len(calls)-1], nil
+	}}
+	state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
+	if err != nil || state.IssueState != "OPEN" || len(state.PullRequests) != 1 || state.PullRequests[0] != (PullRequestWorkState{Number: 9, State: "closed"}) {
+		t.Fatalf("OriginatingWorkState() = (%#v, %v)", state, err)
+	}
+	want := []string{"api", "repos/owner/repo/pulls/9"}
+	if !reflect.DeepEqual(calls[2], want) {
+		t.Fatalf("pull request state call = %#v, want %#v", calls[2], want)
+	}
+}
+
+func TestClosedWorkReasonDistinguishesManualIssueClosureFromMerge(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		issue      string
+		timeline   string
+		pull       string
+		wantReason string
+	}{
+		{name: "manual closure", issue: `{"state":"CLOSED"}`, timeline: `[]`, wantReason: "issue #7 was closed without a merge"},
+		{name: "merged pull request", issue: `{"state":"CLOSED"}`, timeline: `[{"event":"cross-referenced","source":{"issue":{"number":9,"body":"Closes #7","pull_request":{}}}}]`, pull: `{"state":"closed","merged_at":"2026-07-20T12:00:00Z"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			responses := [][]byte{[]byte(test.issue)}
+			responses = append(responses, []byte(test.timeline))
+			if test.pull != "" {
+				responses = append(responses, []byte(test.pull))
+			}
+			call := 0
+			gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+				response := responses[call]
+				call++
+				return response, nil
+			}}
+			state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
+			reason := closedWorkReason(OriginatingWorkState{IssueState: "OPEN"}, state, 7)
+			if err != nil || reason != test.wantReason {
+				t.Fatalf("closure state = (%#v, %v), reason=%q, want %q", state, err, reason, test.wantReason)
+			}
+		})
+	}
+}
+
 func TestValidRepo(t *testing.T) {
 	for _, s := range []string{"owner/repo", "a/b"} {
 		if !validRepo(s) {

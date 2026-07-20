@@ -5,6 +5,7 @@
 - Add a localhost React browser dashboard that mirrors terminal job viewports, logs, scrolling, and status, with configurable port selection and an option to disable it.
 - Use the owner type encoded in GitHub Project URLs when polling, avoiding intermittent GitHub CLI owner-detection failures.
 - Create individual follow-up issues for unresolved TODOs and known issues after merging an issue-fix pull request, preserving origin links and project membership.
+- Stop active agent work as failed when its originating issue or an unmerged linked pull request is closed.
 - Preserve completed agents' viewport scrollback and scroll position in the dashboard.
 - Open issue-fix pull requests as linked drafts immediately, push development checkpoints every five minutes, and mark them ready when implementation is complete.
 - Poll every 90 seconds as a fallback in push mode to reduce GitHub CLI load.

@@ -82,7 +82,7 @@ func (g GHCLI) ConfigureWebhook(ctx context.Context, value, endpoint, secret str
 
 func (g GHCLI) webhookSpec(ctx context.Context, target target) (webhookSpec, error) {
 	if !target.isProject {
-		return webhookSpec{apiPath: "repos/" + target.repo + "/hooks", name: target.repo, events: []string{"issues", "push", "ping"}}, nil
+		return webhookSpec{apiPath: "repos/" + target.repo + "/hooks", name: target.repo, events: []string{"issues", "pull_request", "push", "ping"}}, nil
 	}
 	ownerType := target.projectOwnerType
 	if ownerType == "" {
