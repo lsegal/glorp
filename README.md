@@ -159,6 +159,7 @@ glorp [options] TARGET [TARGET ...]
 | `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. |
 | `--no-ui` | `false` | Disable the interactive terminal dashboard and write normal logs to stdout. |
 | `--poll` | `false` | Use polling without starting ngrok or configuring GitHub webhooks. |
+| `--ready-state NAME` | auto (`Todo` or `Ready`) | Project status that marks an issue ready for an agent; matching is case-insensitive. |
 | `--state PATH` | `.glorp.json` | File used to persist handled issues and active session state. |
 | `--webhook-path PATH` | `/webhook` | HTTP path that accepts GitHub webhook deliveries. |
 | `--webhook-secret SECRET` | empty | Shared secret used to verify GitHub `X-Hub-Signature-256` signatures. The same secret is set when glorp creates each webhook. |

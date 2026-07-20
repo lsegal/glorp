@@ -120,6 +120,33 @@ func TestDecodeProjectFields(t *testing.T) {
 	}
 }
 
+func TestProjectStatusOptionMatchesReadyStates(t *testing.T) {
+	fields := []projectField{{
+		ID:   "status-field",
+		Name: "Status",
+		Options: []projectFieldOption{
+			{ID: "backlog-option", Name: "Backlog"},
+			{ID: "ready-option", Name: "READY"},
+			{ID: "custom-option", Name: "Agent Queue"},
+		},
+	}}
+	for _, test := range []struct {
+		status        string
+		allowFallback bool
+		wantOption    string
+	}{
+		{status: "ready", wantOption: "ready-option"},
+		{status: "Todo", allowFallback: true, wantOption: "ready-option"},
+		{status: "agent queue", wantOption: "custom-option"},
+		{status: "Todo", wantOption: ""},
+	} {
+		fieldID, optionID := projectStatusOption(fields, test.status, test.allowFallback)
+		if fieldID != "status-field" || optionID != test.wantOption {
+			t.Errorf("projectStatusOption(%q, %v) = (%q, %q), want (%q, %q)", test.status, test.allowFallback, fieldID, optionID, "status-field", test.wantOption)
+		}
+	}
+}
+
 func TestDecodeProjectIssuesReportsMissingScope(t *testing.T) {
 	_, err := decodeProjectIssues([]byte("error: your authentication token is missing required scopes [read:project]"), errors.New("exit status 1"))
 	if err == nil || !strings.Contains(err.Error(), "gh auth refresh -s read:project") {

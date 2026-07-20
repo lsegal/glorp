@@ -82,6 +82,7 @@ type Glorp struct {
 	Events      <-chan WebhookEvent
 	Concurrency int
 	StatePath   string
+	ReadyState  string
 	Issues      IssueSource
 	Runner      AgentRunner
 	Out         io.Writer
@@ -261,7 +262,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			_, isActive := active[key]
 			wasActive := work[key].Status == "active"
 			workMu.Unlock()
-			if issue.Number > 0 && shouldDispatchIssue(issue.Target, issue, isActive, wasActive, seen[key]) {
+			if issue.Number > 0 && shouldDispatchIssue(issue.Target, issue, isActive, wasActive, seen[key], w.ReadyState) {
 				seen[key] = true
 				newIssues = append(newIssues, issue)
 			}
@@ -358,7 +359,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}
 				if runErr != nil {
 					if w.Status != nil {
-						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, "Todo"); statusErr != nil {
+						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, projectReadyState(w.ReadyState, i.ProjectStatus)); statusErr != nil {
 							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
 						}
 					}
@@ -593,15 +594,18 @@ func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState, 
 			}
 		}
 		if w.Status != nil {
-			if err := w.Status.SetIssueStatus(ctx, target, issue, "Todo"); err != nil {
+			readyState := projectReadyState(w.ReadyState, "")
+			if err := w.Status.SetIssueStatus(ctx, target, issue, readyState); err != nil {
 				if isProjectTarget(target) && errors.Is(err, errProjectIssueNotFound) {
 					w.logf("reset failed issue #%d skipped because it is no longer in project", number)
 					continue
 				}
 				return fmt.Errorf("reset failed issue #%d project status: %w", number, err)
 			}
+			w.logf("reset failed issue #%d to %s", number, readyState)
+			continue
 		}
-		w.logf("reset failed issue #%d to Todo", number)
+		w.logf("reset failed issue #%d", number)
 	}
 	return nil
 }
@@ -639,7 +643,7 @@ func hasLabel(issue Issue, name string) bool {
 	return false
 }
 
-func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen bool) bool {
+func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen bool, readyState string) bool {
 	if isActive {
 		return false
 	}
@@ -648,7 +652,7 @@ func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen boo
 	}
 	if isProjectTarget(repo) {
 		if !seen {
-			return projectStatusAllowsDispatch(issue.ProjectStatus)
+			return projectStatusAllowsDispatch(issue.ProjectStatus, readyState)
 		}
 		return issue.ProjectStatus == "In Progress"
 	}
@@ -658,13 +662,23 @@ func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen boo
 	return hasLabel(issue, agentStartedLabel)
 }
 
-func projectStatusAllowsDispatch(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "in progress", "done", "completed":
-		return false
-	default:
-		return true
+func projectStatusAllowsDispatch(status, readyState string) bool {
+	status = strings.TrimSpace(status)
+	readyState = strings.TrimSpace(readyState)
+	if readyState != "" {
+		return strings.EqualFold(status, readyState)
 	}
+	return strings.EqualFold(status, "Todo") || strings.EqualFold(status, "Ready")
+}
+
+func projectReadyState(configured, current string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	if current = strings.TrimSpace(current); projectStatusAllowsDispatch(current, "") {
+		return current
+	}
+	return "Todo"
 }
 
 func newSessionID() (string, error) {

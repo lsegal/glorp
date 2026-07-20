@@ -42,6 +42,7 @@ func main() {
 	agent := flag.String("agent", "codex", "agent to run: codex or claude")
 	model := flag.String("model", "", "model to use for the agent")
 	modelLevel := flag.String("model-level", "", "model reasoning level: low, medium, or high")
+	readyState := flag.String("ready-state", "", "project status that marks an issue ready for an agent")
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
 	statePath := flag.String("state", ".glorp.json", "file used to remember handled issue numbers")
@@ -80,7 +81,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	gh := GHCLI{Binary: "gh"}
+	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(*readyState)}
 	gh.Filter, gh.AllIssues = filter.String(), *allIssues
 	targets := flag.Args()
 	events := make(chan WebhookEvent, 1)
@@ -100,7 +101,7 @@ func main() {
 		quotaReader := &codexQuotaReader{Binary: binary}
 		quota = quotaReader.Read
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, Issues: gh, Labels: gh, Status: gh, UI: terminalUIReporter(ui), Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: terminalUIReporter(ui), Quota: quota, Runner: CommandRunner{Binary: binary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -184,9 +185,10 @@ func terminalUIReporter(ui *TerminalUI) UIReporter {
 }
 
 type GHCLI struct {
-	Binary    string
-	Filter    string
-	AllIssues bool
+	Binary     string
+	Filter     string
+	AllIssues  bool
+	ReadyState string
 }
 
 const defaultIssueFilter = "is:issue state:open author:@me"
@@ -450,20 +452,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 	if err != nil {
 		return err
 	}
-	var fieldID, optionID string
-	for _, field := range fields {
-		if field.Name != "Status" {
-			continue
-		}
-		fieldID = field.ID
-		for _, option := range field.Options {
-			if option.Name == status {
-				optionID = option.ID
-				break
-			}
-		}
-		break
-	}
+	fieldID, optionID := projectStatusOption(fields, status, g.ReadyState == "")
 	if fieldID == "" || optionID == "" {
 		return fmt.Errorf("project %s has no Status option %q", target.projectID, status)
 	}
@@ -473,6 +462,27 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 		return projectStatusError(issue.Number, err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func projectStatusOption(fields []projectField, status string, allowReadyFallback bool) (string, string) {
+	for _, field := range fields {
+		if field.Name != "Status" {
+			continue
+		}
+		statuses := []string{status}
+		if allowReadyFallback && strings.EqualFold(strings.TrimSpace(status), "Todo") {
+			statuses = append(statuses, "Ready")
+		}
+		for _, candidate := range statuses {
+			for _, option := range field.Options {
+				if strings.EqualFold(strings.TrimSpace(option.Name), strings.TrimSpace(candidate)) {
+					return field.ID, option.ID
+				}
+			}
+		}
+		return field.ID, ""
+	}
+	return "", ""
 }
 
 func projectStatusError(number int, err error, detail string) error {

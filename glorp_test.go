@@ -283,7 +283,7 @@ func TestGlorpUpdatesProjectStatus(t *testing.T) {
 	status := &fakeIssueStatuser{}
 	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
-		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Status: status,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7, ProjectStatus: "Todo"}}}}, Runner: r, Status: status,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -309,7 +309,7 @@ func TestGlorpDoesNotLabelProjectIssues(t *testing.T) {
 	status := &fakeIssueStatuser{}
 	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
-		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Labels: labels, Status: status,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7, ProjectStatus: "Todo"}}}}, Runner: r, Labels: labels, Status: status,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -398,7 +398,7 @@ func TestGlorpResetsFailedProjectWorkOnStart(t *testing.T) {
 	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})},
-		Labels: labels, Status: status,
+		Labels: labels, Status: status, ReadyState: "Agent Queue",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -410,8 +410,8 @@ func TestGlorpResetsFailedProjectWorkOnStart(t *testing.T) {
 	}
 	status.mu.Lock()
 	defer status.mu.Unlock()
-	if !reflect.DeepEqual(status.statuses, []string{"Todo"}) {
-		t.Fatalf("statuses = %v, want [Todo]", status.statuses)
+	if !reflect.DeepEqual(status.statuses, []string{"Agent Queue"}) {
+		t.Fatalf("statuses = %v, want [Agent Queue]", status.statuses)
 	}
 }
 
@@ -705,25 +705,52 @@ func TestHasAgentStartedLabel(t *testing.T) {
 
 func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
 	project := "https://github.com/users/lsegal/projects/3"
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false) {
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, "") {
 		t.Fatal("new in-progress project issue was dispatched")
 	}
 	for _, status := range []string{"Done", "Completed"} {
-		if shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false) {
+		if shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, "") {
 			t.Fatalf("new %s project issue was dispatched", status)
 		}
 	}
-	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, false) {
-		t.Fatal("new todo project issue was not dispatched")
+	for _, status := range []string{"Todo", "TODO", "Ready", "ready"} {
+		if !shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, "") {
+			t.Fatalf("new %s project issue was not dispatched", status)
+		}
 	}
-	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, true) {
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Backlog"}, false, false, false, "") {
+		t.Fatal("new backlog project issue was dispatched")
+	}
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Agent Queue"}, false, false, false, "agent queue") {
+		t.Fatal("configured ready project issue was not dispatched")
+	}
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Ready"}, false, false, false, "Agent Queue") {
+		t.Fatal("default ready status was used despite configured ready state")
+	}
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, true, "") {
 		t.Fatal("in-progress project issue was not reclaimed")
 	}
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, true) {
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, true, "") {
 		t.Fatal("non-in-progress project issue was reclaimed")
 	}
-	if !shouldDispatchIssue("o/r", Issue{Labels: []IssueLabel{{Name: agentStartedLabel}}}, false, false, true) {
+	if !shouldDispatchIssue("o/r", Issue{Labels: []IssueLabel{{Name: agentStartedLabel}}}, false, false, true, "") {
 		t.Fatal("agent-started repository issue was not reclaimed")
+	}
+}
+
+func TestProjectReadyState(t *testing.T) {
+	for _, test := range []struct {
+		configured string
+		current    string
+		want       string
+	}{
+		{configured: " Agent Queue ", current: "Ready", want: "Agent Queue"},
+		{current: "ready", want: "ready"},
+		{current: "Backlog", want: "Todo"},
+	} {
+		if got := projectReadyState(test.configured, test.current); got != test.want {
+			t.Errorf("projectReadyState(%q, %q) = %q, want %q", test.configured, test.current, got, test.want)
+		}
 	}
 }
 
