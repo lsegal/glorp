@@ -60,8 +60,12 @@ func TestParseTargetURLs(t *testing.T) {
 		}
 	}
 	got, err := parseTarget("https://github.com/users/lsegal/projects/3")
-	if err != nil || !got.isProject || got.owner != "lsegal" || got.projectID != "3" {
+	if err != nil || !got.isProject || got.owner != "lsegal" || got.projectID != "3" || got.projectOwnerType != "users" {
 		t.Fatalf("project target = %#v, %v", got, err)
+	}
+	got, err = parseTarget("https://github.com/orgs/example/projects/4")
+	if err != nil || !got.isProject || got.owner != "example" || got.projectID != "4" || got.projectOwnerType != "orgs" {
+		t.Fatalf("organization project target = %#v, %v", got, err)
 	}
 }
 

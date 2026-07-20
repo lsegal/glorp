@@ -132,19 +132,19 @@ func main() {
 		fmt.Fprintf(output, "ngrok tunnel ready at %s\n", tunnel.URL())
 		configured := 0
 		for _, target := range targets {
-			parsed, parseErr := parseTarget(target)
-			if parseErr != nil || parsed.repo == "" {
-				continue
-			}
-			if err := gh.ConfigureWebhook(ctx, parsed.repo, endpoint, *webhookSecret); err != nil {
+			if err := gh.ConfigureWebhook(ctx, target, endpoint, *webhookSecret); err != nil {
+				if errors.Is(err, errProjectWebhookUnavailable) {
+					fmt.Fprintln(output, err)
+					continue
+				}
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
 			configured++
-			fmt.Fprintf(output, "configured GitHub webhook for %s\n", parsed.repo)
+			fmt.Fprintf(output, "configured GitHub webhook for %s\n", target)
 		}
 		if configured == 0 {
-			fmt.Fprintln(output, "no repository targets available for webhook configuration")
+			fmt.Fprintln(output, "no targets available for webhook configuration")
 		}
 	}
 	if err := w.Run(ctx); err != nil {
@@ -296,6 +296,7 @@ func issueListArgs(repo, filter string, allIssues bool) []string {
 
 type target struct {
 	repo, owner, projectID string
+	projectOwnerType       string
 	isProject              bool
 }
 
@@ -312,7 +313,7 @@ func parseTarget(value string) (target, error) {
 		return target{repo: parts[0] + "/" + strings.TrimSuffix(parts[1], ".git")}, nil
 	}
 	if len(parts) == 4 && (parts[0] == "users" || parts[0] == "orgs") && parts[2] == "projects" && parts[1] != "" && parts[3] != "" {
-		return target{owner: parts[1], projectID: parts[3], isProject: true}, nil
+		return target{owner: parts[1], projectID: parts[3], projectOwnerType: parts[0], isProject: true}, nil
 	}
 	if len(parts) == 4 && parts[2] == "projects" && parts[0] != "" && parts[1] != "" && parts[3] != "" {
 		return target{repo: parts[0] + "/" + parts[1], owner: parts[0], projectID: parts[3], isProject: true}, nil

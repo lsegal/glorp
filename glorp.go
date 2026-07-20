@@ -565,6 +565,8 @@ func (w *Glorp) logWebhookEvent(event WebhookEvent) {
 		w.logf("webhook push received (repository: %s, ref: %s, before: %s, after: %s, commits: %d)", event.Repository, event.Ref, event.Before, event.After, event.CommitCount)
 	case "issues":
 		w.logf("webhook issues received (repository: %s, action: %s, issue: #%d %q)", event.Repository, event.Action, event.IssueNumber, event.IssueTitle)
+	case "projects_v2_item":
+		w.logf("webhook project item received (action: %s)", event.Action)
 	default:
 		w.logf("webhook %s received", event.Kind)
 	}

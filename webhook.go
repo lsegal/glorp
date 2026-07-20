@@ -52,7 +52,7 @@ func (h WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Header.Get("X-GitHub-Event") {
-	case "issues", "push", "ping":
+	case "issues", "push", "ping", "projects_v2_item":
 		event := decodeWebhookEvent(r.Header.Get("X-GitHub-Event"), body)
 		select {
 		case h.Events <- event:

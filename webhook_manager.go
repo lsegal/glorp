@@ -4,33 +4,43 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 )
 
-type repositoryHook struct {
+var errProjectWebhookUnavailable = errors.New("project push webhook unavailable")
+
+type managedHook struct {
 	ID     int `json:"id"`
 	Config struct {
 		URL string `json:"url"`
 	} `json:"config"`
 }
 
-func (g GHCLI) ConfigureWebhook(ctx context.Context, repo, endpoint, secret string) error {
-	target, err := parseTarget(repo)
-	if err != nil || target.isProject || target.repo == "" {
-		if err == nil {
-			err = fmt.Errorf("webhooks require a repository target")
-		}
+type webhookSpec struct {
+	apiPath string
+	name    string
+	events  []string
+}
+
+func (g GHCLI) ConfigureWebhook(ctx context.Context, value, endpoint, secret string) error {
+	target, err := parseTarget(value)
+	if err != nil {
 		return err
 	}
-	output, err := g.api(ctx, "repos/"+target.repo+"/hooks", "")
+	spec, err := g.webhookSpec(ctx, target)
 	if err != nil {
-		return fmt.Errorf("list webhooks for %s: %w", target.repo, err)
+		return err
 	}
-	var hooks []repositoryHook
+	output, err := g.api(ctx, spec.apiPath, "")
+	if err != nil {
+		return webhookAccessError("list", spec, err)
+	}
+	var hooks []managedHook
 	if err := json.Unmarshal(output, &hooks); err != nil {
-		return fmt.Errorf("decode webhooks for %s: %w", target.repo, err)
+		return fmt.Errorf("decode webhooks for %s: %w", spec.name, err)
 	}
 	found := false
 	for _, hook := range hooks {
@@ -39,8 +49,8 @@ func (g GHCLI) ConfigureWebhook(ctx context.Context, repo, endpoint, secret stri
 			continue
 		}
 		if ngrokURL(hook.Config.URL) {
-			if _, err := g.api(ctx, fmt.Sprintf("repos/%s/hooks/%d", target.repo, hook.ID), "DELETE"); err != nil {
-				return fmt.Errorf("remove old ngrok webhook %d for %s: %w", hook.ID, target.repo, err)
+			if _, err := g.api(ctx, fmt.Sprintf("%s/%d", spec.apiPath, hook.ID), "DELETE"); err != nil {
+				return webhookAccessError(fmt.Sprintf("remove old ngrok webhook %d from", hook.ID), spec, err)
 			}
 		}
 	}
@@ -58,16 +68,56 @@ func (g GHCLI) ConfigureWebhook(ctx context.Context, repo, endpoint, secret stri
 	body, err := json.Marshal(map[string]interface{}{
 		"name":   "web",
 		"active": true,
-		"events": []string{"issues", "push", "ping"},
+		"events": spec.events,
 		"config": config,
 	})
 	if err != nil {
 		return err
 	}
-	if _, err := g.api(ctx, "repos/"+target.repo+"/hooks", "POST", string(body)); err != nil {
-		return fmt.Errorf("create webhook for %s: %w", target.repo, err)
+	if _, err := g.api(ctx, spec.apiPath, "POST", string(body)); err != nil {
+		return webhookAccessError("create", spec, err)
 	}
 	return nil
+}
+
+func (g GHCLI) webhookSpec(ctx context.Context, target target) (webhookSpec, error) {
+	if !target.isProject {
+		return webhookSpec{apiPath: "repos/" + target.repo + "/hooks", name: target.repo, events: []string{"issues", "push", "ping"}}, nil
+	}
+	ownerType := target.projectOwnerType
+	if ownerType == "" {
+		output, err := g.api(ctx, "users/"+target.owner, "")
+		if err != nil {
+			return webhookSpec{}, fmt.Errorf("identify project owner %s: %w", target.owner, err)
+		}
+		var owner struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(output, &owner); err != nil {
+			return webhookSpec{}, fmt.Errorf("decode project owner %s: %w", target.owner, err)
+		}
+		if owner.Type == "Organization" {
+			ownerType = "orgs"
+		} else {
+			ownerType = "users"
+		}
+	}
+	if ownerType != "orgs" {
+		return webhookSpec{}, fmt.Errorf("%w: GitHub only provides push events for organization-owned Projects; using periodic synchronization for the project owned by %s", errProjectWebhookUnavailable, target.owner)
+	}
+	return webhookSpec{
+		apiPath: "orgs/" + target.owner + "/hooks",
+		name:    "organization project " + target.owner,
+		events:  []string{"projects_v2_item"},
+	}, nil
+}
+
+func webhookAccessError(action string, spec webhookSpec, err error) error {
+	wrapped := fmt.Errorf("%s webhooks for %s: %w", action, spec.name, err)
+	if strings.HasPrefix(spec.apiPath, "orgs/") {
+		return fmt.Errorf("%w; organization project push requires organization-owner access and the admin:org_hook scope (run `gh auth refresh -s admin:org_hook`)", wrapped)
+	}
+	return wrapped
 }
 
 func (g GHCLI) api(ctx context.Context, path, method string, body ...string) ([]byte, error) {

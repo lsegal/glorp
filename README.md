@@ -28,10 +28,11 @@ Authenticate the GitHub CLI before running glorp:
 gh auth login
 ```
 
-Repository targets require permission to read issues, manage glorp's labels, and manage webhooks unless `--poll` is used. GitHub Project targets require the `read:project` scope to list items and the `project` scope to update their status:
+Repository targets require permission to read issues, manage glorp's labels, and manage webhooks unless `--poll` is used. GitHub Project targets require the `read:project` scope to list items and the `project` scope to update their status. Push mode for organization-owned Projects also requires organization-owner access and the `admin:org_hook` scope:
 
 ```sh
 gh auth refresh -s read:project -s project
+gh auth refresh -s admin:org_hook # organization Project push mode only
 ```
 
 ## Installation
@@ -122,11 +123,13 @@ In the default mode, glorp:
 
 1. Starts a webhook listener on a randomly assigned available port.
 2. Starts an ngrok tunnel for that listener.
-3. Creates a GitHub webhook for each repository target and removes stale ngrok webhooks previously managed for it.
+3. Creates a GitHub webhook for each repository target or organization-owned Project and removes stale ngrok webhooks previously managed for it.
 4. Queries GitHub for matching open issues and queues previously unhandled work.
 5. Starts the selected agent with `/gh-fix ISSUE_NUMBER` and tracks its output and result.
 
 glorp creates and manages the `agent-ready` and `agent-started` labels for repository targets. While an agent is running, it applies `agent-started` and removes it after the agent exits. Project items are moved through their configured status as work starts and finishes.
+
+Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--poll` to avoid starting an unused webhook tunnel for those targets.
 
 Handled issues and active sessions are stored in `.glorp.json` by default. This prevents duplicate work after a restart and allows glorp to reclaim interrupted jobs. Issues that declare dependencies using `depends on #123` or GitHub's issue-dependency relationship remain blocked until those dependencies close.
 

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Keep polling project boards after their initial issue scan, including when repository webhooks are enabled.
+- Support push-mode refreshes for organization-owned GitHub Project boards.
 - Use an available random webhook port by default and report the actual address passed to ngrok.
 - Show each agent's checkout directory and session ID in its dashboard viewport, including after completion or failure.
 - Launch issue-fixing agents with the repository reported by GitHub instead of relying on the current directory.

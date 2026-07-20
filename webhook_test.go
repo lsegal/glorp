@@ -30,6 +30,25 @@ func TestWebhookHandlerTriggersSupportedEvents(t *testing.T) {
 	}
 }
 
+func TestWebhookHandlerTriggersProjectItemEvents(t *testing.T) {
+	events := make(chan WebhookEvent, 1)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(`{"action":"edited"}`))
+	req.Header.Set("X-GitHub-Event", "projects_v2_item")
+	res := httptest.NewRecorder()
+	WebhookHandler{Events: events, WebhookPath: "/webhook"}.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusAccepted)
+	}
+	select {
+	case event := <-events:
+		if event.Kind != "projects_v2_item" || event.Action != "edited" {
+			t.Fatalf("event = %#v", event)
+		}
+	default:
+		t.Fatal("project item webhook did not trigger a refresh")
+	}
+}
+
 func TestWebhookHandlerValidatesSignature(t *testing.T) {
 	secret := "test-secret"
 	body := []byte(`{"ref":"refs/heads/main"}`)
