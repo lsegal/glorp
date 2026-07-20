@@ -16,6 +16,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -189,6 +190,14 @@ type GHCLI struct {
 	Filter     string
 	AllIssues  bool
 	ReadyState string
+	runCommand func(context.Context, ...string) ([]byte, error)
+}
+
+func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
+	if g.runCommand != nil {
+		return g.runCommand(ctx, args...)
+	}
+	return exec.CommandContext(ctx, g.Binary, args...).CombinedOutput()
 }
 
 const defaultIssueFilter = "is:issue state:open author:@me"
@@ -228,6 +237,33 @@ type projectFields struct {
 
 type projectView struct {
 	ID string `json:"id"`
+}
+
+type repositoryProjectItem struct {
+	ID      string `json:"id"`
+	Project struct {
+		ID     string `json:"id"`
+		Number int    `json:"number"`
+		Owner  struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	} `json:"project"`
+}
+
+type repositoryProjectItemsPage struct {
+	Data struct {
+		Repository struct {
+			Issue struct {
+				ProjectItems struct {
+					Nodes    []repositoryProjectItem `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"projectItems"`
+			} `json:"issue"`
+		} `json:"repository"`
+	} `json:"data"`
 }
 
 type managedLabel struct {
@@ -406,17 +442,31 @@ func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add b
 }
 
 func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, status string) error {
-	target, err := parseTarget(repo)
+	parsedTarget, err := parseTarget(repo)
 	if err != nil {
 		return err
 	}
-	if !target.isProject {
+	if !parsedTarget.isProject {
+		items, err := g.repositoryProjectItems(ctx, parsedTarget.repo, issue.Number)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			projectTarget := target{
+				owner:     item.Project.Owner.Login,
+				projectID: strconv.Itoa(item.Project.Number),
+				isProject: true,
+			}
+			if err := g.setProjectItemStatus(ctx, projectTarget, item.ID, issue.Number, status); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
 	itemID := issue.ProjectItemID
 	if itemID == "" {
-		list := exec.CommandContext(ctx, g.Binary, projectListArgs(target, "", true)...)
+		list := exec.CommandContext(ctx, g.Binary, projectListArgs(parsedTarget, "", true)...)
 		output, err := list.Output()
 		items, err := decodeProjectItems(output, err)
 		if err != nil {
@@ -430,11 +480,56 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 		}
 	}
 	if itemID == "" {
-		return fmt.Errorf("%w: issue #%d is not in project %s", errProjectIssueNotFound, issue.Number, target.projectID)
+		return fmt.Errorf("%w: issue #%d is not in project %s", errProjectIssueNotFound, issue.Number, parsedTarget.projectID)
 	}
+	return g.setProjectItemStatus(ctx, parsedTarget, itemID, issue.Number, status)
+}
 
-	viewCmd := exec.CommandContext(ctx, g.Binary, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
-	viewOutput, err := viewCmd.Output()
+func (g GHCLI) repositoryProjectItems(ctx context.Context, repo string, number int) ([]repositoryProjectItem, error) {
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid repository %q", repo)
+	}
+	const query = `query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      projectItems(first:100,after:$endCursor){
+        nodes{id project{id number owner{... on User{login} ... on Organization{login}}}}
+        pageInfo{hasNextPage endCursor}
+      }
+    }
+  }
+}`
+	var items []repositoryProjectItem
+	cursor := ""
+	for {
+		args := []string{"api", "graphql", "-f", "query=" + query, "-F", "owner=" + parts[0], "-F", "repo=" + parts[1], "-F", fmt.Sprintf("number=%d", number)}
+		if cursor != "" {
+			args = append(args, "-F", "endCursor="+cursor)
+		}
+		output, err := g.run(ctx, args...)
+		if err != nil {
+			return nil, fmt.Errorf("list projects for issue #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
+		}
+		var page repositoryProjectItemsPage
+		if err := json.Unmarshal(output, &page); err != nil {
+			return nil, fmt.Errorf("decode projects for issue #%d: %w", number, err)
+		}
+		projectItems := page.Data.Repository.Issue.ProjectItems
+		items = append(items, projectItems.Nodes...)
+		if !projectItems.PageInfo.HasNextPage {
+			return items, nil
+		}
+		if projectItems.PageInfo.EndCursor == "" || projectItems.PageInfo.EndCursor == cursor {
+			return nil, fmt.Errorf("list projects for issue #%d: pagination did not advance", number)
+		}
+		cursor = projectItems.PageInfo.EndCursor
+	}
+}
+
+func (g GHCLI) setProjectItemStatus(ctx context.Context, target target, itemID string, issueNumber int, status string) error {
+
+	viewOutput, err := g.run(ctx, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
 	if err != nil {
 		return fmt.Errorf("view project: %w", err)
 	}
@@ -446,8 +541,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 		return fmt.Errorf("project %s has no ID", target.projectID)
 	}
 
-	fieldsCmd := exec.CommandContext(ctx, g.Binary, "project", "field-list", target.projectID, "--owner", target.owner, "--format", "json", "--limit", "1000")
-	fieldsOutput, err := fieldsCmd.Output()
+	fieldsOutput, err := g.run(ctx, "project", "field-list", target.projectID, "--owner", target.owner, "--format", "json", "--limit", "1000")
 	fields, err := decodeProjectFields(fieldsOutput, err)
 	if err != nil {
 		return err
@@ -457,9 +551,8 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 		return fmt.Errorf("project %s has no Status option %q", target.projectID, status)
 	}
 
-	edit := exec.CommandContext(ctx, g.Binary, "project", "item-edit", "--id", itemID, "--field-id", fieldID, "--project-id", view.ID, "--single-select-option-id", optionID)
-	if output, err := edit.CombinedOutput(); err != nil {
-		return projectStatusError(issue.Number, err, strings.TrimSpace(string(output)))
+	if output, err := g.run(ctx, "project", "item-edit", "--id", itemID, "--field-id", fieldID, "--project-id", view.ID, "--single-select-option-id", optionID); err != nil {
+		return projectStatusError(issueNumber, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }

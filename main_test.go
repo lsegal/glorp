@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/url"
@@ -117,6 +119,48 @@ func TestDecodeProjectFields(t *testing.T) {
 	fields, err := decodeProjectFields([]byte(`{"fields":[{"id":"PVTF_status","name":"Status","options":[{"id":"opt_progress","name":"In Progress"}]}]}`), nil)
 	if err != nil || len(fields) != 1 || fields[0].ID != "PVTF_status" || fields[0].Options[0].ID != "opt_progress" {
 		t.Fatalf("decode project fields = %#v, %v", fields, err)
+	}
+}
+
+func TestDecodeRepositoryProjectItemsPage(t *testing.T) {
+	var page repositoryProjectItemsPage
+	err := json.Unmarshal([]byte(`{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"PVTI_item","project":{"id":"PVT_project","number":3,"owner":{"login":"owner"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor"}}}}}}`), &page)
+	items := page.Data.Repository.Issue.ProjectItems
+	if err != nil || len(items.Nodes) != 1 || items.Nodes[0].ID != "PVTI_item" || items.Nodes[0].Project.ID != "PVT_project" || items.Nodes[0].Project.Number != 3 || items.Nodes[0].Project.Owner.Login != "owner" {
+		t.Fatalf("repository project items = %#v, %v", items.Nodes, err)
+	}
+	if !items.PageInfo.HasNextPage || items.PageInfo.EndCursor != "cursor" {
+		t.Fatalf("repository project page info = %#v", items.PageInfo)
+	}
+}
+
+func TestRepositoryIssueStatusUpdatesAttachedProject(t *testing.T) {
+	responses := [][]byte{
+		[]byte(`{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"PVTI_item","project":{"id":"PVT_project","number":3,"owner":{"login":"owner"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`),
+		[]byte(`{"id":"PVT_project"}`),
+		[]byte(`{"fields":[{"id":"PVTSSF_status","name":"Status","options":[{"id":"opt_progress","name":"In Progress"}]}]}`),
+		nil,
+	}
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if len(calls) > len(responses) {
+			t.Fatalf("unexpected gh call: %#v", args)
+		}
+		return responses[len(calls)-1], nil
+	}}
+	if err := gh.SetIssueStatus(context.Background(), "owner/repo", Issue{Number: 148}, "In Progress"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 4 {
+		t.Fatalf("gh calls = %#v, want GraphQL lookup plus three project update calls", calls)
+	}
+	if got := calls[0][:2]; !reflect.DeepEqual(got, []string{"api", "graphql"}) {
+		t.Fatalf("project lookup call = %#v", calls[0])
+	}
+	wantEdit := []string{"project", "item-edit", "--id", "PVTI_item", "--field-id", "PVTSSF_status", "--project-id", "PVT_project", "--single-select-option-id", "opt_progress"}
+	if !reflect.DeepEqual(calls[3], wantEdit) {
+		t.Fatalf("project edit call = %#v, want %#v", calls[3], wantEdit)
 	}
 }
 
