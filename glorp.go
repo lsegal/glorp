@@ -613,7 +613,8 @@ func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState, 
 					w.logf("reset failed issue #%d skipped because it is no longer in project", number)
 					continue
 				}
-				return fmt.Errorf("reset failed issue #%d project status: %w", number, err)
+				w.logf("reset failed issue #%d project status: %v", number, err)
+				continue
 			}
 			w.logf("reset failed issue #%d to %s", number, readyState)
 			continue
