@@ -10,8 +10,9 @@
   "dependencies": {
 		"lucide-react": "1.25.0",
 		"react": "19.2.7",
-		"react-dom": "19.2.7",
-		"vite": "8.1.5"
+		"react-dom": "19.2.7"
   },
-  "devDependencies": {}
+	"devDependencies": {
+		"vite": "8.1.5"
+	}
 }
