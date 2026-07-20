@@ -473,7 +473,15 @@ type CommandRunner struct {
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
-	prompt := fmt.Sprintf("/gh-fix %d\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead.", issue.Number)
+	target := issue.Target
+	if target == "" {
+		target = r.Repo
+	}
+	prompt := fmt.Sprintf("/gh-fix %d", issue.Number)
+	if repo := issueRepository(target, issue); repo != "" {
+		prompt += "\n\nRepository: " + repo
+	}
+	prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	if r.Agent == "codex" {
 		// JSONL keeps Codex's progress events flowing when stdout is a pipe,
 		// which is how the dashboard captures agent output.

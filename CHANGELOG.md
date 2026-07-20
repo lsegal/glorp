@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Launch issue-fixing agents with the repository reported by GitHub instead of relying on the current directory.
+
 ## v1.0.1 - 2026-07-17
 
 - Prevent `--no-ui` from crashing when normal log messages are written.

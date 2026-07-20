@@ -381,6 +381,16 @@ func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
+	prompt := "/gh-fix 12\n\nRepository: owner/repo\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	issue := Issue{Number: 12, Repository: "owner/repo", Target: "https://github.com/users/owner/projects/3"}
+	got := commandArgs(CommandRunner{Agent: "codex", Repo: "wrong/repo"}, issue)
+	want := []string{"exec", "--json", prompt}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex args = %#v, want %#v", got, want)
+	}
+}
+
 func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", prompt}; !reflect.DeepEqual(got, want) {
