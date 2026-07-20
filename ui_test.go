@@ -252,20 +252,37 @@ func TestDashboardKeepsAgentMetadataVisibleForEveryStatus(t *testing.T) {
 func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
-		{Number: 7, Title: "UI", Status: "complete", Log: "finished"},
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "Preserve agent scrollback", Status: "active", Log: numberedLines(14),
+		CheckoutDirectory: "/tmp/glorp-gh-fix-161", SessionID: "session-161",
+	}}}))
+	m = updated.(dashboard)
+	view := m.jobs[7]
+	view.LineUp(2)
+	m.jobs[7] = view
+	pausedOffset := view.YOffset
+	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
+		{Number: 7, Title: "Preserve agent scrollback", Status: "complete", Log: numberedLines(14),
+			CheckoutDirectory: "/tmp/glorp-gh-fix-161", SessionID: "session-161"},
 	}}))
-	view := updated.(dashboard).View()
-	if !strings.Contains(view, "✓") {
-		t.Fatalf("dashboard did not show completion checkmark: %s", view)
+	m = updated.(dashboard)
+	rendered := m.View()
+	if !strings.Contains(rendered, "✓") {
+		t.Fatalf("dashboard did not show completion checkmark: %s", rendered)
 	}
-	card := strings.Split(view, "Logs")[0]
-	if strings.Contains(card, "complete") || strings.Contains(card, "finished") {
-		t.Fatalf("dashboard rendered the completed status or stale progress: %s", view)
+	card := strings.Split(rendered, "Logs")[0]
+	if strings.Contains(card, "complete") || !strings.Contains(card, "line 5") {
+		t.Fatalf("dashboard rendered the completed status or cleared its scrollback: %s", rendered)
+	}
+	if m.jobs[7].YOffset != pausedOffset {
+		t.Fatalf("completed viewport offset = %d, want %d", m.jobs[7].YOffset, pausedOffset)
+	}
+	if _, ok := m.regionFor(viewportTarget{jobNumber: 7}); !ok {
+		t.Fatal("completed agent viewport is not scrollable")
 	}
 	for _, line := range strings.Split(card, "\n") {
 		if strings.Contains(line, "#7") && !strings.Contains(line, "✓") {
-			t.Fatalf("dashboard rendered the completion checkmark on a separate line: %s", view)
+			t.Fatalf("dashboard rendered the completion checkmark on a separate line: %s", rendered)
 		}
 	}
 }
