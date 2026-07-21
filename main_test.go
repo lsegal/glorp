@@ -104,6 +104,38 @@ func TestVersionDefaultsToDevelopment(t *testing.T) {
 	}
 }
 
+func TestSelectedUIMode(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		mode  string
+		noUI  bool
+		want  string
+		valid bool
+	}{
+		{name: "web", mode: "web", want: "web", valid: true},
+		{name: "tui", mode: "tui", want: "tui", valid: true},
+		{name: "none", mode: "none", want: "none", valid: true},
+		{name: "no ui alias", mode: "web", noUI: true, want: "none", valid: true},
+		{name: "invalid", mode: "desktop"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := selectedUIMode(test.mode, test.noUI)
+			if (err == nil) != test.valid || got != test.want {
+				t.Fatalf("selectedUIMode(%q, %t) = (%q, %v), want (%q, valid=%t)", test.mode, test.noUI, got, err, test.want, test.valid)
+			}
+		})
+	}
+}
+
+func TestShouldUseTerminalUI(t *testing.T) {
+	if shouldUseTerminalUI("web", os.Stdout) || shouldUseTerminalUI("none", os.Stdout) {
+		t.Fatal("non-terminal UI modes selected the terminal UI")
+	}
+	if got, want := shouldUseTerminalUI("tui", os.Stdout), isTerminal(os.Stdout); got != want {
+		t.Fatalf("shouldUseTerminalUI(tui) = %t, want %t", got, want)
+	}
+}
+
 func TestParseTargetURLs(t *testing.T) {
 	for _, input := range []string{
 		"https://github.com/lsegal/glorp",

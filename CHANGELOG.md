@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replace separate UI-disabling flags with `--ui web|tui|none`, retaining `--no-ui` as an alias for `--ui none`.
 - Move the browser dashboard status bar beneath the title area.
 - Clarify gh-fix UI attachment terminology as screenshots and screen recordings.
 - Inline gh-fix UI screenshots in pull request descriptions instead of committing them as repository assets.
