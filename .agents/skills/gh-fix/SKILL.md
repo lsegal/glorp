@@ -53,7 +53,7 @@ After implementation is complete, and only then, determine whether any changed f
 2. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture the evidence.
 3. For terminal based interfaces, copy output as text if there is no visual / animation / state change.
 4. For all other non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to record the evidence.
-5. Attach the resulting screenshots or recording to the pull request, or add stable links to them. Treat missing required UI evidence as a blocker to opening or merging the pull request.
+5. Upload each screenshot or recording to the pull request, then embed it directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI evidence to repository assets or commit it to the branch. Treat missing inline UI evidence as a blocker to opening or merging the pull request.
 
 Skip this section only when the completed diff does not affect UI code in any way.
 Skip if you run into 2+ errors trying to capture results and mention this in the PR.
