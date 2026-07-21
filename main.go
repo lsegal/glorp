@@ -40,8 +40,8 @@ func main() {
 	webhookSecret := flag.String("webhook-secret", "", "optional GitHub webhook secret")
 	ngrokBinary := flag.String("ngrok-binary", "ngrok", "ngrok executable")
 	ngrokAPI := flag.String("ngrok-api", "http://127.0.0.1:4040", "ngrok local API URL")
-	noUI := flag.Bool("no-ui", false, "disable the interactive terminal UI")
-	noWebUI := flag.Bool("no-web-ui", false, "disable the browser UI")
+	uiMode := flag.String("ui", "web", "user interface: web, tui, or none")
+	noUI := flag.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
 	webUIPort := flag.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
 	yolo := flag.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
@@ -69,7 +69,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "interval must be positive and concurrency cannot be negative")
 		os.Exit(2)
 	}
-	if !*noWebUI && (*webUIPort < 1 || *webUIPort > 65535) {
+	mode, err := selectedUIMode(*uiMode, *noUI)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if mode == "web" && (*webUIPort < 1 || *webUIPort > 65535) {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
 		os.Exit(2)
 	}
@@ -97,16 +102,14 @@ func main() {
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
-	if shouldUseUI(*noUI, os.Stdout) {
+	if shouldUseTerminalUI(mode, os.Stdout) {
 		ui = NewTerminalUI()
 		output = ui.Writer()
 		go func() { _ = ui.Run(ctx) }()
 	}
 	var webUI *WebUI
 	var webServer *http.Server
-	if *noWebUI {
-		fmt.Fprintln(output, "web UI disabled")
-	} else {
+	if mode == "web" {
 		var err error
 		webUI, err = NewWebUI()
 		if err != nil {
@@ -134,6 +137,8 @@ func main() {
 		webURL := fmt.Sprintf("http://localhost:%d", port)
 		fmt.Fprintf(output, "web UI listening on %s\n", webURL)
 		webUI.Log("web UI listening on " + webURL)
+	} else if mode == "none" {
+		fmt.Fprintln(output, "UI disabled")
 	}
 	wOut := output
 	if ui != nil {
@@ -214,6 +219,22 @@ func listenForWebhooks(address string) (net.Listener, error) {
 func isTerminal(file *os.File) bool {
 	fd := file.Fd()
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+func selectedUIMode(mode string, noUI bool) (string, error) {
+	if noUI {
+		return "none", nil
+	}
+	switch mode {
+	case "web", "tui", "none":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("ui must be web, tui, or none")
+	}
+}
+
+func shouldUseTerminalUI(mode string, output *os.File) bool {
+	return mode == "tui" && shouldUseUI(false, output)
 }
 
 func shouldUseUI(disabled bool, output *os.File) bool {

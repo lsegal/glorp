@@ -91,14 +91,15 @@ Run without ngrok or managed webhooks by polling every 30 seconds:
 glorp --poll --interval 30s owner/repo
 ```
 
-The browser dashboard is available at `http://localhost:8765` by default. If that port is occupied, glorp uses the next available port and logs the selected URL. Choose a different starting port or disable the browser dashboard entirely:
+The browser dashboard is available at `http://localhost:8765` by default. If that port is occupied, glorp uses the next available port and logs the selected URL. Choose a different starting port, switch to the terminal dashboard, or disable UI entirely:
 
 ```sh
 glorp --web-ui-port 9000 owner/repo
-glorp --no-web-ui owner/repo
+glorp --ui tui owner/repo
+glorp --ui none owner/repo
 ```
 
-Disable the interactive dashboard and print normal timestamped logs even when stdout is a terminal:
+`--no-ui` remains available as an alias for `--ui none`:
 
 ```sh
 glorp --no-ui owner/repo
@@ -140,7 +141,7 @@ Organization-owned Projects use GitHub's `projects_v2_item` organization webhook
 
 Handled issues and active sessions are stored in `.glorp.json` by default. This prevents duplicate work after a restart and allows glorp to resume interrupted Codex or Claude sessions with the original agent, even when the new process selects a different `--agent`. If the original working directory is gone, the resumed agent is told to regenerate its missing work. Issues that declare dependencies using `depends on #123` or GitHub's issue-dependency relationship remain blocked until those dependencies close.
 
-Glorp also serves a localhost-only browser dashboard that mirrors the terminal dashboard's agent cards, output viewports, scrolling behavior, daemon logs, job counts, quota, delivery mode, and target status. When stdout is a terminal, glorp displays the interactive terminal dashboard unless `--no-ui` is set. With `--no-ui` or non-terminal output, it writes timestamped progress to stdout, including issue counts, queued and active jobs, webhook events, retries, completions, failures, and shutdown progress. Use `--no-web-ui` separately to disable the browser dashboard.
+Glorp serves either a localhost-only browser dashboard or an interactive terminal dashboard, selected by `--ui`. The browser dashboard mirrors the terminal dashboard's agent cards, output viewports, scrolling behavior, daemon logs, job counts, quota, delivery mode, and target status. `--ui web` is the default, `--ui tui` enables the terminal dashboard when stdout is a terminal, and `--ui none` writes timestamped progress to stdout. `--no-ui` is equivalent to `--ui none`.
 
 ## CLI reference
 
@@ -164,8 +165,8 @@ glorp [options] TARGET [TARGET ...]
 | `--model-level LEVEL` | agent default | Reasoning or effort level passed to the selected agent. Supported values are `low`, `medium`, and `high`. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | URL of the ngrok local API used to discover the public tunnel. |
 | `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. |
-| `--no-ui` | `false` | Disable the interactive terminal dashboard and write normal logs to stdout. |
-| `--no-web-ui` | `false` | Disable the localhost browser dashboard and log that it is disabled. |
+| `--ui MODE` | `web` | Select the UI: `web`, `tui`, or `none`. |
+| `--no-ui` | `false` | Disable all UI; equivalent to `--ui none`. |
 | `--poll` | `false` | Use polling without starting ngrok or configuring GitHub webhooks. |
 | `--ready-state NAME` | auto (`Todo` or `Ready`) | Project status that marks an issue ready for an agent; matching is case-insensitive. |
 | `--state PATH` | `.glorp.json` | File used to persist handled issues and active session state. |
