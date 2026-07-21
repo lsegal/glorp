@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Clarify gh-fix UI attachment terminology as screenshots and screen recordings.
 - Inline gh-fix UI screenshots in pull request descriptions instead of committing them as repository assets.
 - Build the browser dashboard with Vite only for release artifacts, while local development uses the Vite dev server and CI validates the UI's build, lint, and tests.
 - Restore readable spacing between metrics in the web dashboard status bar.

@@ -45,15 +45,15 @@ Immediately after creating the branch, publish it and open a draft pull request 
 6. Run focused tests first, then the repository's broader required checks. Resolve failures caused by the change. Do not mark a known-broken fix ready for review.
 7. Review status and the complete diff. Include only files needed for the issue, its tests, and changelog note.
 
-## Capture UI evidence
+## Capture UI screenshots and screen recordings
 
 After implementation is complete, and only then, determine whether any changed file affects a user interface. If so:
 
 1. Capture screenshots that show the completed UI change in representative final states. When the change includes animation, interaction, or a state transition, capture a screen recording that demonstrates the behavior instead of or in addition to screenshots. For animations, plan a set of actions that "use" the full features in their entirety, including any secondary use cases like error handling.
-2. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture the evidence.
-3. For terminal based interfaces, copy output as text if there is no visual / animation / state change.
-4. For all other non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to record the evidence.
-5. Upload each screenshot or recording to the pull request, then embed it directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI evidence to repository assets or commit it to the branch. Treat missing inline UI evidence as a blocker to opening or merging the pull request.
+2. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture screenshots or a screen recording.
+3. For terminal based interfaces, copy output as text if there is no visual, animation, or state change.
+4. For all other non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to create a screen recording.
+5. Upload each screenshot or screen recording to the pull request, then embed it directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI screenshots or screen recordings to repository assets or commit them to the branch. Treat missing inline screenshots or screen recordings as a blocker to opening or merging the pull request.
 
 Skip this section only when the completed diff does not affect UI code in any way.
 Skip if you run into 2+ errors trying to capture results and mention this in the PR.
@@ -74,9 +74,9 @@ Before the final push, verify that the branch contains the intended code, tests,
 
 ## Mark the pull request ready
 
-1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI evidence. Preserve `Closes #<ISSUENUMBER>` on its own line.
+1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings. Preserve `Closes #<ISSUENUMBER>` on its own line.
 2. Confirm the head branch, base branch, and changed-file scope are correct.
-3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI evidence are complete.
+3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI screenshots or screen recordings are complete.
 
 ## Drive CI to completion
 
@@ -90,13 +90,13 @@ Continue until every required check completes successfully:
    - For a failure caused by the PR, reproduce it locally when practical, implement the smallest correct repair, run relevant local checks, commit the repair, and push normally.
    - For a merge conflict, update the branch from the latest default branch without force, resolve it, rerun affected checks, commit, and push.
    - For a clearly transient infrastructure or flaky-test failure, rerun the failed job once, then investigate if it repeats.
-   - For a clearly unrelated persistent failure, gather evidence and attempt an in-scope repair only when doing so is safe. Otherwise stop at the genuine external blocker.
+   - For a clearly unrelated persistent failure, gather diagnostic details and attempt an in-scope repair only when doing so is safe. Otherwise stop at the genuine external blocker.
 6. After every push or rerun, monitor the new head SHA's checks from pending through completion. Ignore stale results from earlier SHAs.
 7. Repeat diagnosis, repair, local verification, commit, push, and monitoring for as many actionable CI failures as necessary. Do not weaken assertions, skip tests, reduce coverage, or change CI merely to obtain a green result.
 
 ## Merge and verify
 
-1. Before merging, fetch the latest PR state and confirm all required checks are successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI evidence is present, and the head SHA is the one that passed CI.
+1. Before merging, fetch the latest PR state and confirm all required checks are successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI screenshots or screen recordings are present, and the head SHA is the one that passed CI.
 2. Merge using the repository's required or established merge method. Prefer a normal merge or rebase when allowed because it preserves the commit containing `Closes #N`. If squash merge is required, keep the PR body's standalone closing reference and set the final squash commit body to include `Closes #<ISSUENUMBER>`.
 3. Delete the remote issue branch after a successful merge when repository policy permits.
 4. After confirming the merge, remove the workflow labels from the originating issue with `gh issue edit <ISSUENUMBER> --repo <OWNER/REPO> --remove-label agent-ready --remove-label agent-started`. Treat a failure to remove either label as an actionable error and retry it; do not remove labels before the PR is merged.
@@ -115,7 +115,7 @@ Only after the pull request is merged, review its body, review comments, and con
 
 ## Report the result
 
-Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, completed CI checks, follow-up issue URLs or confirmation that none were needed, and UI evidence or confirmation that it was not applicable. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log evidence, and the remaining requirement; preserve the isolated clone and branch for continuation.
+Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, completed CI checks, follow-up issue URLs or confirmation that none were needed, and UI screenshots or screen recordings, or confirmation that they were not applicable. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log details, and the remaining requirement; preserve the isolated clone and branch for continuation.
 
 ## Clean up the clone
 
