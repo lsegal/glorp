@@ -791,6 +791,20 @@ func TestSessionMetadataCaptureWriterPreservesOutputAndCapturesCodexSessionAndCh
 	}
 }
 
+func TestSessionMetadataCaptureWriterCapturesCheckoutWrappedInMarkdown(t *testing.T) {
+	checkout := t.TempDir()
+	var updates []AgentSession
+	w := &sessionMetadataCaptureWriter{
+		output:   io.Discard,
+		onUpdate: func(update AgentSession) { updates = append(updates, update) },
+	}
+	_, _ = io.WriteString(w, "`GLORP_CHECKOUT_DIRECTORY="+checkout+"`\n")
+	want := []AgentSession{{CheckoutDirectory: checkout}}
+	if !reflect.DeepEqual(updates, want) {
+		t.Fatalf("captured metadata = %#v, want %#v", updates, want)
+	}
+}
+
 func TestSessionMetadataCaptureWriterIgnoresInvalidCheckout(t *testing.T) {
 	var updates []AgentSession
 	w := &sessionMetadataCaptureWriter{
