@@ -485,7 +485,16 @@ func TestGlorpTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
-	time.Sleep(20 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		r.mu.Lock()
+		dispatched := len(r.got) > 0
+		r.mu.Unlock()
+		if dispatched || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	close(r.release)
 	cancel()
 	if err := <-done; err != nil {
