@@ -4,6 +4,7 @@
 
 - Default the repository target to the current directory's `origin` git remote when no `TARGET` argument is given.
 - Redispatch a completed project item when its status is moved back to `Todo` without requiring a daemon restart.
+- Record the contributing agent CLI and model in a gh-fix pull request footer, accumulating every agent/model that has worked the issue when a different one resumes mid-flight.
 
 ## v1.0.6 - 2026-08-16
 
