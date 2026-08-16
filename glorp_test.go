@@ -1240,6 +1240,52 @@ func TestGlorpRequeuesStaleRepositoryWorkState(t *testing.T) {
 	}
 }
 
+func TestGlorpRedispatchesProjectItemMovedBackToTodoAfterCompletion(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, ProjectStatus: "Todo"}}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: r, Out: &logs,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	closedRelease := false
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		dispatched := append([]int(nil), r.got...)
+		r.mu.Unlock()
+		if !closedRelease && len(dispatched) >= 1 {
+			// Let the first run complete so the item's local state becomes
+			// "completed" while the project item remains in the Todo column.
+			close(r.release)
+			closedRelease = true
+		}
+		if reflect.DeepEqual(dispatched, []int{7, 7}) {
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if want := "reset stale local completed state"; !strings.Contains(logs.String(), want) {
+				t.Fatalf("logs did not report completed reset:\n%s", logs.String())
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if !closedRelease {
+		close(r.release)
+	}
+	<-done
+	t.Fatalf("completed project item moved back to Todo was not redispatched: got %v", r.got)
+}
+
 func TestProjectReadyState(t *testing.T) {
 	for _, test := range []struct {
 		configured string

@@ -381,7 +381,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 			key := issueKey(issue)
 			workMu.Lock()
 			state := work[key]
-			staleRestoredState := restored[key] && !workStateMatchesRemote(issue.Target, issue, state)
+			reconcileCompleted := isProjectTarget(issue.Target) && state.Status == "completed"
+			staleRestoredState := (restored[key] || reconcileCompleted) && !workStateMatchesRemote(issue.Target, issue, state)
 			if staleRestoredState {
 				staleStatus := state.Status
 				delete(work, key)
