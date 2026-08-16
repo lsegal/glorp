@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Support repeating `--agent` to configure multiple agents, load balanced evenly across concurrency, with each agent's quota shown by name in the dashboard.
+- Show Claude's actual session/week usage in the dashboard quota display instead of "not tracked", read via the free local `/usage` slash command.
 - Default the repository target to the current directory's `origin` git remote when no `TARGET` argument is given.
 - Redispatch a completed project item when its status is moved back to `Todo` without requiring a daemon restart.
 - Fix a previously seen project item not being redispatched when its status changes to `Todo`/`Ready` (matching was case-sensitive and restricted to `In Progress`).
