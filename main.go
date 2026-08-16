@@ -1041,6 +1041,7 @@ func (w *sessionMetadataCaptureWriter) captureLine(line string) {
 		return
 	}
 	checkout := strings.TrimSpace(line[marker+len(checkoutDirectoryMarker):])
+	checkout = strings.Trim(checkout, "`*\"' ")
 	if !filepath.IsAbs(checkout) {
 		return
 	}

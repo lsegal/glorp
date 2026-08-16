@@ -161,6 +161,24 @@ h1 span {
 .viewport-wrap {
 	position: relative;
 	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.viewport-status {
+	flex: 0 0 auto;
+	padding: 4px 12px;
+	border-radius: 6px 6px 0 0;
+	background: #18181b;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font:
+		11px / 16px ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
 }
 .viewport {
 	width: 100%;
@@ -173,6 +191,7 @@ h1 span {
 	overflow: auto;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+	flex: 1 1 auto;
 	font:
 		11px / 17px ui-monospace,
 		SFMono-Regular,
@@ -180,6 +199,9 @@ h1 span {
 		Consolas,
 		monospace;
 	scrollbar-color: #52525b #18181b;
+}
+.viewport-status + .viewport {
+	border-radius: 0 0 6px 6px;
 }
 .more {
 	position: absolute;

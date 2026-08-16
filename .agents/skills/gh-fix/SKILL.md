@@ -33,7 +33,17 @@ Immediately after creating the branch, publish it and open a draft pull request 
 1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER>`, then push the new branch with upstream tracking. Never force-push.
 2. Open a draft PR against the current default branch with a concise title describing the intended fix.
 3. Write a real Markdown body that summarizes the issue and planned work. Include `Closes #<ISSUENUMBER>` on its own line so the draft links to and will close the original issue when merged.
-4. Record the PR number and URL, then confirm the head and base branches are correct.
+4. End the body with a `**Agents:**` footer line naming the current agent CLI and model handling the issue (for example `**Agents:** claude-code (claude-sonnet-5)`), identified from your own runtime context. This is the contributing-agents footer described below.
+5. Record the PR number and URL, then confirm the head and base branches are correct.
+
+### Maintaining the contributing-agents footer
+
+Every time you write or replace the PR body (draft creation, checkpoint updates, and marking ready), preserve the `**Agents:**` footer instead of overwriting it:
+
+1. Read the current PR body first and locate its `**Agents:**` line, if any.
+2. Determine your own current agent CLI and model from your runtime context.
+3. If the footer is missing, add it with just your own entry. If it already lists one or more agent/model entries, keep every distinct existing entry and append your own only if it is not already present, comma-separated in the order encountered (for example `**Agents:** codex (gpt-5), claude-code (claude-sonnet-5)`).
+4. This makes the footer accumulate every agent and model that has touched the issue, which matters when a different agent or model resumes a draft mid-flight.
 
 ## Implement the fix
 
@@ -74,7 +84,7 @@ Before the final push, verify that the branch contains the intended code, tests,
 
 ## Mark the pull request ready
 
-1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings. Preserve `Closes #<ISSUENUMBER>` on its own line.
+1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings. Preserve `Closes #<ISSUENUMBER>` on its own line and update the `**Agents:**` footer as described above rather than dropping or overwriting it.
 2. Confirm the head branch, base branch, and changed-file scope are correct.
 3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI screenshots or screen recordings are complete.
 
