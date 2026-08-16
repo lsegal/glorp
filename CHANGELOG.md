@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Default the repository target to the current directory's `origin` git remote when no `TARGET` argument is given.
+- Redispatch a completed project item when its status is moved back to `Todo` without requiring a daemon restart.
 
 ## v1.0.6 - 2026-08-16
 
