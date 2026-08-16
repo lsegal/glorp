@@ -146,8 +146,10 @@ Glorp serves either a localhost-only browser dashboard or an interactive termina
 ## CLI reference
 
 ```text
-glorp [options] TARGET [TARGET ...]
+glorp [options] [TARGET [TARGET ...]]
 ```
+
+If no `TARGET` is given, glorp uses the current directory's `origin` git remote when it points to a GitHub repository.
 
 | Option | Default | Description |
 | --- | --- | --- |

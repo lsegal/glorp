@@ -60,7 +60,13 @@ func main() {
 		fmt.Println(version)
 		return
 	}
-	if flag.NArg() < 1 {
+	targets := flag.Args()
+	if len(targets) == 0 {
+		if repo, ok := originRemoteTarget(); ok {
+			targets = []string{repo}
+		}
+	}
+	if len(targets) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: glorp [flags] TARGET [TARGET ...]")
 		flag.PrintDefaults()
 		os.Exit(2)
@@ -98,7 +104,6 @@ func main() {
 	defer stop()
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(*readyState)}
 	gh.Filter, gh.AllIssues = filter.String(), *allIssues
-	targets := flag.Args()
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
@@ -512,6 +517,35 @@ type target struct {
 	repo, owner, projectID string
 	projectOwnerType       string
 	isProject              bool
+}
+
+// originRemoteTarget returns the OWNER/REPO for the current directory's
+// "origin" git remote, when it points to a GitHub repository.
+func originRemoteTarget() (string, bool) {
+	output, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		return "", false
+	}
+	return parseGitHubRemote(strings.TrimSpace(string(output)))
+}
+
+func parseGitHubRemote(remote string) (string, bool) {
+	remote = strings.TrimSuffix(remote, ".git")
+	switch {
+	case strings.HasPrefix(remote, "git@github.com:"):
+		repo := strings.TrimPrefix(remote, "git@github.com:")
+		return repo, validRepo(repo)
+	case strings.HasPrefix(remote, "ssh://git@github.com/"):
+		repo := strings.TrimPrefix(remote, "ssh://git@github.com/")
+		return repo, validRepo(repo)
+	default:
+		u, err := url.Parse(remote)
+		if err != nil || u.Host != "github.com" {
+			return "", false
+		}
+		repo := strings.Trim(u.Path, "/")
+		return repo, validRepo(repo)
+	}
 }
 
 func parseTarget(value string) (target, error) {

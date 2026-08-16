@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Default the repository target to the current directory's `origin` git remote when no `TARGET` argument is given.
+
 ## v1.0.6 - 2026-08-16
 
 - Run non-interactive Claude agents in autonomous permission mode so issue workflows can use required tools instead of exiting immediately.
