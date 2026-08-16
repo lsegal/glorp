@@ -881,10 +881,13 @@ func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen boo
 		return true
 	}
 	if isProjectTarget(repo) {
-		if !seen {
-			return projectStatusAllowsDispatch(issue.ProjectStatus, readyState)
+		if projectStatusAllowsDispatch(issue.ProjectStatus, readyState) {
+			return true
 		}
-		return issue.ProjectStatus == "In Progress"
+		if !seen {
+			return false
+		}
+		return strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress")
 	}
 	if !seen {
 		return true

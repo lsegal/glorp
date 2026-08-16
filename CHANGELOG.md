@@ -4,6 +4,7 @@
 
 - Default the repository target to the current directory's `origin` git remote when no `TARGET` argument is given.
 - Redispatch a completed project item when its status is moved back to `Todo` without requiring a daemon restart.
+- Fix a previously seen project item not being redispatched when its status changes to `Todo`/`Ready` (matching was case-sensitive and restricted to `In Progress`).
 
 ## v1.0.6 - 2026-08-16
 

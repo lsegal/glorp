@@ -1161,8 +1161,14 @@ func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
 	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, true, "") {
 		t.Fatal("in-progress project issue was not reclaimed")
 	}
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, true, "") {
-		t.Fatal("non-in-progress project issue was reclaimed")
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "in progress"}, false, false, true, "") {
+		t.Fatal("case-insensitive in-progress project issue was not reclaimed")
+	}
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, true, "") {
+		t.Fatal("previously seen project issue moved back to Todo was not dispatched")
+	}
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Backlog"}, false, false, true, "") {
+		t.Fatal("previously seen backlog project issue was dispatched")
 	}
 	if !shouldDispatchIssue("o/r", Issue{Labels: []IssueLabel{{Name: agentStartedLabel}}}, false, false, true, "") {
 		t.Fatal("agent-started repository issue was not reclaimed")
