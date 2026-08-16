@@ -45,7 +45,7 @@ function useDashboardState() {
 	return [state, connected];
 }
 
-function ScrollViewport({ value, empty = "waiting for output..." }) {
+function ScrollViewport({ value, empty = "waiting for output...", status }) {
 	const viewport = useRef(null);
 	const follow = useRef(true);
 	const [showMore, setShowMore] = useState(false);
@@ -60,6 +60,7 @@ function ScrollViewport({ value, empty = "waiting for output..." }) {
 	};
 	return (
 		<div className="viewport-wrap">
+			{status && <div className="viewport-status">{status}</div>}
 			<pre ref={viewport} onScroll={onScroll} className="viewport">
 				{value || empty}
 			</pre>
@@ -108,7 +109,10 @@ function JobCard({ job }) {
 			<div className="meta" title={job.SessionID}>
 				<Terminal /> session: {job.SessionID || "pending"}
 			</div>
-			<ScrollViewport value={job.Log} />
+			<ScrollViewport
+				value={job.Log}
+				status={`clone: ${job.CheckoutDirectory || "pending"}`}
+			/>
 		</article>
 	);
 }
