@@ -111,6 +111,12 @@ Use Claude Code and run up to three agent jobs concurrently:
 glorp --agent claude --concurrency 3 owner/repo
 ```
 
+Load balance work evenly across Codex and Claude by repeating `--agent`:
+
+```sh
+glorp --agent codex --agent claude --concurrency 4 owner/repo
+```
+
 Allow agents to run without sandbox or permission checks:
 
 ```sh
@@ -155,7 +161,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | --- | --- | --- |
 | `-h`, `--help` | — | Print command usage and option defaults. |
 | `--version` | `false` | Print the glorp version and exit. |
-| `--agent NAME` | `codex` | Agent to run. Supported values are `codex` and `claude`. |
+| `--agent NAME` | `codex` | Agent to run. Supported values are `codex` and `claude`. Repeatable; when given more than once, new issues are load balanced evenly across the listed agents. |
 | `--all-issues` | `false` | Disable the default issue-search filter and consider all open issues. |
 | `--claude-binary PATH` | `claude` | Claude Code executable name or path. |
 | `--codex-binary PATH` | `codex` | Codex executable name or path. |

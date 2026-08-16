@@ -128,7 +128,7 @@ type Glorp struct {
 	Labels          LabelEnsurer
 	Status          IssueStatuser
 	UI              UIReporter
-	Quota           func(context.Context) string
+	Quota           func(context.Context) map[string]string
 	logMu           sync.Mutex
 }
 
@@ -337,11 +337,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if len(list) > maxVisibleJobs {
 			list = list[:maxVisibleJobs]
 		}
-		quota := ""
+		var quotas map[string]string
 		if w.Quota != nil {
-			quota = w.Quota(ctx)
+			quotas = w.Quota(ctx)
 		}
-		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quota: quota, Jobs: list})
+		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quotas: quotas, Jobs: list})
 	}
 	pollNumber := 0
 	poll := func() error {

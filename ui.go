@@ -46,6 +46,7 @@ type GlorpSnapshot struct {
 	TokensUsed    int
 	TokenLimit    int
 	Quota         string
+	Quotas        map[string]string
 	Jobs          []JobSnapshot
 }
 

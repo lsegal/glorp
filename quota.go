@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -108,7 +109,67 @@ func formatCodexQuota(primary *codexPrimaryRateLimit) string {
 	return fmt.Sprintf("%s %d%% left", window, remaining)
 }
 
+// namedQuotaReader reads quota text for a single named agent.
+type namedQuotaReader struct {
+	name string
+	read func(context.Context) string
+}
+
+// namedQuotaReaders builds one quota reader per configured agent, deduplicated
+// by name. Agents without a known quota source (e.g. claude) still get an
+// entry so the UI can show that their quota is not tracked.
+func namedQuotaReaders(agents []string, binaryFor func(string) string) []namedQuotaReader {
+	seen := make(map[string]bool, len(agents))
+	readers := make([]namedQuotaReader, 0, len(agents))
+	for _, agent := range agents {
+		if seen[agent] {
+			continue
+		}
+		seen[agent] = true
+		switch agent {
+		case "codex":
+			reader := &codexQuotaReader{Binary: binaryFor(agent)}
+			readers = append(readers, namedQuotaReader{name: agent, read: reader.Read})
+		default:
+			readers = append(readers, namedQuotaReader{name: agent, read: func(context.Context) string { return "" }})
+		}
+	}
+	return readers
+}
+
+// combinedQuotaReader reads every named reader's quota and returns the
+// results keyed by agent name.
+func combinedQuotaReader(readers []namedQuotaReader) func(context.Context) map[string]string {
+	return func(ctx context.Context) map[string]string {
+		result := make(map[string]string, len(readers))
+		for _, reader := range readers {
+			result[reader.name] = reader.read(ctx)
+		}
+		return result
+	}
+}
+
+func formatNamedQuotas(quotas map[string]string) string {
+	names := make([]string, 0, len(quotas))
+	for name := range quotas {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, name := range names {
+		text := strings.TrimSpace(quotas[name])
+		if text == "" {
+			text = "not tracked"
+		}
+		parts[i] = name + ": " + text
+	}
+	return strings.Join(parts, ", ")
+}
+
 func quotaText(snapshot GlorpSnapshot) string {
+	if len(snapshot.Quotas) > 0 {
+		return "quota: " + formatNamedQuotas(snapshot.Quotas)
+	}
 	if strings.TrimSpace(snapshot.Quota) != "" {
 		return "quota: " + snapshot.Quota
 	}
