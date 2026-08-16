@@ -413,6 +413,26 @@ func TestFilterFlagDefaultsToMyOpenIssues(t *testing.T) {
 	}
 }
 
+func TestAgentFlagAccumulatesValues(t *testing.T) {
+	got := agentFlag{values: []string{"codex"}}
+	if err := got.Set("claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := got.Set("codex"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "claude,codex"; got.String() != want {
+		t.Fatalf("agents = %q, want %q", got.String(), want)
+	}
+}
+
+func TestAgentFlagRejectsUnknownAgent(t *testing.T) {
+	got := agentFlag{values: []string{"codex"}}
+	if err := got.Set("gemini"); err == nil {
+		t.Fatal("expected error for unknown agent")
+	}
+}
+
 func TestIssueListArgsDisablesFilter(t *testing.T) {
 	got := issueListArgs("owner/repo", "label:agent-ready", true)
 	if slices.Contains(got, "--search") {

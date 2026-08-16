@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -760,6 +761,27 @@ func TestCommandRunnerRegeneratesWorkWhenCheckoutIsMissing(t *testing.T) {
 	prompt := args[len(args)-1]
 	if !strings.HasPrefix(prompt, "continue") || !strings.Contains(prompt, "repository directory no longer exists") || !strings.Contains(prompt, "Regenerate") {
 		t.Fatalf("missing-checkout prompt = %q", prompt)
+	}
+}
+
+func TestCommandRunnerAgentNameLoadBalancesEvenlyAcrossAgents(t *testing.T) {
+	runner := CommandRunner{Agents: []string{"codex", "claude"}, agentCursor: &atomic.Uint64{}}
+	got := make([]string, 6)
+	for i := range got {
+		got[i] = runner.AgentName()
+	}
+	want := []string{"codex", "claude", "codex", "claude", "codex", "claude"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("agent rotation = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerAgentNameWithoutAgentsFallsBackToAgent(t *testing.T) {
+	if got, want := (CommandRunner{Agent: "claude"}).AgentName(), "claude"; got != want {
+		t.Fatalf("AgentName() = %q, want %q", got, want)
+	}
+	if got, want := (CommandRunner{}).AgentName(), "codex"; got != want {
+		t.Fatalf("AgentName() = %q, want %q", got, want)
 	}
 }
 

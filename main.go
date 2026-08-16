@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -45,7 +46,8 @@ func main() {
 	webUIPort := flag.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
 	yolo := flag.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
-	agent := flag.String("agent", "codex", "agent to run: codex or claude")
+	agents := agentFlag{values: []string{"codex"}}
+	flag.Var(&agents, "agent", "agent to run: codex or claude (repeatable to load balance evenly across concurrency)")
 	model := flag.String("model", "", "model to use for the agent")
 	modelLevel := flag.String("model-level", "", "model reasoning level: low, medium, or high")
 	readyState := flag.String("ready-state", "", "project status that marks an issue ready for an agent")
@@ -84,10 +86,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
 		os.Exit(2)
 	}
-	if *agent != "codex" && *agent != "claude" {
-		fmt.Fprintln(os.Stderr, "agent must be codex or claude")
-		os.Exit(2)
-	}
 	if *modelLevel != "" && *modelLevel != "low" && *modelLevel != "medium" && *modelLevel != "high" {
 		fmt.Fprintln(os.Stderr, "model-level must be low, medium, or high")
 		os.Exit(2)
@@ -97,7 +95,7 @@ func main() {
 		limit = 3
 	}
 	binary := *codexBinary
-	if *agent == "claude" {
+	if agents.values[0] == "claude" {
 		binary = *claudeBinary
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -149,12 +147,17 @@ func main() {
 	if ui != nil {
 		wOut = io.Discard
 	}
-	var quota func(context.Context) string
-	if *agent == "codex" {
-		quotaReader := &codexQuotaReader{Binary: binary}
-		quota = quotaReader.Read
+	quota := combinedQuotaReader(namedQuotaReaders(agents.values, func(agent string) string {
+		if agent == "claude" {
+			return *claudeBinary
+		}
+		return *codexBinary
+	}))
+	var agentCursor *atomic.Uint64
+	if len(agents.values) > 1 {
+		agentCursor = &atomic.Uint64{}
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agent: *agent, Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.values, Agent: agents.values[0], Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -338,6 +341,30 @@ func (f *filterFlag) String() string {
 }
 
 func (f *filterFlag) Set(value string) error {
+	if !f.set {
+		f.values = nil
+		f.set = true
+	}
+	f.values = append(f.values, value)
+	return nil
+}
+
+// agentFlag collects repeated --agent values so multiple agents can be
+// configured and load balanced evenly across concurrency.
+type agentFlag struct {
+	values []string
+	set    bool
+}
+
+func (f *agentFlag) String() string {
+	return strings.Join(f.values, ",")
+}
+
+func (f *agentFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value != "codex" && value != "claude" {
+		return fmt.Errorf("agent must be codex or claude")
+	}
 	if !f.set {
 		f.values = nil
 		f.set = true
@@ -887,9 +914,16 @@ func projectStatusError(number int, err error, detail string) error {
 
 type CommandRunner struct {
 	Binary, CodexBinary, ClaudeBinary string
-	Agent, Model, ModelLevel, Repo    string
-	Output                            io.Writer
-	Yolo                              bool
+	// Agents holds every configured agent to load balance across when
+	// dispatching new issues. AgentName rotates through it round robin.
+	Agents                         []string
+	Agent, Model, ModelLevel, Repo string
+	Output                         io.Writer
+	Yolo                           bool
+	// agentCursor is shared across copies of CommandRunner (via pointer) so
+	// round robin selection advances consistently regardless of how many
+	// times the struct is copied.
+	agentCursor *atomic.Uint64
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
@@ -970,7 +1004,22 @@ func (r CommandRunner) RunWithOutput(ctx context.Context, issue Issue, output io
 	return r.run(ctx, issue, AgentSession{}, nil, output)
 }
 
-func (r CommandRunner) AgentName() string { return r.Agent }
+// AgentName returns the agent to use for the next newly dispatched issue,
+// rotating round robin through Agents when more than one is configured so
+// work is load balanced evenly across concurrency.
+func (r CommandRunner) AgentName() string {
+	if len(r.Agents) == 0 {
+		if r.Agent != "" {
+			return r.Agent
+		}
+		return "codex"
+	}
+	if len(r.Agents) == 1 || r.agentCursor == nil {
+		return r.Agents[0]
+	}
+	index := r.agentCursor.Add(1) - 1
+	return r.Agents[index%uint64(len(r.Agents))]
+}
 
 func (r CommandRunner) RunSession(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession)) error {
 	return r.run(ctx, issue, session, updateSession, nil)

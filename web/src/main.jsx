@@ -117,6 +117,17 @@ function JobCard({ job }) {
 	);
 }
 
+function formatQuotas(snapshot) {
+	const quotas = snapshot.Quotas;
+	if (quotas && Object.keys(quotas).length > 0) {
+		return Object.keys(quotas)
+			.sort()
+			.map((name) => `${name}: ${quotas[name] || "not tracked"}`)
+			.join(", ");
+	}
+	return snapshot.Quota || "unavailable";
+}
+
 function StatusBar({ snapshot, connected }) {
 	const active = (snapshot.Running || 0) + (snapshot.Queued || 0);
 	const idle = Math.max(0, (snapshot.Concurrency || 0) - active);
@@ -134,9 +145,7 @@ function StatusBar({ snapshot, connected }) {
 				<span className="active-text">{active}</span> active{" "}
 				<span className="total">{total}</span> total
 			</div>
-			<div className="status-cell quota">
-				quota: {snapshot.Quota || "unavailable"}
-			</div>
+			<div className="status-cell quota">quota: {formatQuotas(snapshot)}</div>
 			<div className="status-cell delivery">
 				<Radio /> {delivery}
 				{!connected && " (offline)"}

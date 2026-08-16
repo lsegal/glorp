@@ -366,6 +366,16 @@ func TestDashboardShowsQuota(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsAllNamedQuotas(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Quotas: map[string]string{"codex": "weekly 87% left", "claude": ""}}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "quota: claude: not tracked, codex: weekly 87% left") {
+		t.Fatalf("dashboard did not show all named quotas: %s", view)
+	}
+}
+
 func TestFormatCodexQuota(t *testing.T) {
 	window := int64(7 * 24 * 60)
 	if got := formatCodexQuota(&codexPrimaryRateLimit{UsedPercent: 13, WindowDurationMins: &window}); got != "weekly 87% left" {
