@@ -993,6 +993,10 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 	if !session.Resume && r.ModelLevel != "" {
 		args = append(args, "--effort", r.ModelLevel)
 	}
+	// Claude's default text output only prints once the full response is
+	// ready. Stream JSON events instead so the dashboard shows live progress
+	// the same way Codex's plain-text output already does.
+	args = append(args, "--output-format", "stream-json", "--verbose")
 	return append(args, prompt)
 }
 
@@ -1111,6 +1115,110 @@ func (w *sessionMetadataCaptureWriter) Flush() {
 	}
 }
 
+// claudeJSONOutputWriter decodes Claude's --output-format stream-json events
+// into readable text lines. Claude's default text output only prints once
+// the full response is ready, which leaves the dashboard showing no output
+// at all until the agent finishes; stream-json events arrive incrementally.
+type claudeJSONOutputWriter struct {
+	mu     sync.Mutex
+	output io.Writer
+	buffer []byte
+}
+
+type claudeStreamEvent struct {
+	Type    string `json:"type"`
+	Message struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	} `json:"message"`
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+}
+
+func newClaudeJSONOutputWriter(output io.Writer) *claudeJSONOutputWriter {
+	return &claudeJSONOutputWriter{output: output}
+}
+
+func (w *claudeJSONOutputWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buffer = append(w.buffer, p...)
+	for {
+		newline := bytes.IndexByte(w.buffer, '\n')
+		if newline < 0 {
+			break
+		}
+		line := append([]byte(nil), w.buffer[:newline]...)
+		w.buffer = w.buffer[newline+1:]
+		if err := w.writeLine(line); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+func (w *claudeJSONOutputWriter) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buffer) == 0 {
+		return nil
+	}
+	line := append([]byte(nil), w.buffer...)
+	w.buffer = nil
+	return w.writeLine(line)
+}
+
+func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return nil
+	}
+	var event claudeStreamEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		_, err = fmt.Fprintln(w.output, string(line))
+		return err
+	}
+	var texts []string
+	switch {
+	case event.Type == "assistant":
+		for _, block := range event.Message.Content {
+			switch block.Type {
+			case "text":
+				if text := strings.TrimSpace(block.Text); text != "" {
+					texts = append(texts, text)
+				}
+			case "tool_use":
+				texts = append(texts, "Running: "+claudeToolUseSummary(block.Name, block.Input))
+			}
+		}
+	case event.Type == "result" && event.IsError:
+		if text := strings.TrimSpace(event.Result); text != "" {
+			texts = append(texts, "Agent error: "+text)
+		}
+	}
+	if len(texts) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintln(w.output, strings.Join(texts, "\n"))
+	return err
+}
+
+func claudeToolUseSummary(name string, input json.RawMessage) string {
+	if len(input) > 0 {
+		var fields map[string]any
+		if err := json.Unmarshal(input, &fields); err == nil {
+			if command, ok := fields["command"].(string); ok && command != "" {
+				return command
+			}
+		}
+	}
+	return name
+}
+
 func (r CommandRunner) binary(agent string) string {
 	if agent == "codex" && r.CodexBinary != "" {
 		return r.CodexBinary
@@ -1148,8 +1256,18 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 		}
 		agentOutput = metadataOutput
 	}
+	var claudeOutput *claudeJSONOutputWriter
+	if agent == "claude" {
+		claudeOutput = newClaudeJSONOutputWriter(agentOutput)
+		agentOutput = claudeOutput
+	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := cmd.Run()
+	if claudeOutput != nil {
+		if err := claudeOutput.Flush(); runErr == nil && err != nil {
+			runErr = err
+		}
+	}
 	if metadataOutput != nil {
 		metadataOutput.Flush()
 	}

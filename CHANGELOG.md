@@ -9,6 +9,7 @@
 - Fix the checkout directory getting stuck reporting "pending" when the agent wraps its `GLORP_CHECKOUT_DIRECTORY` progress line in markdown formatting.
 - Show each agent's clone status inside its viewport output area in the browser dashboard.
 - Record the contributing agent CLI and model in a gh-fix pull request footer, accumulating every agent/model that has worked the issue when a different one resumes mid-flight.
+- Stream Claude agent progress into the dashboard as it happens instead of showing "waiting for output..." until the job finishes.
 
 ## v1.0.6 - 2026-08-16
 

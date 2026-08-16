@@ -693,7 +693,7 @@ func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args: %#v", got)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args: %#v", got)
 	}
 }
@@ -713,7 +713,7 @@ func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex yolo args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude yolo args = %#v, want %#v", got, want)
 	}
 }
@@ -723,7 +723,7 @@ func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
 	}
 }
@@ -740,7 +740,7 @@ func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 
 	claude := CommandRunner{Agent: "codex", Yolo: true, Model: "saved-model", ModelLevel: "medium"}
 	session.Agent = "claude"
-	wantClaude := []string{"-p", "--resume", "session-7", "--dangerously-skip-permissions", resumePrompt}
+	wantClaude := []string{"-p", "--resume", "session-7", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", resumePrompt}
 	if got := commandArgsForSession(claude, Issue{Number: 7}, session); !reflect.DeepEqual(got, wantClaude) {
 		t.Fatalf("Claude resume args = %#v, want %#v", got, wantClaude)
 	}
@@ -749,7 +749,7 @@ func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 func TestCommandRunnerStartsClaudeWithPersistedSessionID(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	session := AgentSession{ID: "session-12", Agent: "claude"}
-	want := []string{"-p", "--session-id", "session-12", "--permission-mode", "auto", prompt}
+	want := []string{"-p", "--session-id", "session-12", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", prompt}
 	if got := commandArgsForSession(CommandRunner{Agent: "codex"}, Issue{Number: 12}, session); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Claude initial args = %#v, want %#v", got, want)
 	}
@@ -836,6 +836,68 @@ func TestSessionMetadataCaptureWriterIgnoresInvalidCheckout(t *testing.T) {
 	_, _ = io.WriteString(w, "GLORP_CHECKOUT_DIRECTORY=relative/path\nGLORP_CHECKOUT_DIRECTORY="+filepath.Join(t.TempDir(), "missing")+"\n")
 	if len(updates) != 0 {
 		t.Fatalf("invalid checkout metadata was captured: %#v", updates)
+	}
+}
+
+func TestClaudeJSONOutputWriterDecodesStreamEvents(t *testing.T) {
+	var output bytes.Buffer
+	w := newClaudeJSONOutputWriter(&output)
+	lines := []string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Looking into the issue."}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"main.go"}}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"done"}`,
+	}
+	for _, line := range lines {
+		if _, err := io.WriteString(w, line+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "Looking into the issue.\nRunning: go test ./...\nRunning: Read\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded output = %q, want %q", got, want)
+	}
+}
+
+func TestClaudeJSONOutputWriterSurfacesErrorResults(t *testing.T) {
+	var output bytes.Buffer
+	w := newClaudeJSONOutputWriter(&output)
+	if _, err := io.WriteString(w, `{"type":"result","is_error":true,"result":"context deadline exceeded"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	want := "Agent error: context deadline exceeded\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded output = %q, want %q", got, want)
+	}
+}
+
+func TestClaudeJSONOutputWriterPassesThroughNonJSONLines(t *testing.T) {
+	var output bytes.Buffer
+	w := newClaudeJSONOutputWriter(&output)
+	if _, err := io.WriteString(w, "not json\n"); err != nil {
+		t.Fatal(err)
+	}
+	want := "not json\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded output = %q, want %q", got, want)
+	}
+}
+
+func TestClaudeJSONOutputWriterFlushesTrailingPartialLine(t *testing.T) {
+	var output bytes.Buffer
+	w := newClaudeJSONOutputWriter(&output)
+	if _, err := io.WriteString(w, `{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "" {
+		t.Fatalf("output before flush = %q, want empty", got)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "partial\n"; got != want {
+		t.Fatalf("output after flush = %q, want %q", got, want)
 	}
 }
 
