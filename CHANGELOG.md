@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.0.6 - 2026-08-16
+
 - Run non-interactive Claude agents in autonomous permission mode so issue workflows can use required tools instead of exiting immediately.
 
 ## v1.0.5 - 2026-07-21
