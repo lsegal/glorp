@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run non-interactive Claude agents in autonomous permission mode so issue workflows can use required tools instead of exiting immediately.
+
 ## v1.0.5 - 2026-07-21
 
 - Replace separate UI-disabling flags with `--ui web|tui|none`, retaining `--no-ui` as an alias for `--ui none`.

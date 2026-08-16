@@ -683,7 +683,7 @@ func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args: %#v", got)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args: %#v", got)
 	}
 }
@@ -713,7 +713,7 @@ func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--model", "claude-sonnet", "--effort", "medium", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
 	}
 }
@@ -739,7 +739,7 @@ func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 func TestCommandRunnerStartsClaudeWithPersistedSessionID(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	session := AgentSession{ID: "session-12", Agent: "claude"}
-	want := []string{"-p", "--session-id", "session-12", prompt}
+	want := []string{"-p", "--session-id", "session-12", "--permission-mode", "auto", prompt}
 	if got := commandArgsForSession(CommandRunner{Agent: "codex"}, Issue{Number: 12}, session); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Claude initial args = %#v, want %#v", got, want)
 	}

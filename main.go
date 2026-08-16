@@ -913,6 +913,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 	}
 	if r.Yolo {
 		args = append(args, "--dangerously-skip-permissions")
+	} else {
+		// Print mode cannot prompt for tool approval. Let Claude make its normal
+		// permission decisions autonomously instead of silently denying the
+		// shell commands the issue workflow needs and exiting successfully.
+		args = append(args, "--permission-mode", "auto")
 	}
 	if !session.Resume && r.Model != "" {
 		args = append(args, "--model", r.Model)
