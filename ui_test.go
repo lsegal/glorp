@@ -400,6 +400,32 @@ func TestCodexRateLimitsRequestOmitsParams(t *testing.T) {
 	}
 }
 
+func TestFormatClaudeQuota(t *testing.T) {
+	usage := "Current session: 5% used · resets Aug 16, 2pm (America/Los_Angeles)\n" +
+		"Current week (all models): 6% used · resets Aug 19, 7am (America/Los_Angeles)"
+	if got := formatClaudeQuota(usage); got != "session 95% left, week 94% left" {
+		t.Fatalf("quota = %q", got)
+	}
+}
+
+func TestFormatClaudeQuotaSessionOnly(t *testing.T) {
+	if got := formatClaudeQuota("Current session: 10% used · resets Aug 16, 2pm"); got != "session 90% left" {
+		t.Fatalf("quota = %q", got)
+	}
+}
+
+func TestFormatClaudeQuotaMissingSessionReturnsEmpty(t *testing.T) {
+	if got := formatClaudeQuota("no usage data available"); got != "" {
+		t.Fatalf("quota = %q, want empty", got)
+	}
+}
+
+func TestClaudeQuotaRequestIsFreeSlashCommand(t *testing.T) {
+	if got := claudeQuotaRequest(); got != "/usage" {
+		t.Fatalf("claude quota request = %q, want the local /usage slash command", got)
+	}
+}
+
 func TestDashboardTrimsOldestJobs(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})

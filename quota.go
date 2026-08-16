@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -109,6 +111,80 @@ func formatCodexQuota(primary *codexPrimaryRateLimit) string {
 	return fmt.Sprintf("%s %d%% left", window, remaining)
 }
 
+type claudeQuotaReader struct {
+	Binary string
+	mu     sync.Mutex
+	quota  string
+	readAt time.Time
+}
+
+func (r *claudeQuotaReader) Read(ctx context.Context) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if time.Since(r.readAt) < time.Minute {
+		return r.quota
+	}
+	quota, err := readClaudeQuota(ctx, r.Binary)
+	if err == nil {
+		r.quota = quota
+	}
+	r.readAt = time.Now()
+	return r.quota
+}
+
+// readClaudeQuota runs the local `/usage` slash command, which reports the
+// account's current session/week usage without making a billed API request
+// (unlike a normal prompt, it costs no tokens and no money).
+func readClaudeQuota(ctx context.Context, binary string) (string, error) {
+	cmd := exec.CommandContext(ctx, binary, "--print", "--output-format=json")
+	cmd.Stdin = strings.NewReader(claudeQuotaRequest())
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	var response struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		return "", err
+	}
+	quota := formatClaudeQuota(response.Result)
+	if quota == "" {
+		return "", fmt.Errorf("claude usage response missing session percentage")
+	}
+	return quota, nil
+}
+
+// claudeQuotaRequest is the "/usage" slash command: a local status report
+// handled by the CLI itself, so unlike a normal prompt it costs no tokens
+// and makes no billed API request.
+func claudeQuotaRequest() string {
+	return "/usage"
+}
+
+var (
+	claudeSessionUsagePattern = regexp.MustCompile(`Current session:\s*(\d+)% used`)
+	claudeWeekUsagePattern    = regexp.MustCompile(`Current week \(all models\):\s*(\d+)% used`)
+)
+
+func formatClaudeQuota(usageText string) string {
+	session := claudeSessionUsagePattern.FindStringSubmatch(usageText)
+	if session == nil {
+		return ""
+	}
+	sessionUsed, err := strconv.Atoi(session[1])
+	if err != nil {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("session %d%% left", max(0, 100-sessionUsed))}
+	if week := claudeWeekUsagePattern.FindStringSubmatch(usageText); week != nil {
+		if weekUsed, err := strconv.Atoi(week[1]); err == nil {
+			parts = append(parts, fmt.Sprintf("week %d%% left", max(0, 100-weekUsed)))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 // namedQuotaReader reads quota text for a single named agent.
 type namedQuotaReader struct {
 	name string
@@ -116,8 +192,8 @@ type namedQuotaReader struct {
 }
 
 // namedQuotaReaders builds one quota reader per configured agent, deduplicated
-// by name. Agents without a known quota source (e.g. claude) still get an
-// entry so the UI can show that their quota is not tracked.
+// by name. Agents without a known quota source still get an entry so the UI
+// can show that their quota is not tracked.
 func namedQuotaReaders(agents []string, binaryFor func(string) string) []namedQuotaReader {
 	seen := make(map[string]bool, len(agents))
 	readers := make([]namedQuotaReader, 0, len(agents))
@@ -129,6 +205,9 @@ func namedQuotaReaders(agents []string, binaryFor func(string) string) []namedQu
 		switch agent {
 		case "codex":
 			reader := &codexQuotaReader{Binary: binaryFor(agent)}
+			readers = append(readers, namedQuotaReader{name: agent, read: reader.Read})
+		case "claude":
+			reader := &claudeQuotaReader{Binary: binaryFor(agent)}
 			readers = append(readers, namedQuotaReader{name: agent, read: reader.Read})
 		default:
 			readers = append(readers, namedQuotaReader{name: agent, read: func(context.Context) string { return "" }})
