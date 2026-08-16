@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
@@ -153,6 +154,56 @@ func TestParseTargetURLs(t *testing.T) {
 	got, err = parseTarget("https://github.com/orgs/example/projects/4")
 	if err != nil || !got.isProject || got.owner != "example" || got.projectID != "4" || got.projectOwnerType != "orgs" {
 		t.Fatalf("organization project target = %#v, %v", got, err)
+	}
+}
+
+func TestParseGitHubRemote(t *testing.T) {
+	for _, input := range []string{
+		"https://github.com/lsegal/glorp",
+		"https://github.com/lsegal/glorp.git",
+		"git@github.com:lsegal/glorp.git",
+		"ssh://git@github.com/lsegal/glorp.git",
+	} {
+		repo, ok := parseGitHubRemote(input)
+		if !ok || repo != "lsegal/glorp" {
+			t.Fatalf("parseGitHubRemote(%q) = %q, %v", input, repo, ok)
+		}
+	}
+	for _, input := range []string{
+		"",
+		"https://gitlab.com/lsegal/glorp",
+		"git@gitlab.com:lsegal/glorp.git",
+	} {
+		if _, ok := parseGitHubRemote(input); ok {
+			t.Fatalf("parseGitHubRemote(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestOriginRemoteTarget(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init")
+	run("remote", "add", "origin", "https://github.com/lsegal/glorp.git")
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+
+	repo, ok := originRemoteTarget()
+	if !ok || repo != "lsegal/glorp" {
+		t.Fatalf("originRemoteTarget() = %q, %v", repo, ok)
 	}
 }
 
