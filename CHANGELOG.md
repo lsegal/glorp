@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Mark the `gh-fix` skill's initial `Start work on issue #N` commit with `[skip ci]`, and teach the push-triggered `CI` and `Deploy Pages` workflows to honor that marker, so opening a draft pull request no longer runs a full build against a tree identical to the default branch.
 ## v1.2.2 - 2026-08-17
 
 - Restructure the CLI around subcommands: `glorp watch`, `glorp ui`, `glorp version`, `glorp upgrade`, and `glorp help`. Watching now requires the `watch` subcommand — the old top-level form (`glorp owner/repo`, `glorp --poll …`) has been removed — while `glorp --version` and `glorp -h` still work as aliases for `glorp version` and `glorp help`.

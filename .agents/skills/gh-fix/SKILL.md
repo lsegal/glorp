@@ -40,7 +40,7 @@ The cleanup must be unconditional: use a deferred/finally-style cleanup guard as
 
 Immediately after creating the branch, publish it and open a draft pull request so progress is visible throughout development. Skip this section entirely when resuming an existing draft PR per "Resume existing work" above — it already has an open PR.
 
-1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER>`, then push the new branch with upstream tracking. Never force-push.
+1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER> [skip ci]`, then push the new branch with upstream tracking. The `[skip ci]` marker keeps CI from running on a tree identical to the default branch; never add it to any later commit. Never force-push.
 2. Open a draft PR against the current default branch with a concise title describing the intended fix.
 3. Write a real Markdown body that summarizes the issue and planned work. Include `Closes #<ISSUENUMBER>` on its own line so the draft links to and will close the original issue when merged.
 4. End the body with a `**Agents:**` footer line naming the current agent CLI and model handling the issue (for example `**Agents:** claude-code (claude-sonnet-5)`), identified from your own runtime context. This is the contributing-agents footer described below.
