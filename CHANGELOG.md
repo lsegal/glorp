@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Take glorp's subprocesses down with it when glorp is killed outright. Owned subprocesses now carry a Linux parent-death signal and belong to a Windows job object that is destroyed with glorp, so `kill -9` of a running `glorp watch` no longer strands the ngrok tunnel or a running agent. macOS and the BSDs have no kernel equivalent and are documented as a remaining gap.
+- Take glorp's subprocesses down with it when glorp is killed outright. Owned subprocesses now carry a Linux parent-death signal, belong to a Windows job object that is destroyed with glorp, and on macOS and the BSDs — which have no kernel equivalent — are recorded with a small reaper process that terminates them when its pipe to glorp closes, so `kill -9` of a running `glorp watch` no longer strands the ngrok tunnel or a running agent on any supported platform.
 
 ## v1.2.3 - 2026-08-17
 
