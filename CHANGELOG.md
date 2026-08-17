@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a `glorp upgrade` command that re-runs the published install script for the current platform.
+
 ## v1.1.0 - 2026-08-17
 
 - Replace the manual full-version `Release` workflow input with a `major`/`minor`/`patch`/`version` level chooser that computes the next tag from the latest existing tag, matching the release bump logic from `lsegal/aviary`.

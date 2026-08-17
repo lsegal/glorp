@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,6 +34,22 @@ var version = "dev"
 var errProjectIssueNotFound = errors.New("project issue not found")
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "upgrade" {
+		if len(os.Args) > 2 {
+			fmt.Fprintln(os.Stderr, "usage: glorp upgrade")
+			os.Exit(2)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		repo := upgradeRepo(os.Getenv)
+		if err := runUpgrade(ctx, os.Stdout, func(ctx context.Context) *exec.Cmd {
+			return upgradeCommand(ctx, runtime.GOOS, repo)
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	poll := flag.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
@@ -67,7 +84,7 @@ func main() {
 		}
 	}
 	if len(targets) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: glorp [flags] TARGET [TARGET ...]")
+		fmt.Fprintln(os.Stderr, "usage: glorp [flags] TARGET [TARGET ...]\n       glorp upgrade")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
