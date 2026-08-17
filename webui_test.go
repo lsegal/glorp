@@ -88,3 +88,21 @@ func TestCombineUIReportersFansOutUpdates(t *testing.T) {
 		t.Fatalf("updates were not sent to both reporters: %#v %#v", first, second)
 	}
 }
+
+func TestCombineUIReportersDropsTypedNilReporters(t *testing.T) {
+	var webUI *WebUI
+	terminal := &recordingReporter{}
+	reporter := combineUIReporters(terminal, webUI)
+	reporter.Snapshot(GlorpSnapshot{})
+	reporter.Log("ensured agent labels exist")
+	if terminal.snapshots != 1 || len(terminal.logs) != 1 {
+		t.Fatalf("updates were not sent to the terminal reporter: %#v", terminal)
+	}
+}
+
+func TestCombineUIReportersReturnsNilWhenOnlyTypedNils(t *testing.T) {
+	var webUI *WebUI
+	if reporter := combineUIReporters(nil, webUI); reporter != nil {
+		t.Fatalf("combineUIReporters(nil, (*WebUI)(nil)) = %#v, want nil", reporter)
+	}
+}
