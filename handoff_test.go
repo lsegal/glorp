@@ -256,8 +256,8 @@ func TestNegotiateContestedIssuesFiltersDeclinedClaims(t *testing.T) {
 	if len(result) != 1 || result[0].issue.Number != 2 {
 		t.Fatalf("result = %+v, want only issue #2 to survive", result)
 	}
-	if seen[declinedKey] {
-		t.Fatalf("declined issue #1 should be unmarked as seen so it is retried")
+	if !seen[declinedKey] {
+		t.Fatalf("declined issue #1 should stay marked as seen so the next poll renegotiates instead of dispatching it")
 	}
 }
 

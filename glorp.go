@@ -180,8 +180,9 @@ type pendingIssue struct {
 // negotiateContestedIssues runs the handoff handshake for every candidate
 // issue marked contested (no local record of being this instance's own
 // resumed work). Uncontested issues pass through untouched. Issues whose
-// negotiation loses (or errors) are dropped from the batch and unmarked as
-// seen so a later poll retries them.
+// negotiation loses (or errors) are dropped from the batch but stay marked as
+// seen, so a later poll retries them as contested work and renegotiates
+// instead of dispatching them as if nothing had ever claimed them.
 func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool) []pendingIssue {
 	if w.Comments == nil || len(newIssues) == 0 {
 		return newIssues
@@ -214,7 +215,11 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 		if keep[i] {
 			filtered = append(filtered, pending)
 		} else {
-			delete(seen, issueKey(pending.issue))
+			// Keep the seen marker: it is what makes the next poll treat this
+			// issue as contested again. Clearing it would make the issue look
+			// brand new, and the next poll would dispatch it outright, taking
+			// work from the instance this one just stood down for.
+			seen[issueKey(pending.issue)] = true
 		}
 	}
 	return filtered
@@ -511,8 +516,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// A known local failure or an active resume is unambiguously
 				// this instance's own work; anything else reappearing after
 				// having a local record is a reclaim that must be negotiated
-				// through the comment protocol before dispatch.
-				contested := hadLocalRecord && !wasFailed && !wasActive
+				// through the comment protocol before dispatch. A project item
+				// sitting at "In Progress" that this instance has no record of
+				// is another instance's apparent work (typically stranded by
+				// one that died mid-run), so it must be negotiated too.
+				contested := (hadLocalRecord && !wasFailed && !wasActive) || (!hadLocalRecord && projectItemInProgress(issue.Target, issue))
 				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: AgentSession{
 					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
 					// Persisted work is not an active worker after a daemon restart or
@@ -1029,15 +1037,25 @@ func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, wasCompl
 		if projectStatusAllowsDispatch(issue.ProjectStatus, readyState) {
 			return true
 		}
-		if !seen {
-			return false
-		}
-		return strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress")
+		// An item parked at "In Progress" is claimed work: either this
+		// instance's own reappearing item, or work stranded in that column by
+		// an instance that died mid-run and left this one no local record to
+		// recognize it by. Both are dispatch candidates;
+		// negotiateContestedIssues is what asks, through the comment protocol,
+		// whether another live instance still owns it before it is reclaimed.
+		return projectItemInProgress(repo, issue)
 	}
 	if !seen {
 		return true
 	}
 	return !wasCompleted
+}
+
+// projectItemInProgress reports whether issue is a project item currently
+// parked in the "In Progress" column, which is how a glorp instance marks
+// work it has claimed.
+func projectItemInProgress(target string, issue Issue) bool {
+	return isProjectTarget(target) && strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress")
 }
 
 func workStateMatchesRemote(target string, issue Issue, state workState) bool {

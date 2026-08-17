@@ -899,6 +899,95 @@ func TestGlorpResetsFailedProjectWorkOnStart(t *testing.T) {
 	}
 }
 
+// A project item left at "In Progress" by an instance that died mid-run is
+// invisible to the new instance's local state, so it must be reclaimed
+// through the handoff handshake rather than skipped forever (issue #231).
+func TestGlorpReclaimsStrandedInProgressProjectItem(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		Comments: comments, Identity: "SELF", ownershipWait: func(context.Context) bool { return true },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case got := <-runner.dispatched:
+		if got != 7 {
+			t.Fatalf("dispatched issue #%d, want #7", got)
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatalf("stranded in-progress project item was never reclaimed:\n%s", logs.String())
+	}
+
+	posted, err := comments.ListComments(context.Background(), "o/r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 2 {
+		t.Fatalf("posted comments = %v, want an ask followed by a claim", posted)
+	}
+	if kind, id, ok := parseClaim(posted[0].Body); !ok || kind != claimAsking || id != "SELF" {
+		t.Fatalf("first comment = %q, want the ownership ask", posted[0].Body)
+	}
+	if kind, id, ok := parseClaim(posted[1].Body); !ok || kind != claimStarting || id != "SELF" {
+		t.Fatalf("second comment = %q, want our starting claim", posted[1].Body)
+	}
+
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The reclaim above must still respect a live owner: when another instance
+// answers the ask, this one stands down and leaves the item alone.
+func TestGlorpStandsDownOnStrandedProjectItemStillOwned(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		Comments: comments, Identity: "SELF", ownershipWait: func(context.Context) bool {
+			comments.inject("o/r", 7, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: time.Now()})
+			return true
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case got := <-runner.dispatched:
+		cancel()
+		<-done
+		t.Fatalf("issue #%d was dispatched despite another instance owning it", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "ownership claimed by another instance; standing down") {
+		t.Fatalf("standing down was not logged:\n%s", logs.String())
+	}
+}
+
 func TestGlorpIgnoresMissingProjectIssueWhenResettingFailedWork(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
@@ -1544,8 +1633,8 @@ func TestGlorpPersistsSessionIDAfterCompletion(t *testing.T) {
 
 func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
 	project := "https://github.com/users/lsegal/projects/3"
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, false, "") {
-		t.Fatal("new in-progress project issue was dispatched")
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, false, "") {
+		t.Fatal("in-progress project item stranded by another instance was not a reclaim candidate")
 	}
 	for _, status := range []string{"Done", "Completed"} {
 		if shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, false, "") {
