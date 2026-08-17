@@ -129,7 +129,15 @@ type Glorp struct {
 	Status          IssueStatuser
 	UI              UIReporter
 	Quota           func(context.Context) map[string]string
-	logMu           sync.Mutex
+	// Identity names this instance in cooperative handoff comments. It is
+	// generated once at startup and never persisted.
+	Identity Identity
+	// Comments drives the cooperative handoff handshake (issue #214). When
+	// nil, ownership negotiation is skipped and dispatch behaves as before.
+	Comments CommentClient
+	// ownershipWait overrides the reap grace-period wait in tests.
+	ownershipWait func(context.Context) bool
+	logMu         sync.Mutex
 }
 
 func (w *Glorp) periodicPollInterval() time.Duration {
@@ -147,6 +155,54 @@ func (w *Glorp) activeWorkClosureInterval() time.Duration {
 		return w.closureInterval
 	}
 	return workClosureInterval
+}
+
+type pendingIssue struct {
+	issue   Issue
+	session AgentSession
+}
+
+// negotiateContestedIssues runs the handoff handshake for every candidate
+// issue that already carries the agent-started label but has no local
+// record of being this instance's own resumed work. Uncontested issues pass
+// through untouched. Issues whose negotiation loses (or errors) are dropped
+// from the batch and unmarked as seen so a later poll retries them.
+func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool) []pendingIssue {
+	if w.Comments == nil || len(newIssues) == 0 {
+		return newIssues
+	}
+	keep := make([]bool, len(newIssues))
+	var wg sync.WaitGroup
+	for i, pending := range newIssues {
+		if pending.session.Resume || !hasLabel(pending.issue, agentStartedLabel) {
+			keep[i] = true
+			continue
+		}
+		wg.Add(1)
+		go func(i int, issue Issue) {
+			defer wg.Done()
+			target := ownershipTargetFor(ctx, checker, issue)
+			claimed, err := w.negotiateOwnership(ctx, target)
+			if err != nil {
+				w.logf("issue #%d ownership handoff failed: %v", issue.Number, err)
+				return
+			}
+			keep[i] = claimed
+			if !claimed {
+				w.logf("issue #%d ownership claimed by another instance; standing down", issue.Number)
+			}
+		}(i, pending.issue)
+	}
+	wg.Wait()
+	filtered := newIssues[:0]
+	for i, pending := range newIssues {
+		if keep[i] {
+			filtered = append(filtered, pending)
+		} else {
+			delete(seen, issueKey(pending.issue))
+		}
+	}
+	return filtered
 }
 
 func (w *Glorp) watchForClosedWork(ctx context.Context, checker WorkClosureChecker, issue Issue, cancel context.CancelCauseFunc, ready chan<- struct{}) {
@@ -216,6 +272,10 @@ type workState struct {
 	SessionID         string `json:"sessionId,omitempty"`
 	Agent             string `json:"agent,omitempty"`
 	CheckoutDirectory string `json:"checkoutDirectory,omitempty"`
+	// Owner is the identity of the glorp instance that most recently claimed
+	// this ticket through the handoff protocol, cached to help future reaps
+	// recognize their own prior work.
+	Owner string `json:"owner,omitempty"`
 }
 
 func issueKey(issue Issue) string {
@@ -368,10 +428,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 		}
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
-		type pendingIssue struct {
-			issue   Issue
-			session AgentSession
-		}
 		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
 			if blocked, reason := issueBlocked(issue); blocked {
@@ -407,6 +463,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}})
 			}
 		}
+		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen)
 		workMu.Lock()
 		err = saveScopedWorkState(w.StatePath, work, targets)
 		workMu.Unlock()
@@ -450,13 +507,22 @@ func (w *Glorp) Run(ctx context.Context) error {
 					return err
 				}
 			}
+			// Contested issues already posted their starting/continuing claim
+			// during negotiation. Uncontested first-time pickups still need to
+			// announce ownership so other instances know it's spoken for.
+			if w.Comments != nil && !session.Resume && !hasLabel(issue, agentStartedLabel) {
+				repo := issueRepository(issue.Target, issue)
+				if err := w.Comments.PostComment(ctx, repo, issue.Number, claimComment(w.Identity, false)); err != nil {
+					w.logf("issue #%d failed to post ownership claim: %v", issue.Number, err)
+				}
+			}
 			workMu.Lock()
 			key := issueKey(issue)
 			active[key] = session.ID
 			jobMu.Lock()
 			jobs[key] = JobSnapshot{Number: issue.Number, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Started: time.Now()}
 			jobMu.Unlock()
-			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory}
+			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory, Owner: string(w.Identity)}
 			err = saveScopedWorkState(w.StatePath, work, targets)
 			workMu.Unlock()
 			if err != nil {

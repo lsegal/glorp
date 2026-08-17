@@ -151,7 +151,12 @@ func main() {
 	if len(agents.values) > 1 {
 		agentCursor = &atomic.Uint64{}
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
+	identity, err := newIdentity()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, Comments: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -839,6 +844,33 @@ func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add b
 		return fmt.Errorf("%s agent-started label on issue #%d: %w: %s", strings.TrimPrefix(action, "--"), number, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func (g GHCLI) PostComment(ctx context.Context, repo string, number int, body string) error {
+	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments", "-f", "body="+body)
+	if err != nil {
+		return fmt.Errorf("post comment on #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (g GHCLI) ListComments(ctx context.Context, repo string, number int) ([]Comment, error) {
+	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments", "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("list comments on #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
+	}
+	var raw []struct {
+		Body      string    `json:"body"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(output, &raw); err != nil {
+		return nil, fmt.Errorf("decode comments on #%d: %w", number, err)
+	}
+	comments := make([]Comment, len(raw))
+	for i, comment := range raw {
+		comments[i] = Comment{Body: comment.Body, CreatedAt: comment.CreatedAt}
+	}
+	return comments, nil
 }
 
 func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, status string) error {
