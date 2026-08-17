@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restart an issue from scratch when the agent reports that the recorded session no longer exists, instead of failing the run and printing a bug report link. Sessions expire out of the agent's local history while glorp's work state keeps referring to them, and the issue workflow is re-entrant, so it picks the existing draft pull request back up.
+
 - Detect board-only project changes in push mode by probing a cheap project board fingerprint every 30 seconds, so dragging an issue onto a board or moving a card into the ready column dispatches promptly instead of waiting for the 15-minute fallback poll.
 - Detect new project board issues in push mode for user-owned Projects, which GitHub gives no `projects_v2_item` webhook, by subscribing to repository webhooks on every repository backing the board instead of leaving the whole target to the periodic poller. Those webhooks are re-reconciled on every periodic poll, so a repository added to the board later is watched without restarting `glorp`.
 - Keep running when only some of a target's push webhooks can be configured, reporting the failures instead of exiting.

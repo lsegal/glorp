@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1158,6 +1160,112 @@ func TestCommandRunnerStartsClaudeWithPersistedSessionID(t *testing.T) {
 	want := []string{"-p", "--session-id", "session-12", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", prompt}
 	if got := commandArgsForSession(CommandRunner{Agent: "codex"}, Issue{Number: 12}, session); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Claude initial args = %#v, want %#v", got, want)
+	}
+}
+
+// writeFakeAgent installs an executable stub that appends each invocation's
+// arguments to a log file and emits the supplied lines, exiting with code when
+// the invocation is a resume.
+func writeFakeAgent(t *testing.T, resumeOutput string, resumeCode int) (binary, log string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake agent script requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	binary, log = filepath.Join(dir, "agent.sh"), filepath.Join(dir, "invocations.log")
+	script := "#!/bin/sh\n{ echo \"$@\"; echo '<<<END>>>'; } >> " + log + "\nfor arg in \"$@\"; do\n" +
+		"  case \"$arg\" in --resume|resume) echo '" + resumeOutput + "'; exit " +
+		strconv.Itoa(resumeCode) + ";; esac\ndone\necho started\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binary, log
+}
+
+func fakeAgentInvocations(t *testing.T, log string) []string {
+	t.Helper()
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invocations []string
+	for _, record := range strings.Split(string(data), "<<<END>>>\n") {
+		if record = strings.TrimSpace(record); record != "" {
+			invocations = append(invocations, record)
+		}
+	}
+	return invocations
+}
+
+func TestCommandRunnerRestartsClaudeWhenResumedSessionIsMissing(t *testing.T) {
+	binary, log := writeFakeAgent(t, `{"type":"result","is_error":true,"result":"No conversation found with session ID: session-7"}`, 1)
+	runner := CommandRunner{Agent: "claude", ClaudeBinary: binary, Repo: "o/r"}
+	session := AgentSession{ID: "session-7", Agent: "claude", Resume: true}
+	if err := runner.RunSession(context.Background(), Issue{Number: 7}, session, func(AgentSession) {}); err != nil {
+		t.Fatalf("missing session should restart the work, got %v", err)
+	}
+	got := fakeAgentInvocations(t, log)
+	if len(got) != 2 {
+		t.Fatalf("agent invocations = %#v, want a resume followed by a fresh run", got)
+	}
+	if !strings.Contains(got[0], "--resume session-7") {
+		t.Fatalf("first invocation = %q, want a resume", got[0])
+	}
+	if strings.Contains(got[1], "--resume") || !strings.Contains(got[1], "/gh-fix 7") {
+		t.Fatalf("second invocation = %q, want a fresh run", got[1])
+	}
+	// Claude accepts the caller's session ID, so the restarted run keeps the
+	// identity already persisted in the work state.
+	if !strings.Contains(got[1], "--session-id session-7") {
+		t.Fatalf("second invocation = %q, want the persisted session ID reused", got[1])
+	}
+}
+
+func TestCommandRunnerRestartsCodexWithoutTheMissingSessionID(t *testing.T) {
+	binary, log := writeFakeAgent(t, "Error: session not found", 1)
+	runner := CommandRunner{Agent: "codex", CodexBinary: binary, Repo: "o/r"}
+	session := AgentSession{ID: "session-7", Agent: "codex", Resume: true}
+	if err := runner.RunSession(context.Background(), Issue{Number: 7}, session, func(AgentSession) {}); err != nil {
+		t.Fatalf("missing session should restart the work, got %v", err)
+	}
+	got := fakeAgentInvocations(t, log)
+	if len(got) != 2 {
+		t.Fatalf("agent invocations = %#v, want a resume followed by a fresh run", got)
+	}
+	if strings.Contains(got[1], "session-7") || !strings.Contains(got[1], "/gh-fix 7") {
+		t.Fatalf("second invocation = %q, want a fresh run without the dead session ID", got[1])
+	}
+}
+
+func TestCommandRunnerReportsResumeFailuresThatAreNotMissingSessions(t *testing.T) {
+	binary, log := writeFakeAgent(t, "boom: the agent crashed", 3)
+	runner := CommandRunner{Agent: "claude", ClaudeBinary: binary, Repo: "o/r"}
+	session := AgentSession{ID: "session-7", Agent: "claude", Resume: true}
+	err := runner.RunSession(context.Background(), Issue{Number: 7}, session, func(AgentSession) {})
+	if err == nil || !strings.Contains(err.Error(), "bug report") {
+		t.Fatalf("unrelated resume failure = %v, want a reported agent failure", err)
+	}
+	if got := fakeAgentInvocations(t, log); len(got) != 1 {
+		t.Fatalf("agent invocations = %#v, want no restart", got)
+	}
+}
+
+func TestMissingSessionDetectorMatchesAcrossWrites(t *testing.T) {
+	detector := &missingSessionDetector{output: io.Discard}
+	for _, chunk := range []string{"No conversation ", "found with session ID: x\n"} {
+		if _, err := detector.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !detector.sessionMissing() {
+		t.Fatal("split missing-session message was not detected")
+	}
+	other := &missingSessionDetector{output: io.Discard}
+	if _, err := other.Write([]byte("compilation failed")); err != nil {
+		t.Fatal(err)
+	}
+	if other.sessionMissing() {
+		t.Fatal("unrelated output must not be treated as a missing session")
 	}
 }
 
