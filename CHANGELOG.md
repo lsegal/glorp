@@ -2,19 +2,18 @@
 
 ## Unreleased
 
+## v1.2.0 - 2026-08-17
+
 - Show what a Claude agent is actually working on in the dashboard progress lines: tool activity now reads `Running: Read main.go`, `Running: Grep pattern`, or `Running: WebFetch https://…` instead of a bare `Running: Read`.
 - Add support for watching a GitHub Discussions board target (`https://github.com/OWNER/REPO/discussions`). glorp dispatches the new read-only `gh-discuss` skill for each new top-level Discussion thread with no replies yet; the skill only reads the repository to answer the question and posts a single top-level reply when it can do so accurately and positively, otherwise it leaves the thread untouched. Discussions boards are watched in push mode as well as poll mode: glorp subscribes the repository webhook to GitHub's `discussion` event, widening an existing glorp webhook when the same repository is already watched as a repository or Project target.
 - Log every step of the cooperative handoff protocol: when a reap pass starts and in which mode, why a candidate issue looks claimed and where it will be negotiated, when "Does anyone have this?" is asked and how long the wait is, which instance answered, whether the work was picked up or let go, and which instance claimed an issue out from under a running agent. The instance identity now appears in the startup line and in handoff messages so multiple instances can be told apart in the logs.
 - Restart an issue from scratch when the agent reports that the recorded session no longer exists, instead of failing the run and printing a bug report link. Sessions expire out of the agent's local history while glorp's work state keeps referring to them, and the issue workflow is re-entrant, so it picks the existing draft pull request back up.
-
 - Detect board-only project changes in push mode by probing a cheap project board fingerprint every 30 seconds, so dragging an issue onto a board or moving a card into the ready column dispatches promptly instead of waiting for the 15-minute fallback poll.
 - Detect new project board issues in push mode for user-owned Projects, which GitHub gives no `projects_v2_item` webhook, by subscribing to repository webhooks on every repository backing the board instead of leaving the whole target to the periodic poller. Those webhooks are re-reconciled on every periodic poll, so a repository added to the board later is watched without restarting `glorp`.
 - Keep running when only some of a target's push webhooks can be configured, reporting the failures instead of exiting.
-
 - Reclaim project items stranded at `In Progress` by an instance that died mid-run: a new instance now runs the cooperative handoff handshake on them instead of skipping them forever, and only stands down when another instance answers that it still owns the work.
 - Keep renegotiating ownership of an issue after standing down for another instance, instead of treating it as brand new on the next poll and dispatching it anyway.
 - Reap abandoned work at least every 10 minutes instead of effectively only at startup, even in push mode where the polling fallback is 15 minutes. To keep repeated reaps from spamming "Does anyone have this?", only the first reap after startup asks unconditionally; later reaps ask only when the newest claim comment from another instance is more than 2 hours old.
-
 - Add a `glorp upgrade` command that re-runs the published install script for the current platform.
 - Stop polling GitHub for webhook deliveries that cannot change which issues are dispatchable. Push, pull request, ping, and ordinary comment deliveries, along with `issues` actions such as `edited`, `assigned`, and `locked`, no longer trigger a refresh.
 - Stop the webhook follow-up refresh chain as soon as a refresh actually observes the issue the delivery named, instead of always running the full retry budget.
