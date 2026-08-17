@@ -147,14 +147,23 @@ func (s *processSpawner) start(cmd *exec.Cmd) error {
 // process group so the processes it spawns are terminated with it, it is
 // tracked so glorp kills the whole tree before exiting, and the kernel is asked
 // to tear it down should glorp die without running any cleanup at all.
+//
+// On platforms where the kernel guard can only be installed on a process that
+// already exists, the child is created in a state where it has not run yet and
+// adoptOrphanedProcess releases it; a child that cannot be released is killed
+// rather than handed back to the caller suspended forever.
 func startChildProcess(cmd *exec.Cmd) error {
 	isolateProcessTree(cmd)
 	guardOrphanedProcess(cmd)
 	if err := spawner.start(cmd); err != nil {
 		return err
 	}
-	adoptOrphanedProcess(cmd)
 	childProcesses.track(cmd)
+	if err := adoptOrphanedProcess(cmd); err != nil {
+		_ = signalProcessTree(cmd, killSignal)
+		_ = waitChildProcess(cmd)
+		return err
+	}
 	return nil
 }
 

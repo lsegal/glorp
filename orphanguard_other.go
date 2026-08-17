@@ -96,14 +96,16 @@ func guardOrphanedProcess(*exec.Cmd) {}
 // adoptOrphanedProcess records a freshly started child's process group with the
 // reaper. Children that share glorp's own process group are skipped: they
 // already receive the terminal's signals, and killing that group after glorp is
-// gone could reach well beyond glorp's own subprocesses.
-func adoptOrphanedProcess(cmd *exec.Cmd) {
+// gone could reach well beyond glorp's own subprocesses. Nothing here can leave
+// a child unusable, so no failure is worth reporting: an unrecorded child is
+// still cleaned up on every exit glorp can observe.
+func adoptOrphanedProcess(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
-		return
+		return nil
 	}
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err != nil || pgid != cmd.Process.Pid {
-		return
+		return nil
 	}
 	orphanReaper.mu.Lock()
 	defer orphanReaper.mu.Unlock()
@@ -112,6 +114,7 @@ func adoptOrphanedProcess(cmd *exec.Cmd) {
 	}
 	orphanReaper.owned[cmd] = pgid
 	recordOrphanedGroup("+", pgid)
+	return nil
 }
 
 // releaseOrphanedProcess tells the reaper glorp no longer owns a child, so a
