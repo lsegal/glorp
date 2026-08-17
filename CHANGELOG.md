@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Replace `--model` and `--model-level` with per-agent `--agent AGENT/MODEL:LEVEL` specs so each load balanced agent can run its own model and reasoning level.
+
 ## v1.0.7 - 2026-08-16
 
 - Support repeating `--agent` to configure multiple agents, load balanced evenly across concurrency, with each agent's quota shown by name in the dashboard.

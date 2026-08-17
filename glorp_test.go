@@ -718,19 +718,85 @@ func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	}
 }
 
-func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
+func TestCommandRunnerPassesAgentSpecModelAndLevel(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex/gpt-5.6-luna:high"}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude/claude-sonnet:medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
+	}
+	if got, want := commandArgs(CommandRunner{Agent: "codex:low"}, Issue{Number: 12}), []string{"exec", "-c", "model_reasoning_effort=low", prompt}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex level-only args = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerUsesSessionAgentSpecModel(t *testing.T) {
+	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	runner := CommandRunner{Agents: []string{"codex/gpt-5.6-luna:high", "claude/opus:low"}, Agent: "codex/gpt-5.6-luna:high"}
+	session := AgentSession{ID: "session-12", Agent: "claude/opus:low"}
+	want := []string{"-p", "--session-id", "session-12", "--permission-mode", "auto", "--model", "opus", "--effort", "low", "--output-format", "stream-json", "--verbose", prompt}
+	if got := commandArgsForSession(runner, Issue{Number: 12}, session); !reflect.DeepEqual(got, want) {
+		t.Fatalf("session spec args = %#v, want %#v", got, want)
+	}
+	runner.ClaudeBinary = "claude-bin"
+	if got, want := runner.binary(runner.specForSession(session).Name), "claude-bin"; got != want {
+		t.Fatalf("binary for spec = %q, want %q", got, want)
+	}
+}
+
+func TestParseAgentSpec(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  agentSpec
+	}{
+		{"codex", agentSpec{Name: "codex"}},
+		{" claude ", agentSpec{Name: "claude"}},
+		{"claude/opus", agentSpec{Name: "claude", Model: "opus"}},
+		{"codex:high", agentSpec{Name: "codex", Level: "high"}},
+		{"codex/gpt-5.6:medium", agentSpec{Name: "codex", Model: "gpt-5.6", Level: "medium"}},
+		{"claude/anthropic/claude-opus:low", agentSpec{Name: "claude", Model: "anthropic/claude-opus", Level: "low"}},
+	} {
+		got, err := parseAgentSpec(test.value)
+		if err != nil {
+			t.Fatalf("parseAgentSpec(%q) error = %v", test.value, err)
+		}
+		if got != test.want {
+			t.Fatalf("parseAgentSpec(%q) = %#v, want %#v", test.value, got, test.want)
+		}
+		if roundTrip := got.String(); roundTrip != strings.TrimSpace(test.value) && test.value != " claude " {
+			t.Fatalf("agentSpec(%q).String() = %q", test.value, roundTrip)
+		}
+	}
+	for _, value := range []string{"gemini", "codex/gpt-5:turbo", "claude/", "codex/gpt-5:", ""} {
+		if _, err := parseAgentSpec(value); err == nil {
+			t.Fatalf("parseAgentSpec(%q) error = nil, want error", value)
+		}
+	}
+}
+
+func TestAgentFlagCollectsSpecs(t *testing.T) {
+	flags := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	if err := flags.Set("claude/opus:high"); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if err := flags.Set("codex/gpt-5.6"); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if got, want := flags.specs(), []string{"claude/opus:high", "codex/gpt-5.6"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("specs() = %#v, want %#v", got, want)
+	}
+	if got, want := flags.names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("names() = %#v, want %#v", got, want)
+	}
+	if err := flags.Set("gemini"); err == nil {
+		t.Fatal("Set(\"gemini\") error = nil, want error")
 	}
 }
 
 func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 	dir := t.TempDir()
-	codex := CommandRunner{Agent: "claude", Yolo: true, Model: "saved-model", ModelLevel: "high"}
+	codex := CommandRunner{Agent: "claude/saved-model:high", Yolo: true}
 	session := AgentSession{ID: "session-7", Agent: "codex", CheckoutDirectory: dir, Resume: true}
 	resumePrompt := "continue\n\nRecover the existing work. If this issue has a draft pull request, inspect it and pull its branch before continuing."
 	wantCodex := []string{"exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "session-7", resumePrompt}
@@ -738,7 +804,7 @@ func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 		t.Fatalf("Codex resume args = %#v, want %#v", got, wantCodex)
 	}
 
-	claude := CommandRunner{Agent: "codex", Yolo: true, Model: "saved-model", ModelLevel: "medium"}
+	claude := CommandRunner{Agent: "codex/saved-model:medium", Yolo: true}
 	session.Agent = "claude"
 	wantClaude := []string{"-p", "--resume", "session-7", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", resumePrompt}
 	if got := commandArgsForSession(claude, Issue{Number: 7}, session); !reflect.DeepEqual(got, wantClaude) {
