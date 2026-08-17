@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -24,7 +23,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/mattn/go-isatty"
@@ -140,8 +138,11 @@ func runWatch(args []string) int {
 	if agents.values[0].Name == "claude" {
 		binary = claudeBinary
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := shutdownContext()
 	defer stop()
+	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
+	// cleanup did not run before the daemon returns (issue #260).
+	defer reapChildProcesses()
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), allIssues
 	events := make(chan WebhookEvent, 1)
@@ -362,7 +363,7 @@ func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 	if g.runCommand != nil {
 		return g.runCommand(ctx, args...)
 	}
-	return exec.CommandContext(ctx, g.Binary, args...).CombinedOutput()
+	return combinedOutputChildProcess(exec.CommandContext(ctx, g.Binary, args...))
 }
 
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
@@ -653,7 +654,7 @@ func (g GHCLI) EnsureLabels(ctx context.Context, repo string) error {
 	}
 	for _, label := range managedLabels {
 		cmd := exec.CommandContext(ctx, g.Binary, "label", "create", label.name, "--repo", target.repo, "--color", label.color, "--description", label.description, "--force")
-		if output, err := cmd.CombinedOutput(); err != nil {
+		if output, err := combinedOutputChildProcess(cmd); err != nil {
 			return fmt.Errorf("ensure %s label: %w: %s", label.name, err, strings.TrimSpace(string(output)))
 		}
 	}
@@ -863,7 +864,7 @@ func expandTargetShorthand(value string, originRepo func() (string, bool)) (stri
 // originRemoteTarget returns the OWNER/REPO for the current directory's
 // "origin" git remote, when it points to a GitHub repository.
 func originRemoteTarget() (string, bool) {
-	output, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	output, err := outputChildProcess(exec.Command("git", "remote", "get-url", "origin"))
 	if err != nil {
 		return "", false
 	}
@@ -1780,7 +1781,7 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		agentOutput = detector
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
-	runErr := cmd.Run()
+	runErr := runChildProcess(cmd)
 	if claudeOutput != nil {
 		if err := claudeOutput.Flush(); runErr == nil && err != nil {
 			runErr = err

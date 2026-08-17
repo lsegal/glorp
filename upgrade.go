@@ -42,7 +42,7 @@ func runUpgrade(ctx context.Context, out io.Writer, newCommand func(context.Cont
 	cmd := newCommand(ctx)
 	fmt.Fprintf(out, "Upgrading glorp with: %s\n", strings.Join(cmd.Args, " "))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, out, out
-	if err := cmd.Run(); err != nil {
+	if err := runChildProcess(cmd); err != nil {
 		return fmt.Errorf("upgrade glorp: %w", err)
 	}
 	fmt.Fprintln(out, "glorp upgraded.")

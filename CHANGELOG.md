@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Mark the `gh-fix` skill's initial `Start work on issue #N` commit with `[skip ci]`, and teach the push-triggered `CI` and `Deploy Pages` workflows to honor that marker, so opening a draft pull request no longer runs a full build against a tree identical to the default branch.
+- Stop leaving subprocesses behind when glorp exits. Every process glorp starts — the ngrok tunnel, agent runs, `gh` calls, quota probes, and the web UI dev server — now runs in its own process group and is tracked, so shutting down terminates it along with anything it spawned instead of orphaning an ngrok tunnel that keeps holding the public URL. Closing the terminal (`SIGHUP`) now shuts glorp down too, and a second `Ctrl-C` kills the remaining subprocesses immediately instead of waiting for a graceful stop.
+
 ## v1.2.2 - 2026-08-17
 
 - Restructure the CLI around subcommands: `glorp watch`, `glorp ui`, `glorp version`, `glorp upgrade`, and `glorp help`. Watching now requires the `watch` subcommand — the old top-level form (`glorp owner/repo`, `glorp --poll …`) has been removed — while `glorp --version` and `glorp -h` still work as aliases for `glorp version` and `glorp help`.
