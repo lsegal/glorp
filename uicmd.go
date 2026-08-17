@@ -81,7 +81,10 @@ func runUICommand(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	found := discoverDashboards(ctx, http.DefaultClient, localhostDashboardURL, startPort, dashboardScanPorts)
+	records := readDashboardRecords(dashboardRecordsDir(os.Getenv))
+	ports := dashboardCandidatePorts(records, startPort, dashboardScanPorts)
+	found := discoverDashboards(ctx, http.DefaultClient, localhostDashboardURL, ports)
+	pruneDashboardRecords(records, found)
 	selected, err := selectDashboard(found, startPort, isTerminal(os.Stdout) && isTerminal(os.Stdin), os.Stdout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -122,13 +125,27 @@ func localhostDashboardURL(port int) string {
 	return fmt.Sprintf("http://127.0.0.1:%d", port)
 }
 
-// discoverDashboards probes a contiguous port range for glorp dashboards,
-// returning what it found ordered by port.
-func discoverDashboards(ctx context.Context, client *http.Client, baseURL func(port int) string, startPort, count int) []dashboardInstance {
+// pruneDashboardRecords deletes records whose port no longer answers as a glorp
+// dashboard, so a crashed instance's note does not linger for every later run.
+func pruneDashboardRecords(records []dashboardRecord, found []dashboardInstance) {
+	live := make(map[int]bool, len(found))
+	for _, instance := range found {
+		live[instance.Port] = true
+	}
+	for _, record := range records {
+		if !live[record.Port] {
+			removeDashboardRecord(record)
+		}
+	}
+}
+
+// discoverDashboards probes the given ports for glorp dashboards, returning
+// what it found ordered by port.
+func discoverDashboards(ctx context.Context, client *http.Client, baseURL func(port int) string, ports []int) []dashboardInstance {
 	var mu sync.Mutex
 	var found []dashboardInstance
 	var wait sync.WaitGroup
-	for port := startPort; port < startPort+count && port <= 65535; port++ {
+	for _, port := range ports {
 		wait.Add(1)
 		go func(port int) {
 			defer wait.Done()
