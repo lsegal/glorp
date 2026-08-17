@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -97,14 +98,59 @@ func (t *processTracker) reap() {
 	}
 }
 
+// spawner starts every owned subprocess from one pinned OS thread. See
+// processSpawner for why that matters.
+var spawner = &processSpawner{}
+
+// processSpawner forks owned subprocesses from a single OS thread that lives as
+// long as glorp does. Linux's parent-death signal (issue #264) is delivered when
+// the *thread* that forked the child exits, not when the process does, and Go's
+// runtime retires idle threads whenever it likes. Forking from an ordinary
+// goroutine would therefore kill healthy children at unpredictable moments, so
+// all spawning is funnelled through one goroutine that locks its thread and
+// never gives it back.
+type processSpawner struct {
+	once     sync.Once
+	requests chan spawnRequest
+}
+
+type spawnRequest struct {
+	cmd    *exec.Cmd
+	result chan<- error
+}
+
+// start runs cmd.Start on the pinned spawn thread and returns its error.
+func (s *processSpawner) start(cmd *exec.Cmd) error {
+	s.once.Do(func() {
+		s.requests = make(chan spawnRequest)
+		ready := make(chan struct{})
+		go func() {
+			// Never unlocked and never returned from: the thread must outlive
+			// every child forked on it.
+			runtime.LockOSThread()
+			close(ready)
+			for request := range s.requests {
+				request.result <- request.cmd.Start()
+			}
+		}()
+		<-ready
+	})
+	result := make(chan error, 1)
+	s.requests <- spawnRequest{cmd: cmd, result: result}
+	return <-result
+}
+
 // startChildProcess starts cmd as an owned subprocess: it runs in its own
-// process group so the processes it spawns are terminated with it, and it is
-// tracked so glorp kills the whole tree before exiting.
+// process group so the processes it spawns are terminated with it, it is
+// tracked so glorp kills the whole tree before exiting, and the kernel is asked
+// to tear it down should glorp die without running any cleanup at all.
 func startChildProcess(cmd *exec.Cmd) error {
 	isolateProcessTree(cmd)
-	if err := cmd.Start(); err != nil {
+	guardOrphanedProcess(cmd)
+	if err := spawner.start(cmd); err != nil {
 		return err
 	}
+	adoptOrphanedProcess(cmd)
 	childProcesses.track(cmd)
 	return nil
 }
