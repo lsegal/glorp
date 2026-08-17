@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -365,4 +367,88 @@ func TestReapPollTickOnlyWhenPollingIsSlower(t *testing.T) {
 	if tick := slow.reapPollTick(); tick != reapPollInterval {
 		t.Fatalf("tick = %v, want %v for slow polling", tick, reapPollInterval)
 	}
+}
+
+// requireLogged fails the test unless every fragment appears in the captured
+// log output, quoting the whole log so a mismatch is diagnosable.
+func requireLogged(t *testing.T, logs string, fragments ...string) {
+	t.Helper()
+	for _, fragment := range fragments {
+		if !strings.Contains(logs, fragment) {
+			t.Fatalf("log is missing %q; got:\n%s", fragment, logs)
+		}
+	}
+}
+
+func TestNegotiateContestedIssuesLogsReapAskAndPickup(t *testing.T) {
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{{issue: Issue{Number: 7, Repository: "o/r", Target: "o/r"}, contested: true}}
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true); len(result) != 1 {
+		t.Fatalf("uncontested handshake should keep the issue, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"reaping 1 contested issue(s) as SELF (first reap after startup",
+		"issue #7 looks claimed: it reappeared with no local record",
+		"issue o/r#7 asking \"Does anyone have this?\" as SELF",
+		"issue o/r#7 unanswered",
+		"issue #7 picked up after handoff; dispatching",
+	)
+}
+
+func TestNegotiateContestedIssuesLogsStandDownWithClaimingIdentity(t *testing.T) {
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs}
+	w.ownershipWait = func(context.Context) bool {
+		comments.inject("o/r", 8, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: time.Now()})
+		return true
+	}
+	pending := []pendingIssue{{issue: Issue{Number: 8, Repository: "o/r", Target: "o/r"}, contested: true}}
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true); len(result) != 0 {
+		t.Fatalf("an answered ask must drop the issue, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"issue o/r#8 answered by instance OTHER during the handoff window; letting it go",
+		"issue #8 ownership claimed by another instance; standing down",
+	)
+}
+
+func TestNegotiateContestedIssuesLogsStaleAndFreshClaimAges(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	comments.inject("o/r", 2, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{
+		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true},
+		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
+	}
+	seen := map[string]bool{}
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, false); len(result) != 1 {
+		t.Fatalf("only the stale issue should be reaped, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"periodic reap, skipping anything claimed within 2h0m0s",
+		"issue #1 claimed by instance OTHER 1m0s ago (within 2h0m0s); skipping reap",
+		"issue #2 last claimed by instance OTHER 3h0m0s ago (older than 2h0m0s); treating it as abandoned",
+	)
+}
+
+func TestNegotiateContestedIssuesLogsProjectItemReasonAndPullRequestTarget(t *testing.T) {
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
+	checker := &fakeClosureSource{state: OriginatingWorkState{PullRequests: []PullRequestWorkState{{Number: 42, State: "open"}}}}
+	issue := Issue{Number: 9, Repository: "o/r", Target: "https://github.com/users/o/projects/1", ProjectStatus: "In Progress"}
+	pending := []pendingIssue{{issue: issue, contested: true}}
+	if result := w.negotiateContestedIssues(context.Background(), checker, pending, map[string]bool{}, true); len(result) != 1 {
+		t.Fatalf("the stranded project item should be reclaimed, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"issue #9 looks claimed: it sits at In Progress with no local record",
+		"negotiating on pull request o/r#42",
+		"pull request o/r#42 asking \"Does anyone have this?\"",
+	)
 }

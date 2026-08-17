@@ -486,7 +486,11 @@ func (w *Glorp) logf(format string, args ...interface{}) {
 	w.logMu.Lock()
 	defer w.logMu.Unlock()
 	line := fmt.Sprintf("%s "+format, append([]interface{}{time.Now().Format("2006-01-02 15:04:05")}, args...)...)
-	fmt.Fprintln(w.Out, line)
+	// Run defaults Out to io.Discard, but handoff logging also runs from code
+	// paths exercised without it; a missing writer must not panic.
+	if w.Out != nil {
+		fmt.Fprintln(w.Out, line)
+	}
 	if w.UI != nil {
 		w.UI.Log(line)
 	}
