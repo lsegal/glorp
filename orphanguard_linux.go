@@ -23,3 +23,7 @@ func guardOrphanedProcess(cmd *exec.Cmd) {
 // adoptOrphanedProcess has nothing to do on Linux: the guard is installed
 // before the fork, so the child needs nothing once it is running.
 func adoptOrphanedProcess(*exec.Cmd) error { return nil }
+
+// releaseOrphanedProcess has nothing to do on Linux: the parent-death signal is
+// a property of the child itself and needs no bookkeeping in glorp.
+func releaseOrphanedProcess(*exec.Cmd) {}

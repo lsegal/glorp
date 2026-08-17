@@ -131,3 +131,7 @@ func resumePrimaryThread(pid uint32) error {
 	}
 	return fmt.Errorf("no thread found for process %d", pid)
 }
+
+// releaseOrphanedProcess has nothing to do on Windows: a child that exits leaves
+// the job object on its own, and the job only kills processes still in it.
+func releaseOrphanedProcess(*exec.Cmd) {}
