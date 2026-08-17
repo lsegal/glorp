@@ -111,6 +111,14 @@ func runWatch(args []string) int {
 		flags.Usage()
 		return 2
 	}
+	for i, value := range targets {
+		expanded, err := expandTargetShorthand(value, originRemoteTarget)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		targets[i] = expanded
+	}
 	if interval <= 0 || concurrency < 0 {
 		fmt.Fprintln(os.Stderr, "interval must be positive and concurrency cannot be negative")
 		return 2
@@ -707,6 +715,10 @@ type discussionsGraphQLResponse struct {
 					Comments  struct {
 						TotalCount int `json:"totalCount"`
 					} `json:"comments"`
+					Category struct {
+						Slug string `json:"slug"`
+						Name string `json:"name"`
+					} `json:"category"`
 				} `json:"nodes"`
 			} `json:"discussions"`
 		} `json:"repository"`
@@ -716,7 +728,7 @@ type discussionsGraphQLResponse struct {
 const discussionsQuery = `query($owner:String!,$name:String!){
   repository(owner:$owner,name:$name){
     discussions(first:100,orderBy:{field:CREATED_AT,direction:DESC}){
-      nodes{number title body createdAt comments(first:1){totalCount}}
+      nodes{number title body createdAt comments(first:1){totalCount} category{slug name}}
     }
   }
 }`
@@ -750,9 +762,20 @@ func (g GHCLI) ListUnansweredDiscussions(ctx context.Context, repo string) ([]Di
 		if node.Comments.TotalCount > 0 {
 			continue
 		}
+		if !matchesDiscussionCategory(target.discussionCategory, node.Category.Slug, node.Category.Name) {
+			continue
+		}
 		discussions = append(discussions, Discussion{Number: node.Number, Title: node.Title, Body: node.Body, CreatedAt: node.CreatedAt})
 	}
 	return discussions, nil
+}
+
+// matchesDiscussionCategory reports whether a thread belongs to the category a
+// target names. GitHub's category slug ("q-a") is what appears in the board
+// URL, but the display name ("Q&A") is what a person reads, so either is
+// accepted, case-insensitively. An empty category matches every thread.
+func matchesDiscussionCategory(want, slug, name string) bool {
+	return want == "" || strings.EqualFold(want, slug) || strings.EqualFold(want, name)
 }
 
 func issueListArgs(repo, filter string, allIssues bool) []string {
@@ -772,6 +795,62 @@ type target struct {
 	projectOwnerType       string
 	isProject              bool
 	isDiscussion           bool
+	// discussionCategory is the slug of the single Discussions category a
+	// discussion target watches. Empty means every category.
+	discussionCategory string
+}
+
+// expandTargetShorthand rewrites the compact `projects:` and `discussions:`
+// target forms into the canonical GitHub URLs parseTarget understands:
+//
+//	projects:OWNER/REPO/NUMBER      discussions:OWNER/REPO/CATEGORY
+//	projects:NUMBER                 discussions:CATEGORY
+//	                                discussions:OWNER/REPO
+//
+// The OWNER/REPO prefix may be omitted inside a git checkout, where it is
+// taken from the repository the "origin" remote points at. Values without a
+// recognized prefix are returned unchanged so full URLs and OWNER/REPO
+// targets keep working.
+func expandTargetShorthand(value string, originRepo func() (string, bool)) (string, error) {
+	var kind, rest string
+	switch {
+	case strings.HasPrefix(value, "projects:"):
+		kind, rest = "projects", strings.TrimPrefix(value, "projects:")
+	case strings.HasPrefix(value, "discussions:"):
+		kind, rest = "discussions", strings.TrimPrefix(value, "discussions:")
+	default:
+		return value, nil
+	}
+	rest = strings.Trim(rest, "/")
+	parts := strings.Split(rest, "/")
+	var repo, leaf string
+	switch {
+	case len(parts) == 3:
+		repo, leaf = parts[0]+"/"+parts[1], parts[2]
+	case len(parts) == 2 && kind == "discussions":
+		repo = rest
+	case len(parts) > 1:
+		return "", fmt.Errorf("target %q must be %s:OWNER/REPO/NUMBER or %s:NUMBER", value, kind, kind)
+	default:
+		detected, ok := originRepo()
+		if !ok {
+			return "", fmt.Errorf("target %q omits OWNER/REPO and the current directory has no GitHub \"origin\" remote", value)
+		}
+		repo, leaf = detected, rest
+	}
+	if !validRepo(repo) {
+		return "", fmt.Errorf("target %q does not name a valid OWNER/REPO", value)
+	}
+	if kind == "projects" {
+		if leaf == "" || strings.Trim(leaf, "0123456789") != "" {
+			return "", fmt.Errorf("target %q must end in a project number", value)
+		}
+		return "https://github.com/" + repo + "/projects/" + leaf, nil
+	}
+	if leaf == "" {
+		return "https://github.com/" + repo + "/discussions", nil
+	}
+	return "https://github.com/" + repo + "/discussions/categories/" + leaf, nil
 }
 
 // originRemoteTarget returns the OWNER/REPO for the current directory's
@@ -823,6 +902,9 @@ func parseTarget(value string) (target, error) {
 	}
 	if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == "discussions" {
 		return target{repo: parts[0] + "/" + parts[1], isDiscussion: true}, nil
+	}
+	if len(parts) == 5 && parts[0] != "" && parts[1] != "" && parts[2] == "discussions" && parts[3] == "categories" && parts[4] != "" {
+		return target{repo: parts[0] + "/" + parts[1], isDiscussion: true, discussionCategory: parts[4]}, nil
 	}
 	return target{}, fmt.Errorf("target must be OWNER/REPO or a GitHub repository/project URL")
 }

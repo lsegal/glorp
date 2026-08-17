@@ -206,9 +206,55 @@ func TestParseTargetURLs(t *testing.T) {
 		"https://github.com/lsegal/glorp/discussions/",
 	} {
 		got, err := parseTarget(input)
-		if err != nil || !got.isDiscussion || got.repo != "lsegal/glorp" || got.isProject {
+		if err != nil || !got.isDiscussion || got.repo != "lsegal/glorp" || got.isProject || got.discussionCategory != "" {
 			t.Fatalf("parseTarget(%q) = %#v, %v", input, got, err)
 		}
+	}
+	got, err = parseTarget("https://github.com/lsegal/glorp/discussions/categories/q-a")
+	if err != nil || !got.isDiscussion || got.repo != "lsegal/glorp" || got.discussionCategory != "q-a" {
+		t.Fatalf("discussion category target = %#v, %v", got, err)
+	}
+	if _, err := parseTarget("https://github.com/lsegal/glorp/discussions/categories/"); err == nil {
+		t.Fatal("expected an error for an empty discussion category")
+	}
+}
+
+func TestExpandTargetShorthand(t *testing.T) {
+	origin := func() (string, bool) { return "lsegal/glorp", true }
+	for _, tt := range []struct{ in, want string }{
+		{"projects:3", "https://github.com/lsegal/glorp/projects/3"},
+		{"projects:other/repo/4", "https://github.com/other/repo/projects/4"},
+		{"discussions:q-a", "https://github.com/lsegal/glorp/discussions/categories/q-a"},
+		{"discussions:other/repo/q-a", "https://github.com/other/repo/discussions/categories/q-a"},
+		{"discussions:other/repo", "https://github.com/other/repo/discussions"},
+		{"discussions:/other/repo/q-a/", "https://github.com/other/repo/discussions/categories/q-a"},
+		{"owner/repo", "owner/repo"},
+		{"https://github.com/users/lsegal/projects/3", "https://github.com/users/lsegal/projects/3"},
+	} {
+		got, err := expandTargetShorthand(tt.in, origin)
+		if err != nil || got != tt.want {
+			t.Fatalf("expandTargetShorthand(%q) = %q, %v; want %q", tt.in, got, err, tt.want)
+		}
+		if _, err := parseTarget(got); err != nil {
+			t.Fatalf("parseTarget(%q) = %v", got, err)
+		}
+	}
+	for _, in := range []string{"projects:", "projects:lsegal/3", "projects:abc", "projects:other/repo/abc", "discussions:a/b/c/d"} {
+		if got, err := expandTargetShorthand(in, origin); err == nil {
+			t.Fatalf("expandTargetShorthand(%q) = %q, want an error", in, got)
+		}
+	}
+}
+
+func TestExpandTargetShorthandWithoutOriginRemote(t *testing.T) {
+	none := func() (string, bool) { return "", false }
+	for _, in := range []string{"projects:3", "discussions:q-a"} {
+		if _, err := expandTargetShorthand(in, none); err == nil {
+			t.Fatalf("expandTargetShorthand(%q) without an origin remote should fail", in)
+		}
+	}
+	if got, err := expandTargetShorthand("owner/repo", none); err != nil || got != "owner/repo" {
+		t.Fatalf("expandTargetShorthand(owner/repo) = %q, %v", got, err)
 	}
 }
 
@@ -230,6 +276,32 @@ func TestGHCLIListUnansweredDiscussions(t *testing.T) {
 	}
 	if len(calls) != 1 || calls[0][0] != "api" || calls[0][1] != "graphql" {
 		t.Fatalf("call = %#v", calls)
+	}
+}
+
+func TestGHCLIListUnansweredDiscussionsFiltersByCategory(t *testing.T) {
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte(`{"data":{"repository":{"discussions":{"nodes":[
+			{"number":5,"title":"Question","body":"q","createdAt":"2026-08-01T00:00:00Z","comments":{"totalCount":0},"category":{"slug":"q-a","name":"Q&A"}},
+			{"number":6,"title":"Idea","body":"i","createdAt":"2026-08-02T00:00:00Z","comments":{"totalCount":0},"category":{"slug":"ideas","name":"Ideas"}}
+		]}}}}`), nil
+	}}
+	for _, target := range []string{
+		"https://github.com/owner/repo/discussions/categories/q-a",
+		"https://github.com/owner/repo/discussions/categories/Q-A",
+		"https://github.com/owner/repo/discussions/categories/Q&A",
+	} {
+		discussions, err := gh.ListUnansweredDiscussions(context.Background(), target)
+		if err != nil {
+			t.Fatalf("ListUnansweredDiscussions(%q): %v", target, err)
+		}
+		if len(discussions) != 1 || discussions[0].Number != 5 {
+			t.Fatalf("discussions for %q = %#v", target, discussions)
+		}
+	}
+	discussions, err := gh.ListUnansweredDiscussions(context.Background(), "https://github.com/owner/repo/discussions")
+	if err != nil || len(discussions) != 2 {
+		t.Fatalf("uncategorized target = %#v, %v", discussions, err)
 	}
 }
 

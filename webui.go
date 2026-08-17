@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,7 +92,7 @@ type multiUIReporter []UIReporter
 
 func (reporters multiUIReporter) Snapshot(snapshot GlorpSnapshot) {
 	for _, reporter := range reporters {
-		if reporter != nil {
+		if !isNilUIReporter(reporter) {
 			reporter.Snapshot(snapshot)
 		}
 	}
@@ -99,16 +100,30 @@ func (reporters multiUIReporter) Snapshot(snapshot GlorpSnapshot) {
 
 func (reporters multiUIReporter) Log(line string) {
 	for _, reporter := range reporters {
-		if reporter != nil {
+		if !isNilUIReporter(reporter) {
 			reporter.Log(line)
 		}
+	}
+}
+
+// isNilUIReporter reports whether a reporter is unusable, including a typed-nil
+// pointer such as a (*WebUI)(nil) stored in the UIReporter interface.
+func isNilUIReporter(reporter UIReporter) bool {
+	if reporter == nil {
+		return true
+	}
+	switch value := reflect.ValueOf(reporter); value.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
 func combineUIReporters(reporters ...UIReporter) UIReporter {
 	combined := make(multiUIReporter, 0, len(reporters))
 	for _, reporter := range reporters {
-		if reporter != nil {
+		if !isNilUIReporter(reporter) {
 			combined = append(combined, reporter)
 		}
 	}

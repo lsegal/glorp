@@ -253,7 +253,15 @@ https://github.com/users/OWNER/projects/NUMBER
 https://github.com/orgs/OWNER/projects/NUMBER
 https://github.com/OWNER/REPOSITORY/projects/NUMBER
 https://github.com/OWNER/REPOSITORY/discussions
+https://github.com/OWNER/REPOSITORY/discussions/categories/CATEGORY
+projects:OWNER/REPOSITORY/NUMBER
+projects:NUMBER
+discussions:OWNER/REPOSITORY/CATEGORY
+discussions:OWNER/REPOSITORY
+discussions:CATEGORY
 ```
+
+The `projects:` and `discussions:` forms are shorthands for the URLs above. The `OWNER/REPOSITORY` prefix may be omitted inside a git checkout whose `origin` remote points at a GitHub repository, so `glorp watch projects:3 discussions:q-a` watches project 3 and the Q&A discussions category of the current repository. A discussions category is named by its URL slug (`q-a`) or its display name (`Q&A`); without one, every category is watched.
 
 A Discussions board target (`https://github.com/OWNER/REPOSITORY/discussions`) is watched differently from repository and Project targets: instead of the `gh-fix` skill, glorp dispatches the read-only `gh-discuss` skill for each new top-level Discussion thread that has no replies yet. `gh-discuss` only reads the repository to answer the question and posts a single top-level reply when it can do so accurately and positively; otherwise it leaves the thread untouched. Discussions targets work in both push and poll mode: in push mode glorp subscribes the repository webhook to GitHub's `discussion` event so a new thread dispatches immediately, with the periodic synchronization interval as the fallback. They are not affected by `--filter` or `--all-issues`, and do not use the `agent-ready` label or the comment-based ownership handoff protocol described below.
 
