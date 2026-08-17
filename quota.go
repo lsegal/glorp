@@ -56,13 +56,10 @@ func readCodexQuota(ctx context.Context, binary string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := cmd.Start(); err != nil {
+	if err := startChildProcess(cmd); err != nil {
 		return "", err
 	}
-	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}()
+	defer func() { _ = stopChildProcess(cmd) }()
 	for _, request := range codexQuotaRequests() {
 		if _, err := fmt.Fprintln(stdin, request); err != nil {
 			return "", err
@@ -138,7 +135,7 @@ func (r *claudeQuotaReader) Read(ctx context.Context) string {
 func readClaudeQuota(ctx context.Context, binary string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, "--print", "--output-format=json")
 	cmd.Stdin = strings.NewReader(claudeQuotaRequest())
-	out, err := cmd.Output()
+	out, err := outputChildProcess(cmd)
 	if err != nil {
 		return "", err
 	}
