@@ -718,6 +718,111 @@ func TestGlorpUpdatesProjectStatus(t *testing.T) {
 	}
 }
 
+// statusFailingOnce fails SetIssueStatus exactly once (for whichever issue
+// asks first), then succeeds for every subsequent call.
+type statusFailingOnce struct {
+	mu      sync.Mutex
+	failed  bool
+	numbers []int
+}
+
+func (f *statusFailingOnce) SetIssueStatus(_ context.Context, _ string, issue Issue, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if status == "In Progress" && !f.failed {
+		f.failed = true
+		return errors.New("transient status update failure")
+	}
+	f.numbers = append(f.numbers, issue.Number)
+	return nil
+}
+
+func TestGlorpDispatchSkipsIssueOnStatusUpdateFailureWithoutAbortingOthers(t *testing.T) {
+	r := &fakeRunner{release: make(chan struct{})}
+	status := &statusFailingOnce{}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 2,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}, {Number: 8}}}}, Runner: r, Status: status, Out: &logs,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	close(r.release)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	got := append([]int(nil), r.got...)
+	r.mu.Unlock()
+	if len(got) != 1 || got[0] != 8 {
+		t.Fatalf("dispatched issues = %v, want only #8 (the one whose status update succeeded)", got)
+	}
+	if !strings.Contains(logs.String(), "issue #7 not dispatched; failed to set project status") {
+		t.Fatalf("logs = %q, want a not-dispatched message for issue #7", logs.String())
+	}
+}
+
+// erroringThenSucceedingSource fails ListIssues for its first failN calls,
+// then serves batches normally.
+type erroringThenSucceedingSource struct {
+	mu      sync.Mutex
+	calls   int
+	failN   int
+	batches [][]Issue
+}
+
+func (f *erroringThenSucceedingSource) ListIssues(_ context.Context, _ string) ([]Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := f.calls
+	f.calls++
+	if n < f.failN {
+		return nil, errors.New("transient listing failure")
+	}
+	idx := n - f.failN
+	if idx >= len(f.batches) {
+		idx = len(f.batches) - 1
+	}
+	return f.batches[idx], nil
+}
+
+func TestGlorpInitialPollFailureIsNotFatal(t *testing.T) {
+	src := &erroringThenSucceedingSource{failN: 1, batches: [][]Issue{{{Number: 7}}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	var logs bytes.Buffer
+	w := &Glorp{Repo: "o/r", Interval: 10 * time.Millisecond, Concurrency: 1, Issues: src, Runner: r, Out: &logs}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		r.mu.Lock()
+		got := len(r.got)
+		r.mu.Unlock()
+		if got > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("issue was never dispatched after the initial poll failure")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "initial poll error") {
+		t.Fatalf("logs = %q, want an initial poll error message", logs.String())
+	}
+}
+
 func TestInvalidRepo(t *testing.T) {
 	w := &Glorp{Repo: "bad", Interval: time.Second, Concurrency: 1}
 	if w.Run(context.Background()) == nil {

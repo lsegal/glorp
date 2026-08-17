@@ -558,7 +558,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			if w.Status != nil {
 				if err := w.Status.SetIssueStatus(ctx, issue.Target, issue, "In Progress"); err != nil {
-					return err
+					w.logf("issue #%d not dispatched; failed to set project status: %v", issue.Number, err)
+					continue
 				}
 			}
 			// Contested issues already posted their starting/continuing claim
@@ -787,7 +788,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("stopped during initial poll")
 			return nil
 		}
-		return err
+		w.logf("initial poll error: %v; will retry in %s", err, w.periodicPollInterval())
 	}
 	publish()
 	var ticker *time.Ticker

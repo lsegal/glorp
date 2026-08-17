@@ -309,6 +309,18 @@ func TestListPublicIssuesFallsBackOnFailure(t *testing.T) {
 	}
 }
 
+func TestListPublicIssuesFallsBackOnIncompleteResults(t *testing.T) {
+	gh := GHCLI{
+		publicAPI: func(context.Context, string) ([]byte, http.Header, int, error) {
+			return []byte(`{"items":[{"number":7,"title":"bug","state":"open"}],"incomplete_results":true}`), nil, http.StatusOK, nil
+		},
+	}
+	issues, ok := gh.listPublicIssues(context.Background(), "owner/repo", "", true)
+	if ok || issues != nil {
+		t.Fatalf("listPublicIssues() = (%#v, %v), want (nil, false) on incomplete_results:true", issues, ok)
+	}
+}
+
 func TestListIssuesUsesPublicSearchAPIForPublicRepo(t *testing.T) {
 	gh := GHCLI{
 		publicRepoCache: &sync.Map{},
@@ -333,6 +345,48 @@ func TestListIssuesUsesPublicSearchAPIForPublicRepo(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0].Number != 7 {
 		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestListIssuesFallsBackToGHOnIncompleteSearchResults(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		publicAPI: func(_ context.Context, requestURL string) ([]byte, http.Header, int, error) {
+			switch requestURL {
+			case "https://api.github.com/repos/owner/repo":
+				return []byte(`{"private":false}`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/7/dependencies/blocked_by":
+				return []byte(`[]`), nil, http.StatusOK, nil
+			}
+			return []byte(`{"items":[],"incomplete_results":true}`), nil, http.StatusOK, nil
+		},
+		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string(nil), args...))
+			if args[0] == "issue" {
+				return []byte(`[{"number":7,"title":"bug"}]`), nil
+			}
+			return []byte(`[]`), nil
+		},
+	}
+	gh.Filter = defaultIssueFilter
+	issues, err := gh.ListIssues(context.Background(), "owner/repo")
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if len(issues) != 1 || issues[0].Number != 7 {
+		t.Fatalf("issues = %#v, want the gh CLI fallback result", issues)
+	}
+	want := issueListArgs("owner/repo", defaultIssueFilter, false)
+	found := false
+	for _, call := range calls {
+		if reflect.DeepEqual(call, want) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("gh calls = %#v, want one call matching %#v", calls, want)
 	}
 }
 

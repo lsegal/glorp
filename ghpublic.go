@@ -229,6 +229,12 @@ func (g GHCLI) listPublicIssues(ctx context.Context, repo, filter string, allIss
 		if err := json.Unmarshal(body, &page); err != nil {
 			return nil, false
 		}
+		if page.IncompleteResults {
+			// GitHub's search backend returns 200 with incomplete_results:true
+			// when its own index lookup times out, silently omitting issues
+			// rather than erroring. Treat that the same as a failed request.
+			return nil, false
+		}
 		for _, item := range page.Items {
 			if item.PullRequest != nil {
 				continue
