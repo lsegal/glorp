@@ -52,6 +52,13 @@ type fakeRunner struct {
 	got         []int
 	active, max int
 	release     chan struct{}
+	// dispatched, when non-nil, receives the issue number as each Run call
+	// starts, letting tests synchronize on dispatch instead of polling got.
+	dispatched chan int
+	// allow, when non-nil, gates each Run call individually: it must receive
+	// a value before that call returns, instead of the shared release
+	// channel unblocking every call (including future ones) at once.
+	allow chan struct{}
 }
 
 type fakeOutputRunner struct {
@@ -147,9 +154,22 @@ func (f *fakeRunner) Run(ctx context.Context, i Issue) error {
 		f.max = f.active
 	}
 	f.mu.Unlock()
-	select {
-	case <-f.release:
-	case <-ctx.Done():
+	if f.dispatched != nil {
+		select {
+		case f.dispatched <- i.Number:
+		case <-ctx.Done():
+		}
+	}
+	if f.allow != nil {
+		select {
+		case <-f.allow:
+		case <-ctx.Done():
+		}
+	} else {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+		}
 	}
 	f.mu.Lock()
 	f.active--
@@ -1414,46 +1434,50 @@ func TestGlorpRedispatchesProjectItemMovedBackToTodoAfterCompletion(t *testing.T
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	src := &fakeSource{batches: [][]Issue{{{Number: 7, ProjectStatus: "Todo"}}}}
-	r := &fakeRunner{release: make(chan struct{})}
+	// allow gates each dispatch individually so a redispatch that races ahead
+	// of the assertion can't complete on its own and trigger further
+	// redispatches before the test observes it; dispatched reports each
+	// dispatch as it happens instead of requiring the test to poll r.got
+	// against a wall-clock deadline.
+	r := &fakeRunner{release: make(chan struct{}), allow: make(chan struct{}), dispatched: make(chan int, 1)}
 	var logs bytes.Buffer
 	w := &Glorp{
 		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1, StatePath: statePath,
 		Issues: src, Runner: r, Out: &logs,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	deadline := time.Now().Add(2 * time.Second)
-	closedRelease := false
-	for time.Now().Before(deadline) {
-		r.mu.Lock()
-		dispatched := append([]int(nil), r.got...)
-		r.mu.Unlock()
-		if !closedRelease && len(dispatched) >= 1 {
-			// Let the first run complete so the item's local state becomes
-			// "completed" while the project item remains in the Todo column.
-			close(r.release)
-			closedRelease = true
-		}
-		if reflect.DeepEqual(dispatched, []int{7, 7}) {
+	const waitTimeout = 10 * time.Second
+	awaitDispatch := func(label string) {
+		t.Helper()
+		select {
+		case got := <-r.dispatched:
+			if got != 7 {
+				t.Fatalf("%s: dispatched issue #%d, want #7", label, got)
+			}
+		case <-time.After(waitTimeout):
 			cancel()
-			if err := <-done; err != nil {
-				t.Fatal(err)
-			}
-			if want := "reset stale local completed state"; !strings.Contains(logs.String(), want) {
-				t.Fatalf("logs did not report completed reset:\n%s", logs.String())
-			}
-			return
+			<-done
+			t.Fatalf("timed out waiting for %s", label)
 		}
-		time.Sleep(time.Millisecond)
 	}
+
+	awaitDispatch("initial dispatch")
+	// Let the first run complete so the item's local state becomes
+	// "completed" while the project item remains in the Todo column.
+	r.allow <- struct{}{}
+	awaitDispatch("redispatch after completion")
+
 	cancel()
-	if !closedRelease {
-		close(r.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
-	<-done
-	t.Fatalf("completed project item moved back to Todo was not redispatched: got %v", r.got)
+	if want := "reset stale local completed state"; !strings.Contains(logs.String(), want) {
+		t.Fatalf("logs did not report completed reset:\n%s", logs.String())
+	}
 }
 
 func TestProjectReadyState(t *testing.T) {
