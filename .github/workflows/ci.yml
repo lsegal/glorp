@@ -28,7 +28,20 @@ jobs:
         working-directory: web
       - run: go test ./...
       - run: go vet ./...
-      # The tests only run on Linux, so cross-compile the other platforms'
-      # process handling to keep it from breaking unnoticed.
-      - run: GOOS=windows go vet ./...
+      # macOS has no runner here, so cross-compile its process handling to keep
+      # it from breaking unnoticed. Windows has its own job below.
       - run: GOOS=darwin go vet ./...
+
+  test-windows:
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      # The default build needs no generated web assets: the web/dist embed is
+      # behind the production tag, so Go alone covers the Windows-only process
+      # handling in orphanguard_windows.go and process_windows.go.
+      - run: go test ./...
+      - run: go vet ./...
