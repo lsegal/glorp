@@ -51,6 +51,13 @@ type CommentClient interface {
 // wait after asking "does anyone have this?" before claiming abandoned work.
 const ownershipWaitDuration = 2 * time.Minute
 
+// staleClaimDuration is how old the newest claim from another instance must
+// be before a periodic reap treats the work as abandoned and re-opens the
+// "does anyone have this?" handshake. Reaps run repeatedly (issue #239), so
+// without this the handshake would be re-posted on every pass and spam
+// issues that a live instance is still working.
+const staleClaimDuration = 2 * time.Hour
+
 const (
 	askClaimBody        = "Does anyone have this?"
 	startingClaimBody   = "Starting work on this issue"
@@ -123,6 +130,46 @@ func claimedByOther(comments []Comment, after time.Time, self Identity) bool {
 		}
 	}
 	return false
+}
+
+// latestClaimByOther returns the creation time of the most recent starting,
+// continuing, or presence claim signed by an identity other than self.
+func latestClaimByOther(comments []Comment, self Identity) (time.Time, bool) {
+	var latest time.Time
+	found := false
+	for _, comment := range comments {
+		kind, id, ok := parseClaim(comment.Body)
+		if !ok || id == self {
+			continue
+		}
+		switch kind {
+		case claimStarting, claimContinuing, claimPresence:
+			if !found || comment.CreatedAt.After(latest) {
+				latest = comment.CreatedAt
+				found = true
+			}
+		}
+	}
+	return latest, found
+}
+
+// claimIsFresh reports whether another instance has claimed the target
+// recently enough that a periodic reap should leave it alone. Work with no
+// foreign claim at all, or one older than staleClaimDuration, is fair game
+// for the "does anyone have this?" handshake.
+func (w *Glorp) claimIsFresh(ctx context.Context, target ownershipTarget) (bool, error) {
+	if w.Comments == nil {
+		return false, nil
+	}
+	comments, err := w.Comments.ListComments(ctx, target.Repo, target.Number)
+	if err != nil {
+		return false, err
+	}
+	claimedAt, ok := latestClaimByOther(comments, w.Identity)
+	if !ok {
+		return false, nil
+	}
+	return time.Since(claimedAt) < w.staleClaimAfter(), nil
 }
 
 // ownershipTarget identifies where a handoff negotiation should take place:
