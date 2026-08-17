@@ -113,9 +113,11 @@ func parseClaim(body string) (kind claimKind, id Identity, ok bool) {
 
 // claimedByOther reports whether any comment created at or after the given
 // time is a starting, continuing, or presence claim signed by an identity
-// other than self. Per the handoff protocol, the most recent claim wins, so
-// any such comment means another instance has already taken ownership.
-func claimedByOther(comments []Comment, after time.Time, self Identity) bool {
+// other than self, and returns that identity so the caller can name the
+// winning instance in its logs. Per the handoff protocol, the most recent
+// claim wins, so any such comment means another instance has already taken
+// ownership.
+func claimedByOther(comments []Comment, after time.Time, self Identity) (Identity, bool) {
 	for _, comment := range comments {
 		if comment.CreatedAt.Before(after) {
 			continue
@@ -126,16 +128,18 @@ func claimedByOther(comments []Comment, after time.Time, self Identity) bool {
 		}
 		switch kind {
 		case claimStarting, claimContinuing, claimPresence:
-			return true
+			return id, true
 		}
 	}
-	return false
+	return "", false
 }
 
-// latestClaimByOther returns the creation time of the most recent starting,
-// continuing, or presence claim signed by an identity other than self.
-func latestClaimByOther(comments []Comment, self Identity) (time.Time, bool) {
+// latestClaimByOther returns the creation time and signing identity of the
+// most recent starting, continuing, or presence claim signed by an identity
+// other than self.
+func latestClaimByOther(comments []Comment, self Identity) (time.Time, Identity, bool) {
 	var latest time.Time
+	var owner Identity
 	found := false
 	for _, comment := range comments {
 		kind, id, ok := parseClaim(comment.Body)
@@ -146,30 +150,34 @@ func latestClaimByOther(comments []Comment, self Identity) (time.Time, bool) {
 		case claimStarting, claimContinuing, claimPresence:
 			if !found || comment.CreatedAt.After(latest) {
 				latest = comment.CreatedAt
+				owner = id
 				found = true
 			}
 		}
 	}
-	return latest, found
+	return latest, owner, found
 }
 
 // claimIsFresh reports whether another instance has claimed the target
 // recently enough that a periodic reap should leave it alone. Work with no
 // foreign claim at all, or one older than staleClaimDuration, is fair game
 // for the "does anyone have this?" handshake.
-func (w *Glorp) claimIsFresh(ctx context.Context, target ownershipTarget) (bool, error) {
+// It also reports who holds that claim and how old it is, so callers can say
+// in the log why a reap was skipped or why work was treated as abandoned.
+func (w *Glorp) claimIsFresh(ctx context.Context, target ownershipTarget) (fresh bool, owner Identity, age time.Duration, err error) {
 	if w.Comments == nil {
-		return false, nil
+		return false, "", 0, nil
 	}
 	comments, err := w.Comments.ListComments(ctx, target.Repo, target.Number)
 	if err != nil {
-		return false, err
+		return false, "", 0, err
 	}
-	claimedAt, ok := latestClaimByOther(comments, w.Identity)
+	claimedAt, owner, ok := latestClaimByOther(comments, w.Identity)
 	if !ok {
-		return false, nil
+		return false, "", 0, nil
 	}
-	return time.Since(claimedAt) < w.staleClaimAfter(), nil
+	age = time.Since(claimedAt)
+	return age < w.staleClaimAfter(), owner, age, nil
 }
 
 // ownershipTarget identifies where a handoff negotiation should take place:
@@ -178,6 +186,16 @@ type ownershipTarget struct {
 	Repo     string
 	Number   int
 	Continue bool
+}
+
+// describe names the target the way handoff log lines refer to it, so a
+// reader can tell whether a handshake happened on the issue itself or on an
+// already open pull request continuing that work.
+func (t ownershipTarget) describe() string {
+	if t.Continue {
+		return fmt.Sprintf("pull request %s#%d", t.Repo, t.Number)
+	}
+	return fmt.Sprintf("issue %s#%d", t.Repo, t.Number)
 }
 
 // ownershipTargetFor resolves whether an issue already has an open,
@@ -216,6 +234,7 @@ func (w *Glorp) negotiateOwnership(ctx context.Context, target ownershipTarget) 
 		return true, nil
 	}
 	askedAt := time.Now()
+	w.logf("%s asking %q as %s; waiting %s for another instance to answer", target.describe(), askClaimBody, w.Identity, ownershipWaitDuration)
 	if err := w.Comments.PostComment(ctx, target.Repo, target.Number, signComment(askClaimBody, w.Identity)); err != nil {
 		return false, err
 	}
@@ -226,13 +245,15 @@ func (w *Glorp) negotiateOwnership(ctx context.Context, target ownershipTarget) 
 	if err != nil {
 		return false, err
 	}
-	if claimedByOther(comments, askedAt, w.Identity) {
+	if owner, ok := claimedByOther(comments, askedAt, w.Identity); ok {
+		w.logf("%s answered by instance %s during the handoff window; letting it go", target.describe(), owner)
 		return false, nil
 	}
 	claimBody := startingClaimBody
 	if target.Continue {
 		claimBody = continuingClaimBody
 	}
+	w.logf("%s unanswered after %s; claiming it as %s (%q)", target.describe(), ownershipWaitDuration, w.Identity, claimBody)
 	return true, w.Comments.PostComment(ctx, target.Repo, target.Number, signComment(claimBody, w.Identity))
 }
 

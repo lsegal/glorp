@@ -51,12 +51,13 @@ func TestClaimedByOtherIgnoresOwnAndOldComments(t *testing.T) {
 		{Body: signComment(startingClaimBody, "SELF"), CreatedAt: after.Add(time.Second)},
 		{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: after.Add(-time.Second)},
 	}
-	if claimedByOther(comments, after, "SELF") {
-		t.Fatalf("expected no other claimant: own comment and a stale comment shouldn't count")
+	if owner, ok := claimedByOther(comments, after, "SELF"); ok {
+		t.Fatalf("expected no other claimant: own comment and a stale comment shouldn't count, got %q", owner)
 	}
 	comments = append(comments, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: after.Add(time.Minute)})
-	if !claimedByOther(comments, after, "SELF") {
-		t.Fatalf("expected a fresh presence claim from another identity to be detected")
+	owner, ok := claimedByOther(comments, after, "SELF")
+	if !ok || owner != "OTHER" {
+		t.Fatalf("claimedByOther = (%q, %v), want the claiming identity OTHER so logs can name it", owner, ok)
 	}
 }
 
@@ -65,7 +66,7 @@ func TestClaimedByOtherIgnoresAskComments(t *testing.T) {
 	comments := []Comment{
 		{Body: signComment(askClaimBody, "OTHER"), CreatedAt: after.Add(time.Second)},
 	}
-	if claimedByOther(comments, after, "SELF") {
+	if _, ok := claimedByOther(comments, after, "SELF"); ok {
 		t.Fatalf("an ask comment alone should not count as a claim")
 	}
 }
@@ -285,11 +286,11 @@ func TestLatestClaimByOtherPicksNewestForeignClaim(t *testing.T) {
 		{Body: signComment(startingClaimBody, "SELF"), CreatedAt: now},
 		{Body: "unrelated chatter", CreatedAt: now},
 	}
-	at, ok := latestClaimByOther(comments, "SELF")
-	if !ok || !at.Equal(now.Add(-time.Hour)) {
-		t.Fatalf("latestClaimByOther = (%v, %v), want the 1h-old continuing claim", at, ok)
+	at, owner, ok := latestClaimByOther(comments, "SELF")
+	if !ok || !at.Equal(now.Add(-time.Hour)) || owner != "OTHER" {
+		t.Fatalf("latestClaimByOther = (%v, %q, %v), want the 1h-old continuing claim from OTHER", at, owner, ok)
 	}
-	if _, ok := latestClaimByOther(comments[3:], "SELF"); ok {
+	if _, _, ok := latestClaimByOther(comments[3:], "SELF"); ok {
 		t.Fatalf("own claims and non-protocol comments should not count as a foreign claim")
 	}
 }
@@ -299,17 +300,17 @@ func TestClaimIsFreshHonoursStaleClaimAge(t *testing.T) {
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
 	target := ownershipTarget{Repo: "o/r", Number: 1}
 
-	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || fresh {
-		t.Fatalf("unclaimed work should never look fresh, got fresh=%v err=%v", fresh, err)
+	if fresh, owner, _, err := w.claimIsFresh(context.Background(), target); err != nil || fresh || owner != "" {
+		t.Fatalf("unclaimed work should never look fresh, got fresh=%v owner=%q err=%v", fresh, owner, err)
 	}
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Hour)})
-	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || !fresh {
-		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got fresh=%v err=%v", fresh, err)
+	if fresh, owner, age, err := w.claimIsFresh(context.Background(), target); err != nil || !fresh || owner != "OTHER" || age < time.Hour {
+		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got fresh=%v owner=%q age=%v err=%v", fresh, owner, age, err)
 	}
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
 	w.staleClaim = 30 * time.Minute
-	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || fresh {
-		t.Fatalf("claims older than the staleness window should be reapable, got fresh=%v err=%v", fresh, err)
+	if fresh, owner, _, err := w.claimIsFresh(context.Background(), target); err != nil || fresh || owner != "OTHER" {
+		t.Fatalf("claims older than the staleness window should be reapable, got fresh=%v owner=%q err=%v", fresh, owner, err)
 	}
 }
 

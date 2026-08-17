@@ -269,6 +269,20 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 		return newIssues
 	}
 	keep := make([]bool, len(newIssues))
+	contested := make([]Issue, 0, len(newIssues))
+	for _, pending := range newIssues {
+		if pending.session.Resume || !pending.contested {
+			continue
+		}
+		contested = append(contested, pending.issue)
+	}
+	if len(contested) > 0 {
+		mode := "periodic reap, skipping anything claimed within " + w.staleClaimAfter().String()
+		if aggressive {
+			mode = "first reap after startup, asking unconditionally"
+		}
+		w.logf("reaping %d contested issue(s) as %s (%s): %s", len(contested), w.Identity, mode, issueNumbers(contested))
+	}
 	var wg sync.WaitGroup
 	for i, pending := range newIssues {
 		if pending.session.Resume || !pending.contested {
@@ -279,15 +293,25 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 		go func(i int, issue Issue) {
 			defer wg.Done()
 			target := ownershipTargetFor(ctx, checker, issue)
+			reason := "it reappeared with no local record of this instance owning it"
+			if projectItemInProgress(issue.Target, issue) {
+				reason = "it sits at In Progress with no local record of this instance owning it"
+			}
+			w.logf("issue #%d looks claimed: %s; negotiating on %s", issue.Number, reason, target.describe())
 			if !aggressive {
-				fresh, err := w.claimIsFresh(ctx, target)
+				fresh, owner, age, err := w.claimIsFresh(ctx, target)
 				if err != nil {
 					w.logf("issue #%d reap check failed: %v", issue.Number, err)
 					return
 				}
 				if fresh {
-					w.logf("issue #%d claimed by another instance within %s; skipping reap", issue.Number, w.staleClaimAfter())
+					w.logf("issue #%d claimed by instance %s %s ago (within %s); skipping reap", issue.Number, owner, age.Round(time.Second), w.staleClaimAfter())
 					return
+				}
+				if owner == "" {
+					w.logf("issue #%d has no claim from another instance; treating it as abandoned", issue.Number)
+				} else {
+					w.logf("issue #%d last claimed by instance %s %s ago (older than %s); treating it as abandoned", issue.Number, owner, age.Round(time.Second), w.staleClaimAfter())
 				}
 			}
 			claimed, err := w.negotiateOwnership(ctx, target)
@@ -296,7 +320,9 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 				return
 			}
 			keep[i] = claimed
-			if !claimed {
+			if claimed {
+				w.logf("issue #%d picked up after handoff; dispatching", issue.Number)
+			} else {
 				w.logf("issue #%d ownership claimed by another instance; standing down", issue.Number)
 			}
 		}(i, pending.issue)
@@ -402,9 +428,9 @@ func (w *Glorp) watchForCompetingClaim(ctx context.Context, target ownershipTarg
 				}
 				continue
 			}
-			if claimedByOther(comments, since, w.Identity) {
+			if owner, ok := claimedByOther(comments, since, w.Identity); ok {
 				cause := fmt.Errorf("%w: issue #%d claimed by another instance", errWorkClaimedByOther, issueNumber)
-				w.logf("issue #%d stopping agent: claimed by another instance", issueNumber)
+				w.logf("issue #%d stopping agent: instance %s claimed it on %s; letting it go", issueNumber, owner, target.describe())
 				cancel(cause)
 				return
 			}
@@ -513,7 +539,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		seen[key] = true
 		restored[key] = true
 	}
-	w.logf("watching %s (poll every %s, concurrency %d; %d handled issue(s) loaded)", strings.Join(targets, ", "), w.Interval, w.Concurrency, len(seen))
+	w.logf("watching %s (instance %s, poll every %s, concurrency %d; %d handled issue(s) loaded)", strings.Join(targets, ", "), w.Identity, w.Interval, w.Concurrency, len(seen))
 	sem := make(chan struct{}, w.Concurrency)
 	var wg sync.WaitGroup
 	var tasks taskState
@@ -681,6 +707,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 				repo := issueRepository(issue.Target, issue)
 				if err := w.Comments.PostComment(ctx, repo, issue.Number, claimComment(w.Identity, false)); err != nil {
 					w.logf("issue #%d failed to post ownership claim: %v", issue.Number, err)
+				} else {
+					w.logf("issue #%d picked up uncontested; claimed it as %s (%q)", issue.Number, w.Identity, startingClaimBody)
 				}
 			}
 			workMu.Lock()
@@ -888,8 +916,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 		_, owned := active[key]
 		workMu.Unlock()
 		if !owned {
+			w.logf("issue #%d instance %s asked who owns it; not ours, staying quiet", event.IssueNumber, id)
 			return
 		}
+		w.logf("issue #%d instance %s asked who owns it; answering %q as %s", event.IssueNumber, id, presenceClaimBody, w.Identity)
 		if err := w.Comments.PostComment(ctx, event.Repository, event.IssueNumber, signComment(presenceClaimBody, w.Identity)); err != nil {
 			w.logf("issue #%d failed to respond to ownership ask: %v", event.IssueNumber, err)
 		}
