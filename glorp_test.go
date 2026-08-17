@@ -384,6 +384,125 @@ func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
 	t.Fatalf("closed originating work did not stop the agent:\n%s", logs.String())
 }
 
+func TestGlorpDoesNotCancelRunWithoutCompetingClaim(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1)}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+		Comments: comments, Identity: "SELF",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	<-runner.sessions
+
+	// Let several competing-claim ticks elapse with no comments posted.
+	time.Sleep(50 * time.Millisecond)
+
+	state, err := loadWorkState(statePath)
+	if err != nil || state[7].Status != "active" {
+		cancel()
+		<-done
+		t.Fatalf("expected issue to remain active with no competing claim, state=%v err=%v", state, err)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpCancelsRunAndRemovesCheckoutWhenAnotherInstanceClaimsIssue(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	checkoutDir := filepath.Join(dir, "checkout")
+	if err := os.MkdirAll(checkoutDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1), reported: AgentSession{CheckoutDirectory: checkoutDir}}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+		Comments: comments, Identity: "SELF",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	<-runner.sessions
+
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now()})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "failed" {
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if _, statErr := os.Stat(checkoutDir); !os.IsNotExist(statErr) {
+				t.Fatalf("expected checkout directory to be removed, stat err = %v", statErr)
+			}
+			if !strings.Contains(logs.String(), "claimed by another instance") {
+				t.Fatalf("competing claim was not logged:\n%s", logs.String())
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatalf("competing claim did not stop the agent:\n%s", logs.String())
+}
+
+func TestGlorpIgnoresCompetingClaimFromSameIdentity(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1)}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+		Comments: comments, Identity: "SELF",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	<-runner.sessions
+
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now()})
+
+	// Let several competing-claim ticks elapse; the self-signed claim must
+	// not be mistaken for another instance taking over.
+	time.Sleep(50 * time.Millisecond)
+
+	state, err := loadWorkState(statePath)
+	if err != nil || state[7].Status != "active" {
+		cancel()
+		<-done
+		t.Fatalf("expected issue to remain active despite own-identity claim, state=%v err=%v", state, err)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClosedWorkReasonIgnoresPullRequestsAlreadyClosedAtStart(t *testing.T) {
 	closed := PullRequestWorkState{Number: 8, State: "CLOSED"}
 	previous := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{closed}}
