@@ -90,7 +90,7 @@ func TestDiscoverDashboardsScansPortRangeInOrder(t *testing.T) {
 		// An address nothing is listening on stands in for an unused port.
 		return "http://127.0.0.1:1"
 	}
-	found := discoverDashboards(context.Background(), http.DefaultClient, baseURL, 8765, 4)
+	found := discoverDashboards(context.Background(), http.DefaultClient, baseURL, []int{8765, 8766, 8767, 8768})
 	if len(found) != 2 {
 		t.Fatalf("found %d dashboards, want 2", len(found))
 	}

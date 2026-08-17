@@ -166,6 +166,13 @@ func runWatch(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		// Record the bound port so `glorp ui` finds this instance even when it
+		// listens far away from the default scan range.
+		removeRecord, err := writeDashboardRecord(dashboardRecordsDir(os.Getenv), port, os.Getpid())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "record dashboard port: %v\n", err)
+		}
+		defer removeRecord()
 		webServer = &http.Server{Handler: webUI}
 		stopFrontend, err := startWebUIFrontend(ctx, output)
 		if err != nil {
