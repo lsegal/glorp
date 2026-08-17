@@ -152,9 +152,9 @@ type Glorp struct {
 	// probeInterval overrides the project board probe interval in tests.
 	probeInterval time.Duration
 	Labels        LabelEnsurer
-	Status          IssueStatuser
-	UI              UIReporter
-	Quota           func(context.Context) map[string]string
+	Status        IssueStatuser
+	UI            UIReporter
+	Quota         func(context.Context) map[string]string
 	// Identity names this instance in cooperative handoff comments. It is
 	// generated once at startup and never persisted.
 	Identity Identity
