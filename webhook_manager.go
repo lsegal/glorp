@@ -7,10 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
 var errProjectWebhookUnavailable = errors.New("project push webhook unavailable")
+
+// errWebhookPartiallyConfigured reports that at least one, but not every,
+// webhook a target needs could be configured. Push mode still works for the
+// repositories that succeeded, so this is informational rather than fatal.
+var errWebhookPartiallyConfigured = errors.New("some push webhooks could not be configured")
 
 type managedHook struct {
 	ID     int `json:"id"`
@@ -30,10 +36,26 @@ func (g GHCLI) ConfigureWebhook(ctx context.Context, value, endpoint, secret str
 	if err != nil {
 		return err
 	}
-	spec, err := g.webhookSpec(ctx, target)
+	specs, err := g.webhookSpecs(ctx, target)
 	if err != nil {
 		return err
 	}
+	failures := make([]error, 0, len(specs))
+	for _, spec := range specs {
+		if err := g.configureWebhookSpec(ctx, spec, endpoint, secret); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	if len(failures) == len(specs) {
+		return errors.Join(failures...)
+	}
+	return fmt.Errorf("%w (%d of %d): %w", errWebhookPartiallyConfigured, len(failures), len(specs), errors.Join(failures...))
+}
+
+func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpoint, secret string) error {
 	output, err := g.api(ctx, spec.apiPath, "")
 	if err != nil {
 		return webhookAccessError("list", spec, err)
@@ -80,36 +102,95 @@ func (g GHCLI) ConfigureWebhook(ctx context.Context, value, endpoint, secret str
 	return nil
 }
 
-func (g GHCLI) webhookSpec(ctx context.Context, target target) (webhookSpec, error) {
+// webhookSpecs lists every webhook a target needs. A repository target and an
+// organization-owned project each need exactly one. GitHub publishes no
+// projects_v2 webhook for user-owned projects, so those fall back to a
+// repository webhook on each repository currently backing the board's items;
+// that pushes new issues immediately instead of leaving the whole target to
+// the periodic poller (issue #234). Board-only changes, such as dragging an
+// existing issue onto the board or moving a card between columns, still
+// surface through periodic synchronization.
+func (g GHCLI) webhookSpecs(ctx context.Context, target target) ([]webhookSpec, error) {
 	if !target.isProject {
-		return webhookSpec{apiPath: "repos/" + target.repo + "/hooks", name: target.repo, events: []string{"issues", "pull_request", "push", "ping", "issue_comment"}}, nil
+		return []webhookSpec{repositoryWebhookSpec(target.repo)}, nil
 	}
-	ownerType := target.projectOwnerType
-	if ownerType == "" {
-		output, err := g.api(ctx, "users/"+target.owner, "")
-		if err != nil {
-			return webhookSpec{}, fmt.Errorf("identify project owner %s: %w", target.owner, err)
-		}
-		var owner struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(output, &owner); err != nil {
-			return webhookSpec{}, fmt.Errorf("decode project owner %s: %w", target.owner, err)
-		}
-		if owner.Type == "Organization" {
-			ownerType = "orgs"
-		} else {
-			ownerType = "users"
-		}
+	ownerType, err := g.projectOwnerType(ctx, target)
+	if err != nil {
+		return nil, err
 	}
-	if ownerType != "orgs" {
-		return webhookSpec{}, fmt.Errorf("%w: GitHub only provides push events for organization-owned Projects; using periodic synchronization for the project owned by %s", errProjectWebhookUnavailable, target.owner)
+	if ownerType == "orgs" {
+		return []webhookSpec{{
+			apiPath: "orgs/" + target.owner + "/hooks",
+			name:    "organization project " + target.owner,
+			events:  []string{"projects_v2_item"},
+		}}, nil
 	}
+	target.projectOwnerType = ownerType
+	repos, err := g.projectRepositories(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	if len(repos) == 0 {
+		return nil, fmt.Errorf("%w: GitHub only provides push events for organization-owned Projects and the project owned by %s has no issues to watch; using periodic synchronization", errProjectWebhookUnavailable, target.owner)
+	}
+	specs := make([]webhookSpec, 0, len(repos))
+	for _, repo := range repos {
+		specs = append(specs, repositoryWebhookSpec(repo))
+	}
+	return specs, nil
+}
+
+func repositoryWebhookSpec(repo string) webhookSpec {
 	return webhookSpec{
-		apiPath: "orgs/" + target.owner + "/hooks",
-		name:    "organization project " + target.owner,
-		events:  []string{"projects_v2_item"},
-	}, nil
+		apiPath: "repos/" + repo + "/hooks",
+		name:    repo,
+		events:  []string{"issues", "pull_request", "push", "ping", "issue_comment"},
+	}
+}
+
+func (g GHCLI) projectOwnerType(ctx context.Context, target target) (string, error) {
+	if target.projectOwnerType != "" {
+		return target.projectOwnerType, nil
+	}
+	output, err := g.api(ctx, "users/"+target.owner, "")
+	if err != nil {
+		return "", fmt.Errorf("identify project owner %s: %w", target.owner, err)
+	}
+	var owner struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(output, &owner); err != nil {
+		return "", fmt.Errorf("decode project owner %s: %w", target.owner, err)
+	}
+	if owner.Type == "Organization" {
+		return "orgs", nil
+	}
+	return "users", nil
+}
+
+// projectRepositories lists the distinct repositories backing a project's
+// items. Filters are deliberately ignored: a webhook has to be in place before
+// an issue becomes ready, so every repository on the board is watched.
+func (g GHCLI) projectRepositories(ctx context.Context, target target) ([]string, error) {
+	items, err := g.listProjectItems(ctx, target, "", true)
+	if err != nil {
+		return nil, fmt.Errorf("list repositories for project owned by %s: %w", target.owner, err)
+	}
+	seen := make(map[string]bool, len(items))
+	repos := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Content == nil {
+			continue
+		}
+		repo := strings.TrimSpace(item.Content.Repository)
+		if repo == "" || seen[repo] {
+			continue
+		}
+		seen[repo] = true
+		repos = append(repos, repo)
+	}
+	sort.Strings(repos)
+	return repos, nil
 }
 
 func webhookAccessError(action string, spec webhookSpec, err error) error {

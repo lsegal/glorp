@@ -210,8 +210,11 @@ func main() {
 					fmt.Fprintln(output, err)
 					continue
 				}
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				if !errors.Is(err, errWebhookPartiallyConfigured) {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				fmt.Fprintln(output, err)
 			}
 			configured++
 			fmt.Fprintf(output, "configured GitHub webhook for %s\n", target)
