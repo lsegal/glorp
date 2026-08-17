@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.1.0 - 2026-08-17
+
 - Replace the manual full-version `Release` workflow input with a `major`/`minor`/`patch`/`version` level chooser that computes the next tag from the latest existing tag, matching the release bump logic from `lsegal/aviary`.
 - Remove the `agent-started` issue label; the cooperative comment-based handoff protocol is now the sole authority for whether a repository issue is claimed.
 - Add a cooperative handoff protocol so multiple glorp instances sharing a repository negotiate ownership through signed `/glorp:UUID` comments ("Does anyone have this?" / "Starting work on this issue" / "Continuing work on this issue" / "I am working on this") before reaping a ticket that already looks claimed, instead of silently duplicating or abandoning work. Each instance gets a random in-memory identity, and the last instance to claim a ticket wins.
