@@ -10,4 +10,4 @@ import "os/exec"
 // observe is still cleaned up by the tracker in process.go.
 func guardOrphanedProcess(*exec.Cmd) {}
 
-func adoptOrphanedProcess(*exec.Cmd) {}
+func adoptOrphanedProcess(*exec.Cmd) error { return nil }

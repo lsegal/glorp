@@ -21,5 +21,5 @@ func guardOrphanedProcess(cmd *exec.Cmd) {
 }
 
 // adoptOrphanedProcess has nothing to do on Linux: the guard is installed
-// before the fork.
-func adoptOrphanedProcess(*exec.Cmd) {}
+// before the fork, so the child needs nothing once it is running.
+func adoptOrphanedProcess(*exec.Cmd) error { return nil }
