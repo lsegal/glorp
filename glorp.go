@@ -25,6 +25,19 @@ const (
 
 var errWorkClosedByUser = errors.New("work closed by user")
 
+// errWorkClaimedByOther signals that another glorp instance posted a newer
+// starting/continuing claim while this instance was actively working the
+// same issue. Per the handoff protocol (issue #214), the most recent claim
+// always wins, so the losing instance cooperatively stops.
+var errWorkClaimedByOther = errors.New("work claimed by another instance")
+
+// isCooperativeCancellation reports whether cause is one of the run
+// cancellation reasons that reflect another party taking over the work
+// rather than an actual runner failure.
+func isCooperativeCancellation(cause error) bool {
+	return errors.Is(cause, errWorkClosedByUser) || errors.Is(cause, errWorkClaimedByOther)
+}
+
 type Issue struct {
 	Number        int               `json:"number"`
 	Repository    string            `json:"repository,omitempty"`
@@ -263,6 +276,41 @@ func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) s
 		}
 	}
 	return ""
+}
+
+// watchForCompetingClaim periodically polls comments on the negotiated
+// ownership target (the issue, or an open pull request already linked to
+// it) while an agent is actively working, looking for a newer
+// starting/continuing claim signed by a different instance identity. Per
+// the handoff protocol described in issue #214, the last instance to post
+// such a claim wins, so detecting one here means this instance lost the
+// ticket mid-run and must cooperatively cancel.
+func (w *Glorp) watchForCompetingClaim(ctx context.Context, target ownershipTarget, issueNumber int, since time.Time, cancel context.CancelCauseFunc) {
+	if w.Comments == nil {
+		return
+	}
+	ticker := time.NewTicker(w.activeWorkClosureInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			comments, err := w.Comments.ListComments(ctx, target.Repo, target.Number)
+			if err != nil {
+				if ctx.Err() == nil {
+					w.logf("issue #%d competing claim check failed: %v", issueNumber, err)
+				}
+				continue
+			}
+			if claimedByOther(comments, since, w.Identity) {
+				cause := fmt.Errorf("%w: issue #%d claimed by another instance", errWorkClaimedByOther, issueNumber)
+				w.logf("issue #%d stopping agent: claimed by another instance", issueNumber)
+				cancel(cause)
+				return
+			}
+		}
+	}
 }
 
 const agentStartedLabel = "agent-started"
@@ -574,6 +622,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 					case <-runCtx.Done():
 					}
 				}
+				if w.Comments != nil {
+					target := ownershipTargetFor(runCtx, closureChecker, i)
+					go w.watchForCompetingClaim(runCtx, target, i.Number, time.Now(), cancelRun)
+				}
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
 				jobOutput := jobOutputWriter{write: func(text string) {
 					jobMu.Lock()
@@ -616,7 +668,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					publish()
 				}
 				var runErr error
-				if cause := context.Cause(runCtx); errors.Is(cause, errWorkClosedByUser) {
+				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) {
 					runErr = cause
 				} else if w.UI != nil {
 					if runner, ok := w.Runner.(SessionAgentOutputRunner); ok {
@@ -631,7 +683,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				} else {
 					runErr = w.Runner.Run(runCtx, i)
 				}
-				if cause := context.Cause(runCtx); errors.Is(cause, errWorkClosedByUser) {
+				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) {
 					runErr = cause
 				}
 				if runErr != nil {
@@ -657,6 +709,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 					work[key] = state
 					_ = saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
+					if errors.Is(runErr, errWorkClaimedByOther) && state.CheckoutDirectory != "" {
+						if rmErr := os.RemoveAll(state.CheckoutDirectory); rmErr != nil {
+							w.logf("issue #%d failed to remove checkout directory %s: %v", i.Number, state.CheckoutDirectory, rmErr)
+						} else {
+							w.logf("issue #%d removed checkout directory %s after losing ownership", i.Number, state.CheckoutDirectory)
+						}
+					}
 					tasks.mu.Lock()
 					tasks.running--
 					tasks.failed++
