@@ -23,4 +23,5 @@ curl -fsSL "$url" -o "$tmp/$archive"
 tar -xzf "$tmp/$archive" -C "$tmp"
 install "$tmp/glorp" "$bin_dir/glorp"
 npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y
-echo "Installed glorp to $bin_dir/glorp and gh-fix globally."
+npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code -y
+echo "Installed glorp to $bin_dir/glorp and gh-fix/gh-discuss globally."

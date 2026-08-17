@@ -79,6 +79,19 @@ type IssueSource interface {
 	ListIssues(context.Context, string) ([]Issue, error)
 }
 
+// Discussion is a top-level GitHub Discussion thread that has not yet
+// received any reply.
+type Discussion struct {
+	Number    int
+	Title     string
+	Body      string
+	CreatedAt time.Time
+}
+
+type DiscussionSource interface {
+	ListUnansweredDiscussions(context.Context, string) ([]Discussion, error)
+}
+
 type PullRequestWorkState struct {
 	Number int
 	State  string
@@ -144,6 +157,10 @@ type Glorp struct {
 	StatePath   string
 	ReadyState  string
 	Issues      IssueSource
+	// Discussions lists unanswered top-level Discussion threads for
+	// Discussions-board targets. When nil, Discussions-board targets are
+	// never polled.
+	Discussions DiscussionSource
 	Runner      AgentRunner
 	Out         io.Writer
 	// fallbackInterval overrides the push-mode polling fallback in tests.
@@ -343,6 +360,68 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 	return filtered
 }
 
+// pollDiscussions dispatches the gh-discuss skill for newly discovered
+// unanswered top-level Discussion threads on any Discussions-board targets.
+// Discussion dispatch is intentionally isolated from issue dispatch: it does
+// not use the persisted work state, project status, or comment-based
+// handoff protocol, since GitHub's own reply count on a discussion already
+// tells the next poll whether it still needs an answer. active only guards
+// against dispatching the same discussion twice while an agent run for it
+// is still in flight.
+func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, sem chan struct{}, wg *sync.WaitGroup, workMu *sync.Mutex, active map[string]string) {
+	if w.Discussions == nil {
+		return
+	}
+	for _, target := range targets {
+		if !isDiscussionTarget(target) {
+			continue
+		}
+		discussions, err := w.Discussions.ListUnansweredDiscussions(ctx, target)
+		if err != nil {
+			w.logf("poll #%d failed while listing discussions for %s: %v", n, target, err)
+			continue
+		}
+		for _, discussion := range discussions {
+			key := target + "#discussion#" + strconv.Itoa(discussion.Number)
+			workMu.Lock()
+			_, inFlight := active[key]
+			if !inFlight {
+				active[key] = "discussion"
+			}
+			workMu.Unlock()
+			if inFlight {
+				continue
+			}
+			issue := Issue{Number: discussion.Number, Title: discussion.Title, Body: discussion.Body, CreatedAt: discussion.CreatedAt, Target: target, Repository: issueRepository(target, Issue{})}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				workMu.Lock()
+				delete(active, key)
+				workMu.Unlock()
+				return
+			}
+			w.logf("discussion #%d queued", discussion.Number)
+			wg.Add(1)
+			go func(i Issue, key string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				defer func() {
+					workMu.Lock()
+					delete(active, key)
+					workMu.Unlock()
+				}()
+				w.logf("discussion #%d started", i.Number)
+				if err := w.Runner.Run(ctx, i); err != nil {
+					w.logf("discussion #%d failed: %v", i.Number, err)
+					return
+				}
+				w.logf("discussion #%d completed", i.Number)
+			}(issue, key)
+		}
+	}
+}
+
 func (w *Glorp) watchForClosedWork(ctx context.Context, checker WorkClosureChecker, issue Issue, cancel context.CancelCauseFunc, ready chan<- struct{}) {
 	repo := issueRepository(issue.Target, issue)
 	previous, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
@@ -520,6 +599,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 	}
 	if w.Labels != nil {
 		for _, target := range targets {
+			if isDiscussionTarget(target) {
+				continue
+			}
 			if err := w.Labels.EnsureLabels(ctx, target); err != nil {
 				return err
 			}
@@ -591,6 +673,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 		w.logf("poll #%d started (tasks: %d running, %d queued, %d completed, %d failed)", n, running, queued, completed, failed)
 		issues := make([]Issue, 0)
 		for _, target := range targets {
+			if isDiscussionTarget(target) {
+				continue
+			}
 			batch, err := w.Issues.ListIssues(ctx, target)
 			if err != nil {
 				w.logf("poll #%d failed while listing %s: %v", n, target, err)
@@ -608,6 +693,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 		}
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
+		w.pollDiscussions(ctx, n, targets, sem, &wg, &workMu, active)
 		observed = make(map[string]bool, len(issues))
 		for _, issue := range issues {
 			if issue.Repository != "" && issue.Number > 0 {
@@ -1186,6 +1272,16 @@ func webhookEventNeedsRefresh(event WebhookEvent) bool {
 		// Only reordering leaves an item's status untouched; every other
 		// action can move it into or out of the ready state.
 		return event.Action != "reordered"
+	case "discussion":
+		switch event.Action {
+		case "created", "reopened", "transferred":
+			return true
+		default:
+			// A discussion is dispatchable purely on existing with no reply
+			// yet, so edits, labels, pins, and answer changes cannot make a
+			// thread newly answerable.
+			return false
+		}
 	default:
 		return true
 	}
@@ -1219,6 +1315,8 @@ func (w *Glorp) logWebhookEvent(event WebhookEvent) {
 		w.logf("webhook project item received (action: %s)", event.Action)
 	case "issue_comment":
 		w.logf("webhook issue comment received (repository: %s, action: %s, issue: #%d)", event.Repository, event.Action, event.IssueNumber)
+	case "discussion":
+		w.logf("webhook discussion received (repository: %s, action: %s, discussion: #%d %q)", event.Repository, event.Action, event.DiscussionNumber, event.DiscussionTitle)
 	default:
 		w.logf("webhook %s received", event.Kind)
 	}
@@ -1430,6 +1528,11 @@ func issuesFromProjectItems(items []projectItem) []Issue {
 func isProjectTarget(repo string) bool {
 	target, err := parseTarget(repo)
 	return err == nil && target.isProject
+}
+
+func isDiscussionTarget(repo string) bool {
+	target, err := parseTarget(repo)
+	return err == nil && target.isDiscussion
 }
 
 func decodeProjectItems(data []byte, err error) ([]projectItem, error) {

@@ -19,7 +19,8 @@ var errProjectWebhookUnavailable = errors.New("project push webhook unavailable"
 var errWebhookPartiallyConfigured = errors.New("some push webhooks could not be configured")
 
 type managedHook struct {
-	ID     int `json:"id"`
+	ID     int      `json:"id"`
+	Events []string `json:"events"`
 	Config struct {
 		URL string `json:"url"`
 	} `json:"config"`
@@ -80,6 +81,15 @@ func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpo
 	for _, hook := range hooks {
 		if hook.Config.URL == endpoint {
 			found = true
+			// A repository target and a Discussions-board target for the same
+			// repository share one webhook, so an existing hook may be missing
+			// the events this spec needs. Widen it instead of leaving the
+			// second target without deliveries.
+			if missing := missingWebhookEvents(hook.Events, spec.events); len(missing) > 0 {
+				if err := g.widenWebhookEvents(ctx, spec, hook, missing); err != nil {
+					return false, err
+				}
+			}
 			continue
 		}
 		if ngrokURL(hook.Config.URL) {
@@ -112,6 +122,42 @@ func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpo
 		return false, webhookAccessError("create", spec, err)
 	}
 	return true, nil
+}
+
+// missingWebhookEvents returns the events a spec needs that an existing hook
+// is not subscribed to. A hook subscribed to the wildcard "*" already
+// receives everything.
+func missingWebhookEvents(existing, wanted []string) []string {
+	subscribed := make(map[string]bool, len(existing))
+	for _, event := range existing {
+		if event == "*" {
+			return nil
+		}
+		subscribed[event] = true
+	}
+	var missing []string
+	for _, event := range wanted {
+		if !subscribed[event] {
+			missing = append(missing, event)
+		}
+	}
+	return missing
+}
+
+// widenWebhookEvents adds the missing events to an existing webhook, leaving
+// the events it already carries in place so the other targets sharing it keep
+// their deliveries.
+func (g GHCLI) widenWebhookEvents(ctx context.Context, spec webhookSpec, hook managedHook, missing []string) error {
+	events := append(append([]string{}, hook.Events...), missing...)
+	sort.Strings(events)
+	body, err := json.Marshal(map[string]interface{}{"events": events})
+	if err != nil {
+		return err
+	}
+	if _, err := g.api(ctx, fmt.Sprintf("%s/%d", spec.apiPath, hook.ID), "PATCH", string(body)); err != nil {
+		return webhookAccessError(fmt.Sprintf("add %s events to", strings.Join(missing, ", ")), spec, err)
+	}
+	return nil
 }
 
 // webhookConfigurer configures the push webhooks a target needs, reporting the
@@ -177,6 +223,9 @@ func (r *webhookReconciler) reconcile(ctx context.Context) {
 // existing issue onto the board or moving a card between columns, still
 // surface through periodic synchronization.
 func (g GHCLI) webhookSpecs(ctx context.Context, target target) ([]webhookSpec, error) {
+	if target.isDiscussion {
+		return []webhookSpec{discussionWebhookSpec(target.repo)}, nil
+	}
 	if !target.isProject {
 		return []webhookSpec{repositoryWebhookSpec(target.repo)}, nil
 	}
@@ -211,6 +260,17 @@ func repositoryWebhookSpec(repo string) webhookSpec {
 		apiPath: "repos/" + repo + "/hooks",
 		name:    repo,
 		events:  []string{"issues", "pull_request", "push", "ping", "issue_comment"},
+	}
+}
+
+// discussionWebhookSpec is the webhook a Discussions-board target needs. New
+// threads arrive as `discussion` deliveries; the issue events a repository
+// target subscribes to cannot make a discussion dispatchable.
+func discussionWebhookSpec(repo string) webhookSpec {
+	return webhookSpec{
+		apiPath: "repos/" + repo + "/hooks",
+		name:    repo + " discussions",
+		events:  []string{"discussion", "ping"},
 	}
 }
 

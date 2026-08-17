@@ -175,7 +175,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -653,6 +653,66 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 	return issues, nil
 }
 
+type discussionsGraphQLResponse struct {
+	Data struct {
+		Repository struct {
+			Discussions struct {
+				Nodes []struct {
+					Number    int       `json:"number"`
+					Title     string    `json:"title"`
+					Body      string    `json:"body"`
+					CreatedAt time.Time `json:"createdAt"`
+					Comments  struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"comments"`
+				} `json:"nodes"`
+			} `json:"discussions"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
+const discussionsQuery = `query($owner:String!,$name:String!){
+  repository(owner:$owner,name:$name){
+    discussions(first:100,orderBy:{field:CREATED_AT,direction:DESC}){
+      nodes{number title body createdAt comments(first:1){totalCount}}
+    }
+  }
+}`
+
+// ListUnansweredDiscussions lists top-level Discussion threads that have not
+// received any reply yet. A discussion's own reply count doubles as the
+// record of whether it still needs an answer, so no local state is needed
+// to avoid re-dispatching an already-answered thread.
+func (g GHCLI) ListUnansweredDiscussions(ctx context.Context, repo string) ([]Discussion, error) {
+	target, err := parseTarget(repo)
+	if err != nil {
+		return nil, err
+	}
+	if !target.isDiscussion {
+		return nil, fmt.Errorf("target %q is not a GitHub Discussions board", repo)
+	}
+	owner, name, ok := strings.Cut(target.repo, "/")
+	if !ok {
+		return nil, fmt.Errorf("invalid repository %q", target.repo)
+	}
+	output, err := g.run(ctx, "api", "graphql", "-f", "query="+discussionsQuery, "-F", "owner="+owner, "-F", "name="+name)
+	if err != nil {
+		return nil, fmt.Errorf("list discussions for %s: %w: %s", target.repo, err, strings.TrimSpace(string(output)))
+	}
+	var response discussionsGraphQLResponse
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, fmt.Errorf("decode discussions for %s: %w", target.repo, err)
+	}
+	discussions := make([]Discussion, 0)
+	for _, node := range response.Data.Repository.Discussions.Nodes {
+		if node.Comments.TotalCount > 0 {
+			continue
+		}
+		discussions = append(discussions, Discussion{Number: node.Number, Title: node.Title, Body: node.Body, CreatedAt: node.CreatedAt})
+	}
+	return discussions, nil
+}
+
 func issueListArgs(repo, filter string, allIssues bool) []string {
 	target, err := parseTarget(repo)
 	if err != nil || target.isProject {
@@ -669,6 +729,7 @@ type target struct {
 	repo, owner, projectID string
 	projectOwnerType       string
 	isProject              bool
+	isDiscussion           bool
 }
 
 // originRemoteTarget returns the OWNER/REPO for the current directory's
@@ -717,6 +778,9 @@ func parseTarget(value string) (target, error) {
 	}
 	if len(parts) == 4 && parts[2] == "projects" && parts[0] != "" && parts[1] != "" && parts[3] != "" {
 		return target{repo: parts[0] + "/" + parts[1], owner: parts[0], projectID: parts[3], isProject: true}, nil
+	}
+	if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == "discussions" {
+		return target{repo: parts[0] + "/" + parts[1], isDiscussion: true}, nil
 	}
 	return target{}, fmt.Errorf("target must be OWNER/REPO or a GitHub repository/project URL")
 }
@@ -1124,7 +1188,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 	}
 	prompt := "continue"
 	if !session.Resume {
-		prompt = fmt.Sprintf("/gh-fix %d", issue.Number)
+		if isDiscussionTarget(target) {
+			prompt = fmt.Sprintf("/gh-discuss %d", issue.Number)
+		} else {
+			prompt = fmt.Sprintf("/gh-fix %d", issue.Number)
+		}
 		if repo := issueRepository(target, issue); repo != "" {
 			prompt += "\n\nRepository: " + repo
 		}

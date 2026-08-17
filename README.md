@@ -16,7 +16,7 @@ glorp runs a daemon that watches (push or poll) GitHub repositories or project b
 Install and configure these tools before installing glorp:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with access to every repository glorp will watch.
-- [Node.js](https://nodejs.org/) and `npx`. The installer uses `npx` to install the bundled `gh-fix` skill through skills.sh.
+- [Node.js](https://nodejs.org/) and `npx`. The installer uses `npx` to install the bundled `gh-fix` and `gh-discuss` skills through skills.sh.
 - [ngrok](https://ngrok.com/) for the default webhook mode. Configure its authentication before starting glorp. ngrok is not required with `--poll`.
 - At least one supported coding agent: [Codex CLI](https://developers.openai.com/codex/cli/) (`codex`) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`).
 
@@ -43,7 +43,7 @@ On macOS or Linux:
 curl -fsSL https://github.com/lsegal/glorp/releases/latest/download/install.sh | bash
 ```
 
-The script downloads the release for the current operating system and architecture, installs `glorp` into `~/.local/bin`, and installs the repository's `gh-fix` skill globally for Codex and Claude Code through skills.sh.
+The script downloads the release for the current operating system and architecture, installs `glorp` into `~/.local/bin`, and installs the repository's `gh-fix` and `gh-discuss` skills globally for Codex and Claude Code through skills.sh.
 
 On Windows PowerShell:
 
@@ -51,17 +51,17 @@ On Windows PowerShell:
 irm https://github.com/lsegal/glorp/releases/latest/download/install.ps1 | iex
 ```
 
-The PowerShell installer places `glorp.exe` in `%USERPROFILE%\AppData\Local\glorp`, adds that directory to the user `PATH`, and installs the same `gh-fix` skill through skills.sh. Restart the terminal if `glorp` is not immediately found.
+The PowerShell installer places `glorp.exe` in `%USERPROFILE%\AppData\Local\glorp`, adds that directory to the user `PATH`, and installs the same `gh-fix` and `gh-discuss` skills through skills.sh. Restart the terminal if `glorp` is not immediately found.
 
 Installer behavior can be overridden with environment variables:
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `GLORP_REPO` | Repository from which to download glorp and install `gh-fix` | `lsegal/glorp` |
+| `GLORP_REPO` | Repository from which to download glorp and install `gh-fix`/`gh-discuss` | `lsegal/glorp` |
 | `GLORP_VERSION` | Release tag to install, or `latest` | `latest` |
 | `GLORP_BIN_DIR` | Destination directory for the executable | `~/.local/bin` on Unix; `%USERPROFILE%\AppData\Local\glorp` on Windows |
 
-The public `.agents/skills/gh-fix` directory in this repository is the skills.sh package source.
+The public `.agents/skills/gh-fix` and `.agents/skills/gh-discuss` directories in this repository are the skills.sh package sources.
 
 ### Upgrading
 
@@ -73,7 +73,7 @@ The command re-runs the installer for the current platform, so it picks up the l
 
 ## Quick start
 
-Options must appear before the first target. A target can be an `OWNER/REPO`, a GitHub repository URL, or a GitHub Project URL.
+Options must appear before the first target. A target can be an `OWNER/REPO`, a GitHub repository URL, a GitHub Project URL, or a GitHub Discussions board URL.
 
 Watch a repository using the default Codex agent and webhook mode:
 
@@ -209,6 +209,9 @@ https://github.com/owner/repository
 https://github.com/users/OWNER/projects/NUMBER
 https://github.com/orgs/OWNER/projects/NUMBER
 https://github.com/OWNER/REPOSITORY/projects/NUMBER
+https://github.com/OWNER/REPOSITORY/discussions
 ```
+
+A Discussions board target (`https://github.com/OWNER/REPOSITORY/discussions`) is watched differently from repository and Project targets: instead of the `gh-fix` skill, glorp dispatches the read-only `gh-discuss` skill for each new top-level Discussion thread that has no replies yet. `gh-discuss` only reads the repository to answer the question and posts a single top-level reply when it can do so accurately and positively; otherwise it leaves the thread untouched. Discussions targets work in both push and poll mode: in push mode glorp subscribes the repository webhook to GitHub's `discussion` event so a new thread dispatches immediately, with the periodic synchronization interval as the fallback. They are not affected by `--filter` or `--all-issues`, and do not use the `agent-ready` label or the comment-based ownership handoff protocol described below.
 
 Press `q` or `Ctrl+C` to exit the interactive dashboard. glorp waits for running agents during shutdown.

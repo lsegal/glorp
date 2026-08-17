@@ -49,6 +49,23 @@ func (f *fakeSource) ListIssues(_ context.Context, _ string) ([]Issue, error) {
 	return f.batches[n], nil
 }
 
+type fakeDiscussionSource struct {
+	mu      sync.Mutex
+	calls   int
+	batches [][]Discussion
+}
+
+func (f *fakeDiscussionSource) ListUnansweredDiscussions(_ context.Context, _ string) ([]Discussion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := f.calls
+	f.calls++
+	if n >= len(f.batches) {
+		return f.batches[len(f.batches)-1], nil
+	}
+	return f.batches[n], nil
+}
+
 type fakeRunner struct {
 	mu          sync.Mutex
 	got         []int
@@ -207,6 +224,62 @@ func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("logs missing %q:\n%s", want, logs.String())
 		}
+	}
+}
+
+func TestGlorpDispatchesUnansweredDiscussions(t *testing.T) {
+	dir := t.TempDir()
+	target := "https://github.com/o/r/discussions"
+	ds := &fakeDiscussionSource{batches: [][]Discussion{{{Number: 9, Title: "Q"}}}}
+	src := &fakeSource{batches: [][]Issue{{}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	var logs bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &Glorp{Repo: target, Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Discussions: ds, Runner: r, Out: &logs}
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		dispatched := len(r.got)
+		r.mu.Unlock()
+		if dispatched == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	got := append([]int(nil), r.got...)
+	r.mu.Unlock()
+	if len(got) != 1 || got[0] != 9 {
+		t.Fatalf("got=%v", got)
+	}
+	src.mu.Lock()
+	issueCalls := src.calls
+	src.mu.Unlock()
+	if issueCalls != 0 {
+		t.Fatalf("issue source should not be polled for a Discussions-board target, calls=%d", issueCalls)
+	}
+	if !strings.Contains(logs.String(), "discussion #9 completed") {
+		t.Errorf("logs missing discussion completion:\n%s", logs.String())
+	}
+}
+
+func TestGlorpSkipsLabelEnsuringForDiscussionTargets(t *testing.T) {
+	labels := &fakeLabelEnsurer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := &Glorp{Repo: "https://github.com/o/r/discussions", Interval: time.Hour, Concurrency: 1, Labels: labels, Discussions: &fakeDiscussionSource{batches: [][]Discussion{{}}}, Runner: &fakeRunner{release: make(chan struct{})}}
+	if err := w.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if labels.called {
+		t.Fatal("labels should not be ensured for a Discussions-board target")
 	}
 }
 
@@ -1050,6 +1123,16 @@ func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerUsesGhDiscussForDiscussionTargets(t *testing.T) {
+	prompt := "/gh-discuss 5\n\nRepository: owner/repo\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	issue := Issue{Number: 5, Target: "https://github.com/owner/repo/discussions"}
+	got := commandArgs(CommandRunner{Agent: "codex"}, issue)
+	want := []string{"exec", prompt}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex args = %#v, want %#v", got, want)
+	}
+}
+
 func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", prompt}; !reflect.DeepEqual(got, want) {
@@ -1589,6 +1672,12 @@ func TestWebhookEventNeedsRefresh(t *testing.T) {
 		{event: WebhookEvent{Kind: "projects_v2_item", Action: "reordered"}},
 		{event: WebhookEvent{Kind: "projects_v2_item", Action: "edited"}, want: true},
 		{event: WebhookEvent{Kind: "projects_v2_item", Action: "created"}, want: true},
+		{event: WebhookEvent{Kind: "discussion", Action: "edited"}},
+		{event: WebhookEvent{Kind: "discussion", Action: "answered"}},
+		{event: WebhookEvent{Kind: "discussion", Action: "labeled"}},
+		{event: WebhookEvent{Kind: "discussion", Action: "created"}, want: true},
+		{event: WebhookEvent{Kind: "discussion", Action: "reopened"}, want: true},
+		{event: WebhookEvent{Kind: "discussion", Action: "transferred"}, want: true},
 		{event: WebhookEvent{Kind: "release", Action: "published"}, want: true},
 	}
 	for _, test := range tests {
