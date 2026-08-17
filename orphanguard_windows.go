@@ -8,10 +8,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// orphanGuard names the kernel mechanism this platform uses, for the startup
-// diagnostic and for tests.
-const orphanGuard = "job object"
-
 // ownedJob holds every subprocess glorp starts. The job is configured to kill
 // its members when its last handle closes, which happens when glorp's process
 // object is destroyed — including when glorp is terminated outright and runs no

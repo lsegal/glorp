@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Take glorp's subprocesses down with it when glorp is killed outright. Owned subprocesses now carry a Linux parent-death signal and belong to a Windows job object that is destroyed with glorp, so `kill -9` of a running `glorp watch` no longer strands the ngrok tunnel or a running agent. macOS and the BSDs have no kernel equivalent and are documented as a remaining gap.
+
 ## v1.2.3 - 2026-08-17
 
 - Mark the `gh-fix` skill's initial `Start work on issue #N` commit with `[skip ci]`, and teach the push-triggered `CI` and `Deploy Pages` workflows to honor that marker, so opening a draft pull request no longer runs a full build against a tree identical to the default branch.

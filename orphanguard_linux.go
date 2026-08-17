@@ -5,10 +5,6 @@ import (
 	"syscall"
 )
 
-// orphanGuard names the kernel mechanism this platform uses, for the startup
-// diagnostic and for tests.
-const orphanGuard = "parent-death signal"
-
 // guardOrphanedProcess asks the kernel to SIGKILL the child as soon as the
 // thread that forked it dies. glorp already terminates its subprocesses on
 // every exit path it can observe, but a SIGKILL of glorp itself (or a power
