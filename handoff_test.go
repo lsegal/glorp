@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,12 +53,13 @@ func TestClaimedByOtherIgnoresOwnAndOldComments(t *testing.T) {
 		{Body: signComment(startingClaimBody, "SELF"), CreatedAt: after.Add(time.Second)},
 		{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: after.Add(-time.Second)},
 	}
-	if claimedByOther(comments, after, "SELF") {
-		t.Fatalf("expected no other claimant: own comment and a stale comment shouldn't count")
+	if owner, ok := claimedByOther(comments, after, "SELF"); ok {
+		t.Fatalf("expected no other claimant: own comment and a stale comment shouldn't count, got %q", owner)
 	}
 	comments = append(comments, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: after.Add(time.Minute)})
-	if !claimedByOther(comments, after, "SELF") {
-		t.Fatalf("expected a fresh presence claim from another identity to be detected")
+	owner, ok := claimedByOther(comments, after, "SELF")
+	if !ok || owner != "OTHER" {
+		t.Fatalf("claimedByOther = (%q, %v), want the claiming identity OTHER so logs can name it", owner, ok)
 	}
 }
 
@@ -65,7 +68,7 @@ func TestClaimedByOtherIgnoresAskComments(t *testing.T) {
 	comments := []Comment{
 		{Body: signComment(askClaimBody, "OTHER"), CreatedAt: after.Add(time.Second)},
 	}
-	if claimedByOther(comments, after, "SELF") {
+	if _, ok := claimedByOther(comments, after, "SELF"); ok {
 		t.Fatalf("an ask comment alone should not count as a claim")
 	}
 }
@@ -285,11 +288,11 @@ func TestLatestClaimByOtherPicksNewestForeignClaim(t *testing.T) {
 		{Body: signComment(startingClaimBody, "SELF"), CreatedAt: now},
 		{Body: "unrelated chatter", CreatedAt: now},
 	}
-	at, ok := latestClaimByOther(comments, "SELF")
-	if !ok || !at.Equal(now.Add(-time.Hour)) {
-		t.Fatalf("latestClaimByOther = (%v, %v), want the 1h-old continuing claim", at, ok)
+	at, owner, ok := latestClaimByOther(comments, "SELF")
+	if !ok || !at.Equal(now.Add(-time.Hour)) || owner != "OTHER" {
+		t.Fatalf("latestClaimByOther = (%v, %q, %v), want the 1h-old continuing claim from OTHER", at, owner, ok)
 	}
-	if _, ok := latestClaimByOther(comments[3:], "SELF"); ok {
+	if _, _, ok := latestClaimByOther(comments[3:], "SELF"); ok {
 		t.Fatalf("own claims and non-protocol comments should not count as a foreign claim")
 	}
 }
@@ -299,17 +302,17 @@ func TestClaimIsFreshHonoursStaleClaimAge(t *testing.T) {
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
 	target := ownershipTarget{Repo: "o/r", Number: 1}
 
-	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || fresh {
-		t.Fatalf("unclaimed work should never look fresh, got fresh=%v err=%v", fresh, err)
+	if fresh, owner, _, err := w.claimIsFresh(context.Background(), target); err != nil || fresh || owner != "" {
+		t.Fatalf("unclaimed work should never look fresh, got fresh=%v owner=%q err=%v", fresh, owner, err)
 	}
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Hour)})
-	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || !fresh {
-		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got fresh=%v err=%v", fresh, err)
+	if fresh, owner, age, err := w.claimIsFresh(context.Background(), target); err != nil || !fresh || owner != "OTHER" || age < time.Hour {
+		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got fresh=%v owner=%q age=%v err=%v", fresh, owner, age, err)
 	}
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
 	w.staleClaim = 30 * time.Minute
-	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || fresh {
-		t.Fatalf("claims older than the staleness window should be reapable, got fresh=%v err=%v", fresh, err)
+	if fresh, owner, _, err := w.claimIsFresh(context.Background(), target); err != nil || fresh || owner != "OTHER" {
+		t.Fatalf("claims older than the staleness window should be reapable, got fresh=%v owner=%q err=%v", fresh, owner, err)
 	}
 }
 
@@ -364,4 +367,88 @@ func TestReapPollTickOnlyWhenPollingIsSlower(t *testing.T) {
 	if tick := slow.reapPollTick(); tick != reapPollInterval {
 		t.Fatalf("tick = %v, want %v for slow polling", tick, reapPollInterval)
 	}
+}
+
+// requireLogged fails the test unless every fragment appears in the captured
+// log output, quoting the whole log so a mismatch is diagnosable.
+func requireLogged(t *testing.T, logs string, fragments ...string) {
+	t.Helper()
+	for _, fragment := range fragments {
+		if !strings.Contains(logs, fragment) {
+			t.Fatalf("log is missing %q; got:\n%s", fragment, logs)
+		}
+	}
+}
+
+func TestNegotiateContestedIssuesLogsReapAskAndPickup(t *testing.T) {
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{{issue: Issue{Number: 7, Repository: "o/r", Target: "o/r"}, contested: true}}
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true); len(result) != 1 {
+		t.Fatalf("uncontested handshake should keep the issue, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"reaping 1 contested issue(s) as SELF (first reap after startup",
+		"issue #7 looks claimed: it reappeared with no local record",
+		"issue o/r#7 asking \"Does anyone have this?\" as SELF",
+		"issue o/r#7 unanswered",
+		"issue #7 picked up after handoff; dispatching",
+	)
+}
+
+func TestNegotiateContestedIssuesLogsStandDownWithClaimingIdentity(t *testing.T) {
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs}
+	w.ownershipWait = func(context.Context) bool {
+		comments.inject("o/r", 8, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: time.Now()})
+		return true
+	}
+	pending := []pendingIssue{{issue: Issue{Number: 8, Repository: "o/r", Target: "o/r"}, contested: true}}
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true); len(result) != 0 {
+		t.Fatalf("an answered ask must drop the issue, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"issue o/r#8 answered by instance OTHER during the handoff window; letting it go",
+		"issue #8 ownership claimed by another instance; standing down",
+	)
+}
+
+func TestNegotiateContestedIssuesLogsStaleAndFreshClaimAges(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	comments.inject("o/r", 2, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{
+		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true},
+		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
+	}
+	seen := map[string]bool{}
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, false); len(result) != 1 {
+		t.Fatalf("only the stale issue should be reaped, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"periodic reap, skipping anything claimed within 2h0m0s",
+		"issue #1 claimed by instance OTHER 1m0s ago (within 2h0m0s); skipping reap",
+		"issue #2 last claimed by instance OTHER 3h0m0s ago (older than 2h0m0s); treating it as abandoned",
+	)
+}
+
+func TestNegotiateContestedIssuesLogsProjectItemReasonAndPullRequestTarget(t *testing.T) {
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
+	checker := &fakeClosureSource{state: OriginatingWorkState{PullRequests: []PullRequestWorkState{{Number: 42, State: "open"}}}}
+	issue := Issue{Number: 9, Repository: "o/r", Target: "https://github.com/users/o/projects/1", ProjectStatus: "In Progress"}
+	pending := []pendingIssue{{issue: issue, contested: true}}
+	if result := w.negotiateContestedIssues(context.Background(), checker, pending, map[string]bool{}, true); len(result) != 1 {
+		t.Fatalf("the stranded project item should be reclaimed, got %+v", result)
+	}
+	requireLogged(t, logs.String(),
+		"issue #9 looks claimed: it sits at In Progress with no local record",
+		"negotiating on pull request o/r#42",
+		"pull request o/r#42 asking \"Does anyone have this?\"",
+	)
 }

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Log every step of the cooperative handoff protocol: when a reap pass starts and in which mode, why a candidate issue looks claimed and where it will be negotiated, when "Does anyone have this?" is asked and how long the wait is, which instance answered, whether the work was picked up or let go, and which instance claimed an issue out from under a running agent. The instance identity now appears in the startup line and in handoff messages so multiple instances can be told apart in the logs.
 - Restart an issue from scratch when the agent reports that the recorded session no longer exists, instead of failing the run and printing a bug report link. Sessions expire out of the agent's local history while glorp's work state keeps referring to them, and the issue workflow is re-entrant, so it picks the existing draft pull request back up.
 
 - Detect board-only project changes in push mode by probing a cheap project board fingerprint every 30 seconds, so dragging an issue onto a board or moving a card into the ready column dispatches promptly instead of waiting for the 15-minute fallback poll.
