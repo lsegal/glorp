@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -748,4 +750,52 @@ func TestProjectStateRejectsRepositoryTarget(t *testing.T) {
 	if _, err := gh.ProjectState(context.Background(), "lsegal/glorp"); err == nil {
 		t.Fatal("repository target did not produce an error")
 	}
+}
+
+// The stub agent that writeFakeAgent installs is the test binary itself, so
+// these variables carry its behaviour into the child process.
+const (
+	fakeAgentLogEnv          = "GLORP_FAKE_AGENT_LOG"
+	fakeAgentResumeOutputEnv = "GLORP_FAKE_AGENT_RESUME_OUTPUT"
+	fakeAgentResumeCodeEnv   = "GLORP_FAKE_AGENT_RESUME_CODE"
+)
+
+func TestMain(m *testing.M) {
+	if log := os.Getenv(fakeAgentLogEnv); log != "" {
+		os.Exit(runFakeAgent(log, os.Args[1:]))
+	}
+	os.Exit(m.Run())
+}
+
+// runFakeAgent records the invocation and answers a resume the way a dead
+// agent session would, so RunSession's restart handling can be exercised on
+// every platform.
+func runFakeAgent(log string, args []string) int {
+	file, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if _, err := fmt.Fprintf(file, "%s\n<<<END>>>\n", strings.Join(args, " ")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		file.Close()
+		return 1
+	}
+	if err := file.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, arg := range args {
+		if arg == "--resume" || arg == "resume" {
+			fmt.Println(os.Getenv(fakeAgentResumeOutputEnv))
+			code, err := strconv.Atoi(os.Getenv(fakeAgentResumeCodeEnv))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			return code
+		}
+	}
+	fmt.Println("started")
+	return 0
 }
