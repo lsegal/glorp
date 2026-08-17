@@ -221,3 +221,47 @@ func TestWebhookReconcilerReportsFailuresWithoutStopping(t *testing.T) {
 		t.Fatalf("repeated failure logged more than once: %#v", logs)
 	}
 }
+
+// A Discussions-board target needs the `discussion` event; the issue events a
+// repository target subscribes to never announce a new thread (issue #226).
+func TestWebhookSpecsSubscribeDiscussionEvents(t *testing.T) {
+	target, err := parseTarget("https://github.com/octocat/alpha/discussions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	specs, err := (GHCLI{}).webhookSpecs(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("webhook specs = %#v", specs)
+	}
+	if specs[0].apiPath != "repos/octocat/alpha/hooks" || specs[0].name != "octocat/alpha discussions" {
+		t.Fatalf("webhook spec = %#v", specs[0])
+	}
+	if !reflect.DeepEqual(specs[0].events, []string{"discussion", "ping"}) {
+		t.Fatalf("webhook spec events = %#v", specs[0].events)
+	}
+}
+
+// Watching both owner/repo and owner/repo/discussions reuses one webhook, so
+// the second target has to widen the existing subscription rather than find
+// its endpoint already registered and silently receive nothing.
+func TestMissingWebhookEvents(t *testing.T) {
+	tests := []struct {
+		name             string
+		existing, wanted []string
+		want             []string
+	}{
+		{name: "adds unsubscribed events", existing: []string{"issues", "ping"}, wanted: []string{"discussion", "ping"}, want: []string{"discussion"}},
+		{name: "already subscribed", existing: []string{"discussion", "ping"}, wanted: []string{"discussion", "ping"}},
+		{name: "wildcard covers everything", existing: []string{"*"}, wanted: []string{"discussion", "ping"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := missingWebhookEvents(test.existing, test.wanted); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("missing = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}

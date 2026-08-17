@@ -1564,6 +1564,12 @@ func TestWebhookEventNeedsRefresh(t *testing.T) {
 		{event: WebhookEvent{Kind: "projects_v2_item", Action: "reordered"}},
 		{event: WebhookEvent{Kind: "projects_v2_item", Action: "edited"}, want: true},
 		{event: WebhookEvent{Kind: "projects_v2_item", Action: "created"}, want: true},
+		{event: WebhookEvent{Kind: "discussion", Action: "edited"}},
+		{event: WebhookEvent{Kind: "discussion", Action: "answered"}},
+		{event: WebhookEvent{Kind: "discussion", Action: "labeled"}},
+		{event: WebhookEvent{Kind: "discussion", Action: "created"}, want: true},
+		{event: WebhookEvent{Kind: "discussion", Action: "reopened"}, want: true},
+		{event: WebhookEvent{Kind: "discussion", Action: "transferred"}, want: true},
 		{event: WebhookEvent{Kind: "release", Action: "published"}, want: true},
 	}
 	for _, test := range tests {

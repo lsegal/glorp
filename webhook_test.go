@@ -131,3 +131,33 @@ func TestDecodeWebhookEventIncludesCommentDetails(t *testing.T) {
 		t.Fatalf("event = %#v", event)
 	}
 }
+
+// A new Discussions thread arrives as a `discussion` delivery, which is the
+// push-mode counterpart to polling a Discussions-board target (issue #226).
+func TestWebhookHandlerTriggersDiscussionEvents(t *testing.T) {
+	events := make(chan WebhookEvent, 1)
+	body := `{"action":"created","repository":{"full_name":"o/r"},"discussion":{"number":7,"title":"How do I run it?"}}`
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "discussion")
+	res := httptest.NewRecorder()
+	WebhookHandler{Events: events, WebhookPath: "/webhook"}.ServeHTTP(res, req)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusAccepted)
+	}
+	select {
+	case event := <-events:
+		if event.Kind != "discussion" || event.Action != "created" || event.Repository != "o/r" {
+			t.Fatalf("event = %#v", event)
+		}
+		if event.DiscussionNumber != 7 || event.DiscussionTitle != "How do I run it?" {
+			t.Fatalf("event = %#v", event)
+		}
+		// A discussion must not be mistaken for an issue: the two number
+		// spaces overlap and the issue fields key the follow-up refresh chain.
+		if event.IssueNumber != 0 {
+			t.Fatalf("discussion delivery set IssueNumber = %d", event.IssueNumber)
+		}
+	default:
+		t.Fatal("discussion webhook did not trigger a refresh")
+	}
+}
