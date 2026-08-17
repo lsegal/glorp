@@ -17,12 +17,12 @@ Treat `/gh-fix ISSUENUMBER` as authorization to implement, publish, continuously
 
 ## Resume existing work (re-entrant mode)
 
-`/gh-fix N` must be safe to run again after being interrupted (Ctrl+C, a crashed session, a new session started later) or handed off from another glorp instance. Before creating anything new:
+`/gh-fix N` must be safe to run again after being interrupted (Ctrl+C, a crashed session, a new session started later) or handed off by the caller from a prior run. Before creating anything new:
 
 1. Determine whether `N` names an issue or an already-open pull request. If `N` is a pull request, treat the issue it closes (from its body's `Closes #<ISSUENUMBER>` line) as the originating issue and drive the PR itself to completion rather than opening a new one.
 2. If `N` is an issue, search for an open, non-merged pull request that closes it (by branch naming convention `fix/issue-N-*` and by `Closes #N` in open PR bodies). If one exists, resume that PR and branch instead of creating a new draft.
-3. Before adopting a PR or branch you did not just create in this session, check whether another agent might still be actively working it: read the PR's comments for a `/glorp:UUID`-signed claim (see issue #214's cooperative handoff protocol). If the most recent claim is a `Starting work on this issue` or `Continuing work on this issue` comment with no later stand-down, post `Does anyone have this? /glorp:<a-fresh-identifier>`, wait at least 2 minutes, and only continue if nothing answers `I am working on this` or posts a newer starting/continuing claim in that window. If another agent claims it during or after your wait, stop and leave the branch alone. Skip this check for a PR or branch this same session already created and is actively pushing to.
-4. When resuming, clone the existing branch (not the default branch) so its commit history, checkpoints, and any partial implementation are preserved. Read the PR body and its comments to recover what has already been done, tested, and what remains.
+3. Ownership of an issue or PR (deciding whether it is safe to pick up versus still claimed by another agent) is resolved by the caller before this skill starts, not by this skill. Do not read or post PR or issue comments to negotiate ownership.
+4. When resuming, clone the existing branch (not the default branch) so its commit history, checkpoints, and any partial implementation are preserved. Read the PR body to recover what has already been done, tested, and what remains.
 5. Once cloned, continue the rest of this workflow exactly as if the branch were newly created: keep checkpointing, keep the PR draft until it is genuinely ready, and drive CI to completion. Do not restart implementation from scratch when prior work is still valid.
 
 ## Create an isolated clone and branch
