@@ -21,6 +21,7 @@ const (
 	pushFallbackInterval  = 15 * time.Minute
 	webhookRetryLimit     = 3
 	workClosureInterval   = 10 * time.Second
+	projectProbeInterval  = 30 * time.Second
 )
 
 var errWorkClosedByUser = errors.New("work closed by user")
@@ -91,6 +92,16 @@ type WorkClosureChecker interface {
 type LabelEnsurer interface {
 	EnsureLabels(context.Context, string) error
 }
+
+// ProjectStateSource returns a cheap fingerprint of a project board's
+// dispatchable state. GitHub publishes no projects_v2 webhook for user-owned
+// Projects, so board-only edits (dragging an issue onto the board, moving a
+// card into the ready column) produce no delivery at all. Push mode probes
+// this fingerprint on a short interval and only pays for a full poll when it
+// actually changes, instead of waiting out the fallback interval.
+type ProjectStateSource interface {
+	ProjectState(context.Context, string) (string, error)
+}
 type IssueStatuser interface {
 	SetIssueStatus(context.Context, string, Issue, string) error
 }
@@ -135,7 +146,12 @@ type Glorp struct {
 	fallbackInterval time.Duration
 	// closureInterval overrides active-work closure polling in tests.
 	closureInterval time.Duration
-	Labels          LabelEnsurer
+	// Projects supplies the push-mode project board fingerprint. When nil,
+	// board changes are only picked up by the fallback poll.
+	Projects ProjectStateSource
+	// probeInterval overrides the project board probe interval in tests.
+	probeInterval time.Duration
+	Labels        LabelEnsurer
 	Status          IssueStatuser
 	UI              UIReporter
 	Quota           func(context.Context) map[string]string
@@ -158,6 +174,30 @@ func (w *Glorp) periodicPollInterval() time.Duration {
 		return pushFallbackInterval
 	}
 	return w.Interval
+}
+
+// projectBoardProbeInterval is how often push mode checks project targets for
+// board-only changes that produce no webhook delivery.
+func (w *Glorp) projectBoardProbeInterval() time.Duration {
+	if w.probeInterval > 0 {
+		return w.probeInterval
+	}
+	return projectProbeInterval
+}
+
+// projectProbeTargets lists the targets whose boards need fingerprint probing.
+// Only push mode needs it; poll mode already refreshes every Interval.
+func (w *Glorp) projectProbeTargets(targets []string) []string {
+	if !w.UseWebhooks || w.Projects == nil {
+		return nil
+	}
+	var probed []string
+	for _, target := range targets {
+		if isProjectTarget(target) {
+			probed = append(probed, target)
+		}
+	}
+	return probed
 }
 
 func (w *Glorp) activeWorkClosureInterval() time.Duration {
@@ -811,6 +851,32 @@ func (w *Glorp) Run(ctx context.Context) error {
 		w.logf("initial poll error: %v; will retry in %s", err, w.periodicPollInterval())
 	}
 	publish()
+	// Board-only project changes never reach a webhook, so push mode probes a
+	// cheap board fingerprint instead. Seeding it here (rather than on the
+	// first tick) means an idle board costs one small request per probe and
+	// never triggers a redundant full poll at startup.
+	probedTargets := w.projectProbeTargets(targets)
+	boardState := make(map[string]string, len(probedTargets))
+	probeBoards := func(ctx context.Context) bool {
+		changed := false
+		for _, target := range probedTargets {
+			state, err := w.Projects.ProjectState(ctx, target)
+			if err != nil {
+				if ctx.Err() == nil {
+					w.logf("project board probe for %s failed: %v", target, err)
+				}
+				continue
+			}
+			previous, known := boardState[target]
+			boardState[target] = state
+			if known && previous != state {
+				w.logf("project board change detected for %s; refreshing", target)
+				changed = true
+			}
+		}
+		return changed
+	}
+	probeBoards(ctx)
 	var ticker *time.Ticker
 	var tick <-chan time.Time
 	var retryTimer *time.Timer
@@ -832,6 +898,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 	ticker = time.NewTicker(periodicInterval)
 	defer ticker.Stop()
 	tick = ticker.C
+	var boardTick <-chan time.Time
+	if len(probedTargets) > 0 {
+		boardTicker := time.NewTicker(w.projectBoardProbeInterval())
+		defer boardTicker.Stop()
+		boardTick = boardTicker.C
+		w.logf("probing %d project board(s) for board-only changes every %s", len(probedTargets), w.projectBoardProbeInterval())
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -849,6 +922,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 					return nil
 				}
 				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, periodicInterval)
+			}
+		case <-boardTick:
+			if !probeBoards(ctx) {
+				continue
+			}
+			if err := poll(); err != nil && ctx.Err() == nil {
+				w.logf("project board poll #%d error: %v", pollNumber, err)
 			}
 		case event := <-w.Events:
 			w.logWebhookEvent(event)
