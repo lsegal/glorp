@@ -900,8 +900,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 
 	itemID := issue.ProjectItemID
 	if itemID == "" {
-		list := exec.CommandContext(ctx, g.Binary, projectListArgs(parsedTarget, "", true)...)
-		output, err := list.Output()
+		output, err := g.run(ctx, projectListArgs(parsedTarget, "", true)...)
 		items, err := decodeProjectItems(output, err)
 		if err != nil {
 			return err

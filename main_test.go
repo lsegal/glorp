@@ -340,6 +340,13 @@ func TestDecodeProjectFields(t *testing.T) {
 	}
 }
 
+func TestDecodeProjectFieldsIncludesOutputDetailOnFailure(t *testing.T) {
+	_, err := decodeProjectFields([]byte("missing required scopes [project]"), errors.New("exit status 1"))
+	if err == nil || !strings.Contains(err.Error(), "missing required scopes [project]") {
+		t.Fatalf("decodeProjectFields() error = %v, want it to include the gh output detail", err)
+	}
+}
+
 func TestDecodeRepositoryProjectItemsPage(t *testing.T) {
 	var page repositoryProjectItemsPage
 	err := json.Unmarshal([]byte(`{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"PVTI_item","project":{"id":"PVT_project","number":3,"owner":{"login":"owner"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor"}}}}}}`), &page)
@@ -349,6 +356,22 @@ func TestDecodeRepositoryProjectItemsPage(t *testing.T) {
 	}
 	if !items.PageInfo.HasNextPage || items.PageInfo.EndCursor != "cursor" {
 		t.Fatalf("repository project page info = %#v", items.PageInfo)
+	}
+}
+
+func TestSetIssueStatusProjectItemLookupSurfacesFailureDetail(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte("some other project error"), errors.New("exit status 1")
+	}}
+	err := gh.SetIssueStatus(context.Background(), "https://github.com/users/owner/projects/3", Issue{Number: 7}, "In Progress")
+	if err == nil || !strings.Contains(err.Error(), "some other project error") {
+		t.Fatalf("SetIssueStatus() error = %v, want it to include the gh output detail", err)
+	}
+	want := projectListArgs(target{owner: "owner", projectID: "3", isProject: true}, "", true)
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0], want) {
+		t.Fatalf("gh calls = %#v, want single call %#v", calls, want)
 	}
 }
 

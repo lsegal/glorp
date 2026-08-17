@@ -1174,6 +1174,9 @@ func decodeProjectItems(data []byte, err error) ([]projectItem, error) {
 
 func decodeProjectFields(data []byte, err error) ([]projectField, error) {
 	if err != nil {
+		if detail := strings.TrimSpace(string(data)); detail != "" {
+			return nil, fmt.Errorf("list project fields: %w: %s", err, detail)
+		}
 		return nil, fmt.Errorf("list project fields: %w", err)
 	}
 	var result projectFields
