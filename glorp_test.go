@@ -2315,6 +2315,13 @@ func TestGlorpDoesNotProbeBoardsWithoutProjectTargetsOrPushMode(t *testing.T) {
 		{name: "repository target", targets: []string{"o/r"}, useWebhooks: true, projects: &fakeProjectState{}, want: 0},
 		{name: "poll mode", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: false, projects: &fakeProjectState{}, want: 0},
 		{name: "no source", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: true, want: 0},
+		// An organization board pushes every change over its own
+		// projects_v2_item webhook, so probing it is duplicate polling
+		// (issue #249).
+		{name: "organization project target", targets: []string{"https://github.com/orgs/o/projects/3"}, useWebhooks: true, projects: &fakeProjectState{}, want: 0},
+		// A repository-scoped project URL does not name the owner type, so
+		// the probe stays on rather than assuming push coverage.
+		{name: "repository-scoped project target", targets: []string{"https://github.com/o/r/projects/3"}, useWebhooks: true, projects: &fakeProjectState{}, want: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			w := &Glorp{UseWebhooks: test.useWebhooks, Projects: test.projects}
@@ -2322,6 +2329,36 @@ func TestGlorpDoesNotProbeBoardsWithoutProjectTargetsOrPushMode(t *testing.T) {
 				t.Fatalf("probed targets = %d, want %d", got, test.want)
 			}
 		})
+	}
+}
+
+func TestPushedBoardTargets(t *testing.T) {
+	targets := []string{"o/r", "https://github.com/users/o/projects/3", "https://github.com/orgs/o/projects/4", "https://github.com/o/r/projects/5"}
+	w := &Glorp{UseWebhooks: true, Projects: &fakeProjectState{}}
+	got := w.pushedBoardTargets(targets)
+	want := []string{"https://github.com/orgs/o/projects/4"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pushed board targets = %v, want %v", got, want)
+	}
+	if got := (&Glorp{}).pushedBoardTargets(targets); got != nil {
+		t.Fatalf("poll mode pushed board targets = %v, want none", got)
+	}
+	// Every project target is either probed or push-covered, never neither.
+	probed := w.projectProbeTargets(targets)
+	if len(probed)+len(got) != 3 {
+		t.Fatalf("probed %v and pushed %v do not cover the 3 project targets", probed, got)
+	}
+}
+
+// Push mode never polls at Interval, so saying so in the startup log makes a
+// probed board look polled (issue #249).
+func TestWatchDescription(t *testing.T) {
+	if got := (&Glorp{Interval: time.Minute}).watchDescription(); got != "polling every 1m0s" {
+		t.Fatalf("poll mode description = %q", got)
+	}
+	got := (&Glorp{Interval: time.Minute, UseWebhooks: true}).watchDescription()
+	if !strings.Contains(got, pushFallbackInterval.String()) || strings.Contains(got, "1m0s") {
+		t.Fatalf("push mode description = %q, want one naming the %s fallback and not the poll interval", got, pushFallbackInterval)
 	}
 }
 

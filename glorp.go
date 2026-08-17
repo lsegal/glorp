@@ -217,18 +217,55 @@ func (w *Glorp) projectBoardProbeInterval() time.Duration {
 }
 
 // projectProbeTargets lists the targets whose boards need fingerprint probing.
-// Only push mode needs it; poll mode already refreshes every Interval.
+// Only push mode needs it; poll mode already refreshes every Interval, and a
+// board that pushes its own changes needs no probe at all (issue #249).
 func (w *Glorp) projectProbeTargets(targets []string) []string {
 	if !w.UseWebhooks || w.Projects == nil {
 		return nil
 	}
 	var probed []string
 	for _, target := range targets {
-		if isProjectTarget(target) {
+		if isProjectTarget(target) && !boardPushesChanges(target) {
 			probed = append(probed, target)
 		}
 	}
 	return probed
+}
+
+// pushedBoardTargets lists the project targets whose board changes arrive as
+// webhook deliveries, so they are deliberately left unprobed.
+func (w *Glorp) pushedBoardTargets(targets []string) []string {
+	if !w.UseWebhooks {
+		return nil
+	}
+	var pushed []string
+	for _, target := range targets {
+		if boardPushesChanges(target) {
+			pushed = append(pushed, target)
+		}
+	}
+	return pushed
+}
+
+// boardPushesChanges reports whether GitHub delivers projects_v2_item events
+// for a project target. An organization-owned project gets an organization
+// webhook covering every board edit (issue #138), and push mode refuses to
+// start when that hook cannot be installed, so probing one is pure duplicate
+// polling. User-owned projects get no such event, and a repository-scoped
+// project URL does not say who owns the board, so both keep probing.
+func boardPushesChanges(repo string) bool {
+	target, err := parseTarget(repo)
+	return err == nil && target.isProject && target.projectOwnerType == "orgs"
+}
+
+// watchDescription names the refresh strategy in the startup log. Push mode
+// never polls at Interval, so reporting that interval invites the question of
+// why a board still looks polled (issue #249).
+func (w *Glorp) watchDescription() string {
+	if !w.UseWebhooks {
+		return fmt.Sprintf("polling every %s", w.Interval)
+	}
+	return fmt.Sprintf("webhook push with a %s fallback poll", w.periodicPollInterval())
 }
 
 // reapPollTick is how often a reap pass runs when ordinary polling is slower
@@ -625,7 +662,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		seen[key] = true
 		restored[key] = true
 	}
-	w.logf("watching %s (instance %s, poll every %s, concurrency %d; %d handled issue(s) loaded)", strings.Join(targets, ", "), w.Identity, w.Interval, w.Concurrency, len(seen))
+	w.logf("watching %s (instance %s, %s, concurrency %d; %d handled issue(s) loaded)", strings.Join(targets, ", "), w.Identity, w.watchDescription(), w.Concurrency, len(seen))
 	sem := make(chan struct{}, w.Concurrency)
 	var wg sync.WaitGroup
 	var tasks taskState
@@ -1076,6 +1113,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 		defer boardTicker.Stop()
 		boardTick = boardTicker.C
 		w.logf("probing %d project board(s) for board-only changes every %s", len(probedTargets), w.projectBoardProbeInterval())
+	}
+	if pushed := w.pushedBoardTargets(targets); len(pushed) > 0 {
+		w.logf("not probing %d project board(s) that push board changes over webhooks: %s", len(pushed), strings.Join(pushed, ", "))
 	}
 	// Reaping abandoned work rides along with polling, so when polling is
 	// slower than reapPollInterval (webhook push mode) it gets its own,
