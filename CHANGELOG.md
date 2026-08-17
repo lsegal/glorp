@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show what a Claude agent is actually working on in the dashboard progress lines: tool activity now reads `Running: Read main.go`, `Running: Grep pattern`, or `Running: WebFetch https://…` instead of a bare `Running: Read`.
+
 - Restart an issue from scratch when the agent reports that the recorded session no longer exists, instead of failing the run and printing a bug report link. Sessions expire out of the agent's local history while glorp's work state keeps referring to them, and the issue workflow is re-entrant, so it picks the existing draft pull request back up.
 
 - Detect board-only project changes in push mode by probing a cheap project board fingerprint every 30 seconds, so dragging an issue onto a board or moving a card into the ready column dispatches promptly instead of waiting for the 15-minute fallback poll.

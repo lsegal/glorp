@@ -1406,16 +1406,67 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 	return err
 }
 
+// claudeToolUseDetailKeys are the tool input fields that carry enough context
+// to make a progress line useful, most specific first. A bare "Running: Read"
+// says nothing about what the agent is doing; "Running: Read main.go" does.
+var claudeToolUseDetailKeys = []string{
+	"command", "file_path", "notebook_path", "pattern", "url", "query",
+	"path", "description", "prompt", "skill",
+}
+
+// claudeToolUseDetailPathKeys hold filesystem paths, which are shortened from
+// the front so the filename survives truncation.
+var claudeToolUseDetailPathKeys = map[string]bool{"file_path": true, "notebook_path": true, "path": true}
+
+const claudeToolUseDetailLimit = 120
+
 func claudeToolUseSummary(name string, input json.RawMessage) string {
-	if len(input) > 0 {
-		var fields map[string]any
-		if err := json.Unmarshal(input, &fields); err == nil {
-			if command, ok := fields["command"].(string); ok && command != "" {
-				return command
-			}
-		}
+	key, detail := claudeToolUseDetail(input)
+	switch {
+	case detail == "":
+		return name
+	case key == "command":
+		// Shell commands are self-describing; the tool name adds nothing.
+		return detail
+	case name == "":
+		return detail
 	}
-	return name
+	return name + " " + detail
+}
+
+// claudeToolUseDetail returns the most descriptive string field of a tool's
+// input along with the key it came from, or empty strings when the input has
+// nothing worth showing.
+func claudeToolUseDetail(input json.RawMessage) (string, string) {
+	if len(input) == 0 {
+		return "", ""
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return "", ""
+	}
+	for _, key := range claudeToolUseDetailKeys {
+		value, ok := fields[key].(string)
+		if !ok {
+			continue
+		}
+		if value = strings.TrimSpace(strings.Join(strings.Fields(value), " ")); value == "" {
+			continue
+		}
+		return key, truncateToolUseDetail(value, claudeToolUseDetailPathKeys[key])
+	}
+	return "", ""
+}
+
+func truncateToolUseDetail(value string, isPath bool) string {
+	runes := []rune(value)
+	if len(runes) <= claudeToolUseDetailLimit {
+		return value
+	}
+	if isPath {
+		return "…" + string(runes[len(runes)-claudeToolUseDetailLimit:])
+	}
+	return string(runes[:claudeToolUseDetailLimit]) + "…"
 }
 
 func (r CommandRunner) binary(agent string) string {
