@@ -280,6 +280,62 @@ func TestGlorpRetriesWebhookRefreshUntilIssueIsIndexed(t *testing.T) {
 	}
 }
 
+func TestGlorpRespondsImmediatelyToOwnershipAskWebhook(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	events := make(chan WebhookEvent, 1)
+	comments := newFakeCommentClient()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF", Comments: comments,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("dispatched issue #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("issue #7 was not dispatched")
+	}
+
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentBody: signComment(askClaimBody, "OTHER")}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		comments.mu.Lock()
+		posts := comments.posts
+		comments.mu.Unlock()
+		if posts > 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	posted, err := comments.ListComments(context.Background(), "o/r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 2 {
+		t.Fatalf("posted comments = %v, want the starting claim plus an immediate presence reply", posted)
+	}
+	last := posted[len(posted)-1]
+	if kind, id, ok := parseClaim(last.Body); !ok || kind != claimPresence || id != "SELF" {
+		t.Fatalf("posted comment = %q", last.Body)
+	}
+
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")

@@ -759,6 +759,28 @@ func (w *Glorp) Run(ctx context.Context) error {
 		w.logf("poll #%d complete; dispatched %d issue(s) (tasks: %d running, %d queued)", n, len(newIssues), running, queued)
 		return nil
 	}
+	// respondToOwnershipAsk answers a "Does anyone have this?" handoff comment
+	// (issue #214) the moment its webhook delivery arrives, rather than
+	// waiting for the next poll to notice the issue is still active locally.
+	respondToOwnershipAsk := func(ctx context.Context, event WebhookEvent) {
+		if event.Kind != "issue_comment" || event.Action != "created" || w.Comments == nil {
+			return
+		}
+		kind, id, ok := parseClaim(event.CommentBody)
+		if !ok || kind != claimAsking || id == w.Identity {
+			return
+		}
+		key := event.Repository + "#" + strconv.Itoa(event.IssueNumber)
+		workMu.Lock()
+		_, owned := active[key]
+		workMu.Unlock()
+		if !owned {
+			return
+		}
+		if err := w.Comments.PostComment(ctx, event.Repository, event.IssueNumber, signComment(presenceClaimBody, w.Identity)); err != nil {
+			w.logf("issue #%d failed to respond to ownership ask: %v", event.IssueNumber, err)
+		}
+	}
 	if err := poll(); err != nil {
 		if ctx.Err() != nil {
 			wg.Wait()
@@ -806,6 +828,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 		case event := <-w.Events:
 			w.logWebhookEvent(event)
+			respondToOwnershipAsk(ctx, event)
 			if err := poll(); err != nil {
 				if ctx.Err() != nil {
 					wg.Wait()
@@ -922,6 +945,8 @@ func (w *Glorp) logWebhookEvent(event WebhookEvent) {
 		w.logf("webhook issues received (repository: %s, action: %s, issue: #%d %q)", event.Repository, event.Action, event.IssueNumber, event.IssueTitle)
 	case "projects_v2_item":
 		w.logf("webhook project item received (action: %s)", event.Action)
+	case "issue_comment":
+		w.logf("webhook issue comment received (repository: %s, action: %s, issue: #%d)", event.Repository, event.Action, event.IssueNumber)
 	default:
 		w.logf("webhook %s received", event.Kind)
 	}

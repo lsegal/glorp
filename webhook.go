@@ -20,6 +20,7 @@ type WebhookEvent struct {
 	CommitCount int
 	IssueNumber int
 	IssueTitle  string
+	CommentBody string
 }
 
 // WebhookHandler accepts GitHub webhook deliveries, records useful delivery
@@ -52,7 +53,7 @@ func (h WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Header.Get("X-GitHub-Event") {
-	case "issues", "pull_request", "push", "ping", "projects_v2_item":
+	case "issues", "pull_request", "push", "ping", "projects_v2_item", "issue_comment":
 		event := decodeWebhookEvent(r.Header.Get("X-GitHub-Event"), body)
 		select {
 		case h.Events <- event:
@@ -78,6 +79,9 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
 		} `json:"issue"`
+		Comment struct {
+			Body string `json:"body"`
+		} `json:"comment"`
 		Commits []json.RawMessage `json:"commits"`
 	}
 	if json.Unmarshal(body, &payload) == nil {
@@ -89,6 +93,7 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 		event.CommitCount = len(payload.Commits)
 		event.IssueNumber = payload.Issue.Number
 		event.IssueTitle = payload.Issue.Title
+		event.CommentBody = payload.Comment.Body
 	}
 	return event
 }

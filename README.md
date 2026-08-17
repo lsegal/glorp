@@ -155,6 +155,8 @@ Handled issues and active sessions are stored in `.glorp.json` by default. This 
 
 Each glorp instance gets a random in-memory identity used to cooperate with other instances (including ones on other machines) sharing the same repository. Before reaping an issue that already carries the `agent-started` label but has no local record of being this instance's own work, glorp posts a signed `Does anyone have this? /glorp:<identity>` comment on the issue (or its open draft pull request, if one exists) and waits at least two minutes before claiming it with a `Starting work on this issue` or `Continuing work on this issue` comment. If another instance answers first, glorp stands down and leaves the ticket alone; the last instance to post a claim always wins.
 
+Repository webhooks also subscribe to GitHub's `issue_comment` event so this handshake does not depend on the polling interval: when a `Does anyone have this?` comment arrives for a ticket this instance is actively working on, glorp replies immediately with a signed `I am working on this` comment instead of waiting for the next poll.
+
 Glorp serves either a localhost-only browser dashboard or an interactive terminal dashboard, selected by `--ui`. The browser dashboard mirrors the terminal dashboard's agent cards, output viewports, scrolling behavior, daemon logs, job counts, quota, delivery mode, and target status. `--ui web` is the default, `--ui tui` enables the terminal dashboard when stdout is a terminal, and `--ui none` writes timestamped progress to stdout. `--no-ui` is equivalent to `--ui none`.
 
 ## CLI reference
