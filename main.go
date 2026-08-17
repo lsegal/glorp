@@ -207,7 +207,7 @@ func main() {
 		fmt.Fprintf(output, "ngrok tunnel ready at %s\n", tunnel.URL())
 		configured := 0
 		for _, target := range targets {
-			if err := gh.ConfigureWebhook(ctx, target, endpoint, *webhookSecret); err != nil {
+			if _, err := gh.ConfigureWebhook(ctx, target, endpoint, *webhookSecret); err != nil {
 				if errors.Is(err, errProjectWebhookUnavailable) {
 					fmt.Fprintln(output, err)
 					continue
@@ -224,6 +224,10 @@ func main() {
 		if configured == 0 {
 			fmt.Fprintln(output, "no targets available for webhook configuration")
 		}
+		// A project board can gain a repository that was not on it at startup,
+		// and that repository has no webhook until the target is configured
+		// again, so keep reconciling while the daemon runs (issue #238).
+		w.Webhooks = newWebhookReconciler(gh, targets, endpoint, *webhookSecret, w.logf).reconcile
 	}
 	if err := w.Run(ctx); err != nil {
 		if ui != nil {

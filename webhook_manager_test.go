@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -120,5 +121,103 @@ func TestWebhookSpecsPreserveRepositoryEvents(t *testing.T) {
 	}
 	if len(specs) != 1 || specs[0].apiPath != "repos/owner/repo/hooks" || !reflect.DeepEqual(specs[0].events, []string{"issues", "pull_request", "push", "ping", "issue_comment"}) {
 		t.Fatalf("webhook specs = %#v", specs)
+	}
+}
+
+// fakeConfigurer records ConfigureWebhook calls and replays a scripted result
+// per call, standing in for the repositories a board is backed by over time.
+type fakeConfigurer struct {
+	mu      sync.Mutex
+	calls   []string
+	results []struct {
+		created []string
+		err     error
+	}
+}
+
+func (f *fakeConfigurer) ConfigureWebhook(_ context.Context, target, _, _ string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, target)
+	if len(f.results) == 0 {
+		return nil, nil
+	}
+	result := f.results[0]
+	f.results = f.results[1:]
+	return result.created, result.err
+}
+
+// A repository added to the board after startup has no webhook until the
+// target is configured again, so reconciliation has to keep running and has to
+// announce only the webhooks it actually created (issue #238).
+func TestWebhookReconcilerConfiguresNewlyDiscoveredRepositories(t *testing.T) {
+	gh := &fakeConfigurer{results: []struct {
+		created []string
+		err     error
+	}{
+		{created: []string{"octocat/alpha"}},
+		{},
+		{created: []string{"octocat/beta"}},
+	}}
+	var logs []string
+	r := newWebhookReconciler(gh, []string{"https://github.com/users/octocat/projects/3"}, "https://tunnel/webhook", "", func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	for i := 0; i < 3; i++ {
+		r.reconcile(context.Background())
+	}
+	if len(gh.calls) != 3 {
+		t.Fatalf("configure calls = %#v", gh.calls)
+	}
+	want := []string{"configured GitHub webhook for octocat/alpha", "configured GitHub webhook for octocat/beta"}
+	if !reflect.DeepEqual(logs, want) {
+		t.Fatalf("reconciler logs = %#v, want %#v", logs, want)
+	}
+}
+
+// Reconciling a steady board must not create or churn webhooks, and must not
+// repeat itself in the log.
+func TestWebhookReconcilerIsQuietWhenNothingChanges(t *testing.T) {
+	gh := &fakeConfigurer{}
+	var logs []string
+	r := newWebhookReconciler(gh, []string{"o/r"}, "https://tunnel/webhook", "", func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	for i := 0; i < 3; i++ {
+		r.reconcile(context.Background())
+	}
+	if len(logs) != 0 {
+		t.Fatalf("reconciler logs = %#v, want none", logs)
+	}
+}
+
+// A repository glorp cannot configure is reported once and never stops the
+// daemon; the targets after it still get reconciled.
+func TestWebhookReconcilerReportsFailuresWithoutStopping(t *testing.T) {
+	failure := fmt.Errorf("%w (1 of 2): create webhooks for octocat/beta: HTTP 403", errWebhookPartiallyConfigured)
+	gh := &fakeConfigurer{results: []struct {
+		created []string
+		err     error
+	}{
+		{created: []string{"octocat/alpha"}, err: failure},
+		{},
+		{err: failure},
+		{},
+	}}
+	var logs []string
+	r := newWebhookReconciler(gh, []string{"https://github.com/users/octocat/projects/3", "o/r"}, "https://tunnel/webhook", "", func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	r.reconcile(context.Background())
+	r.reconcile(context.Background())
+	if len(gh.calls) != 4 {
+		t.Fatalf("configure calls = %#v, want every target reconciled on both cycles", gh.calls)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "configured GitHub webhook for octocat/alpha") || !strings.Contains(joined, "HTTP 403") {
+		t.Fatalf("reconciler logs = %#v", logs)
+	}
+	if strings.Count(joined, "HTTP 403") != 1 {
+		t.Fatalf("repeated failure logged more than once: %#v", logs)
 	}
 }
