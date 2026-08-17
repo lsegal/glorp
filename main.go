@@ -965,7 +965,7 @@ func (g GHCLI) setProjectItemStatus(ctx context.Context, target target, itemID s
 
 	viewOutput, err := g.run(ctx, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
 	if err != nil {
-		return fmt.Errorf("view project: %w", err)
+		return fmt.Errorf("view project: %w: %s", err, strings.TrimSpace(string(viewOutput)))
 	}
 	var view projectView
 	if err := json.Unmarshal(viewOutput, &view); err != nil {

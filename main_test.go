@@ -382,6 +382,26 @@ func TestRepositoryIssueStatusUpdatesAttachedProject(t *testing.T) {
 	}
 }
 
+func TestRepositoryIssueStatusReportsProjectViewFailureDetail(t *testing.T) {
+	responses := [][]byte{
+		[]byte(`{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"PVTI_item","project":{"id":"PVT_project","number":3,"owner":{"login":"owner"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`),
+		[]byte("missing required scopes [read:project]"),
+	}
+	call := 0
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		response := responses[call]
+		call++
+		if call == 2 {
+			return response, errors.New("exit status 1")
+		}
+		return response, nil
+	}}
+	err := gh.SetIssueStatus(context.Background(), "owner/repo", Issue{Number: 148}, "In Progress")
+	if err == nil || !strings.Contains(err.Error(), "missing required scopes [read:project]") {
+		t.Fatalf("SetIssueStatus() error = %v, want it to include the gh output detail", err)
+	}
+}
+
 func TestProjectStatusOptionMatchesReadyStates(t *testing.T) {
 	fields := []projectField{{
 		ID:   "status-field",
