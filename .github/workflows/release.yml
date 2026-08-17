@@ -2,9 +2,19 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Release version, for example 1.0.0
+      level:
+        description: Release level
         required: true
+        type: choice
+        default: patch
+        options:
+          - major
+          - minor
+          - patch
+          - version
+      version:
+        description: Version to release (if level is "version"), for example 1.0.0
+        required: false
         type: string
 permissions:
   actions: write
@@ -14,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.4
@@ -32,10 +44,28 @@ jobs:
       - name: Select release tag
         id: release
         shell: bash
+        env:
+          LEVEL: ${{ inputs.level }}
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          tag="${{ inputs.version }}"
-          tag="v${tag#v}"
+          if [[ "$LEVEL" == "version" ]]; then
+            tag="v${VERSION_INPUT#v}"
+          else
+            latest="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+            latest="${latest:-v0.0.0}"
+            [[ "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || { echo "invalid latest tag: $latest" >&2; exit 1; }
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            case "$LEVEL" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+              *) echo "invalid release level: $LEVEL" >&2; exit 1 ;;
+            esac
+            tag="v${major}.${minor}.${patch}"
+          fi
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release version: $tag" >&2; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Promote changelog and create tag
