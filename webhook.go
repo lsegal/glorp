@@ -21,6 +21,12 @@ type WebhookEvent struct {
 	IssueNumber int
 	IssueTitle  string
 	CommentBody string
+	// DiscussionNumber and DiscussionTitle carry the thread a `discussion`
+	// delivery names. They are kept separate from the issue fields because a
+	// discussion and an issue can share a number, and the issue fields key
+	// the follow-up refresh chain.
+	DiscussionNumber int
+	DiscussionTitle  string
 }
 
 // WebhookHandler accepts GitHub webhook deliveries, records useful delivery
@@ -53,7 +59,7 @@ func (h WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Header.Get("X-GitHub-Event") {
-	case "issues", "pull_request", "push", "ping", "projects_v2_item", "issue_comment":
+	case "issues", "pull_request", "push", "ping", "projects_v2_item", "issue_comment", "discussion":
 		event := decodeWebhookEvent(r.Header.Get("X-GitHub-Event"), body)
 		select {
 		case h.Events <- event:
@@ -79,6 +85,10 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
 		} `json:"issue"`
+		Discussion struct {
+			Number int    `json:"number"`
+			Title  string `json:"title"`
+		} `json:"discussion"`
 		Comment struct {
 			Body string `json:"body"`
 		} `json:"comment"`
@@ -94,6 +104,8 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 		event.IssueNumber = payload.Issue.Number
 		event.IssueTitle = payload.Issue.Title
 		event.CommentBody = payload.Comment.Body
+		event.DiscussionNumber = payload.Discussion.Number
+		event.DiscussionTitle = payload.Discussion.Title
 	}
 	return event
 }

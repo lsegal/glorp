@@ -1238,6 +1238,16 @@ func webhookEventNeedsRefresh(event WebhookEvent) bool {
 		// Only reordering leaves an item's status untouched; every other
 		// action can move it into or out of the ready state.
 		return event.Action != "reordered"
+	case "discussion":
+		switch event.Action {
+		case "created", "reopened", "transferred":
+			return true
+		default:
+			// A discussion is dispatchable purely on existing with no reply
+			// yet, so edits, labels, pins, and answer changes cannot make a
+			// thread newly answerable.
+			return false
+		}
 	default:
 		return true
 	}
@@ -1271,6 +1281,8 @@ func (w *Glorp) logWebhookEvent(event WebhookEvent) {
 		w.logf("webhook project item received (action: %s)", event.Action)
 	case "issue_comment":
 		w.logf("webhook issue comment received (repository: %s, action: %s, issue: #%d)", event.Repository, event.Action, event.IssueNumber)
+	case "discussion":
+		w.logf("webhook discussion received (repository: %s, action: %s, discussion: #%d %q)", event.Repository, event.Action, event.DiscussionNumber, event.DiscussionTitle)
 	default:
 		w.logf("webhook %s received", event.Kind)
 	}
