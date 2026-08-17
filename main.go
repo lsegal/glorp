@@ -1496,7 +1496,74 @@ func (r CommandRunner) binary(agent string) string {
 	return r.Binary
 }
 
+// missingSessionPatterns matches the messages agents print when asked to
+// resume a session they no longer have on disk (sessions expire, and a glorp
+// work state file routinely outlives the agent's local conversation history).
+var missingSessionPatterns = []string{
+	"no conversation found",
+	"no session found",
+	"session not found",
+	"could not find session",
+	"unable to find session",
+}
+
+// missingSessionDetector passes agent output straight through while watching
+// for a "that session does not exist" message so a failed resume can restart
+// the work instead of being reported as an agent failure. It keeps a small
+// tail of the previous chunk so a message split across writes still matches.
+type missingSessionDetector struct {
+	mu      sync.Mutex
+	output  io.Writer
+	tail    string
+	missing bool
+}
+
+const missingSessionTailBytes = 128
+
+func (d *missingSessionDetector) Write(p []byte) (int, error) {
+	d.mu.Lock()
+	if !d.missing {
+		window := strings.ToLower(d.tail + string(p))
+		for _, pattern := range missingSessionPatterns {
+			if strings.Contains(window, pattern) {
+				d.missing = true
+				break
+			}
+		}
+		if len(window) > missingSessionTailBytes {
+			window = window[len(window)-missingSessionTailBytes:]
+		}
+		d.tail = window
+	}
+	d.mu.Unlock()
+	return d.output.Write(p)
+}
+
+func (d *missingSessionDetector) sessionMissing() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.missing
+}
+
 func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession), jobOutput io.Writer) error {
+	runErr, sessionMissing := r.runOnce(ctx, issue, session, updateSession, jobOutput)
+	if runErr == nil || !sessionMissing {
+		return runErr
+	}
+	// The recorded session is gone from the agent's local history, so the
+	// resume can never succeed. Start the work over rather than reporting a
+	// failure nobody can act on; the issue workflow is re-entrant and adopts
+	// the existing draft pull request.
+	session.Resume = false
+	if r.specForSession(session).Name == "codex" {
+		// Codex assigns its own session IDs and reports the new one on stdout.
+		session.ID = ""
+	}
+	runErr, _ = r.runOnce(ctx, issue, session, updateSession, jobOutput)
+	return runErr
+}
+
+func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession), jobOutput io.Writer) (error, bool) {
 	agent := r.specForSession(session).Name
 	args := commandArgsForSession(r, issue, session)
 	cmd := newAgentCommand(ctx, r.binary(agent), args...)
@@ -1525,6 +1592,11 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 		claudeOutput = newClaudeJSONOutputWriter(agentOutput)
 		agentOutput = claudeOutput
 	}
+	var detector *missingSessionDetector
+	if session.Resume {
+		detector = &missingSessionDetector{output: agentOutput}
+		agentOutput = detector
+	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := cmd.Run()
 	if claudeOutput != nil {
@@ -1536,17 +1608,21 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 		metadataOutput.Flush()
 	}
 	if runErr != nil {
+		if detector != nil && detector.sessionMissing() {
+			fmt.Fprintf(agentOutput, "Session %s no longer exists; restarting the work from scratch.\n", session.ID)
+			return runErr, true
+		}
 		repo := r.Repo
 		if issue.Target != "" {
 			repo = issueRepository(issue.Target, issue)
 		}
 		report, reportErr := bugReportURL(repo, issue, args)
 		if reportErr != nil {
-			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", runErr, reportErr)
+			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", runErr, reportErr), false
 		}
-		return fmt.Errorf("agent failed: %w; bug report: %s", runErr, report)
+		return fmt.Errorf("agent failed: %w; bug report: %s", runErr, report), false
 	}
-	return nil
+	return nil, false
 }
 
 func bugReportURL(repo string, issue Issue, args []string) (string, error) {
