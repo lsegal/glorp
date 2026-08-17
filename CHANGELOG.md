@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Detect new project board issues in push mode for user-owned Projects, which GitHub gives no `projects_v2_item` webhook, by subscribing to repository webhooks on every repository backing the board instead of leaving the whole target to the periodic poller.
+- Detect new project board issues in push mode for user-owned Projects, which GitHub gives no `projects_v2_item` webhook, by subscribing to repository webhooks on every repository backing the board instead of leaving the whole target to the periodic poller. Those webhooks are re-reconciled on every periodic poll, so a repository added to the board later is watched without restarting `glorp`.
 - Keep running when only some of a target's push webhooks can be configured, reporting the failures instead of exiting.
 
 - Reclaim project items stranded at `In Progress` by an instance that died mid-run: a new instance now runs the cooperative handoff handshake on them instead of skipping them forever, and only stands down when another instance answers that it still owns the work.
