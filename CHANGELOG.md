@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a cooperative handoff protocol so multiple glorp instances sharing a repository negotiate ownership through signed `/glorp:UUID` comments ("Does anyone have this?" / "Starting work on this issue" / "Continuing work on this issue" / "I am working on this") before reaping a ticket that already looks claimed, instead of silently duplicating or abandoning work. Each instance gets a random in-memory identity, and the last instance to claim a ticket wins.
+- Make the `gh-fix` skill re-entrant: `/gh-fix N` now resumes an existing open draft pull request for issue `N` (or for `N` itself when it names a PR) instead of starting over, and checks for a competing active claim before adopting someone else's in-flight branch.
 - Replace `--model` and `--model-level` with per-agent `--agent AGENT/MODEL:LEVEL` specs so each load balanced agent can run its own model and reasoning level.
 
 ## v1.0.7 - 2026-08-16
