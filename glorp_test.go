@@ -1961,6 +1961,141 @@ func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
 	}
 }
 
+// fakeProjectState serves board fingerprints for the push-mode project probe.
+type fakeProjectState struct {
+	mu     sync.Mutex
+	calls  int
+	states []string
+	err    error
+}
+
+func (f *fakeProjectState) ProjectState(_ context.Context, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return "", f.err
+	}
+	if len(f.states) == 0 {
+		return "", nil
+	}
+	if f.calls > len(f.states) {
+		return f.states[len(f.states)-1], nil
+	}
+	return f.states[f.calls-1], nil
+}
+
+func (f *fakeProjectState) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func TestGlorpDispatchesProjectBoardChangeBeforeFallbackPoll(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{
+		{}, // initial poll: nothing on the board yet
+		{{Number: 9, ProjectStatus: "Todo", State: "OPEN"}}, // card moved into Todo
+	}}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	// The board changes on the second probe, and the fallback poll is an hour
+	// away, so only the probe can produce this dispatch.
+	board := &fakeProjectState{states: []string{"before", "after"}}
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r, UseWebhooks: true,
+		Projects: board, fallbackInterval: time.Hour, probeInterval: time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case number := <-r.dispatched:
+		if number != 9 {
+			t.Fatalf("dispatched issue #%d, want #9", number)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("board-only project change was not dispatched before the fallback poll")
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpSkipsPollWhileProjectBoardIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	board := &fakeProjectState{states: []string{"steady"}}
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: &fakeRunner{release: make(chan struct{})},
+		UseWebhooks: true, Projects: board, fallbackInterval: time.Hour, probeInterval: time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && board.callCount() < 10 {
+		time.Sleep(time.Millisecond)
+	}
+	probes := board.callCount()
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if probes < 10 {
+		t.Fatalf("board probed %d time(s), want at least 10", probes)
+	}
+	if calls != 1 {
+		t.Fatalf("idle board triggered %d issue list call(s), want only the initial poll", calls)
+	}
+}
+
+func TestGlorpDoesNotProbeBoardsWithoutProjectTargetsOrPushMode(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		targets     []string
+		useWebhooks bool
+		projects    ProjectStateSource
+		want        int
+	}{
+		{name: "push project target", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: true, projects: &fakeProjectState{}, want: 1},
+		{name: "repository target", targets: []string{"o/r"}, useWebhooks: true, projects: &fakeProjectState{}, want: 0},
+		{name: "poll mode", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: false, projects: &fakeProjectState{}, want: 0},
+		{name: "no source", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: true, want: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			w := &Glorp{UseWebhooks: test.useWebhooks, Projects: test.projects}
+			if got := len(w.projectProbeTargets(test.targets)); got != test.want {
+				t.Fatalf("probed targets = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestProjectBoardProbeInterval(t *testing.T) {
+	if got := (&Glorp{}).projectBoardProbeInterval(); got != projectProbeInterval {
+		t.Fatalf("default probe interval = %s, want %s", got, projectProbeInterval)
+	}
+	if got := (&Glorp{probeInterval: time.Second}).projectBoardProbeInterval(); got != time.Second {
+		t.Fatalf("override probe interval = %s, want 1s", got)
+	}
+	if projectProbeInterval >= pushFallbackInterval {
+		t.Fatalf("probe interval %s must be shorter than the fallback interval %s", projectProbeInterval, pushFallbackInterval)
+	}
+}
+
 // Push webhooks have to be reconciled while the daemon runs, not only at
 // startup, so a repository added to a project board later gets a webhook
 // without a restart (issue #238).

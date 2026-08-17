@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -173,7 +175,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, Comments: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -733,6 +735,19 @@ func projectItemQuery(filter string, allIssues bool) string {
 }
 
 func (g GHCLI) listProjectItems(ctx context.Context, target target, filter string, allIssues bool) ([]projectItem, error) {
+	return g.listProjectItemFields(ctx, target, filter, allIssues, projectItemFields)
+}
+
+// projectItemFields is the issue selection a dispatching poll needs.
+// projectItemKeyFields is the much smaller selection a board fingerprint
+// needs: enough to notice an item appearing, disappearing, or changing
+// status, and nothing else.
+const (
+	projectItemFields    = "number title body state createdAt repository{nameWithOwner} labels(first:100){nodes{name}}"
+	projectItemKeyFields = "number state repository{nameWithOwner}"
+)
+
+func (g GHCLI) listProjectItemFields(ctx context.Context, target target, filter string, allIssues bool, contentFields string) ([]projectItem, error) {
 	ownerField := target.projectOwnerType
 	if ownerField == "users" {
 		ownerField = "user"
@@ -750,14 +765,14 @@ func (g GHCLI) listProjectItems(ctx context.Context, target target, filter strin
           fieldValueByName(name:$statusField){... on ProjectV2ItemFieldSingleSelectValue{name}}
           content{
             __typename
-            ... on Issue{number title body state createdAt repository{nameWithOwner} labels(first:100){nodes{name}}}
+            ... on Issue{%s}
           }
         }
         pageInfo{hasNextPage endCursor}
       }
     }
   }
-}`, ownerField)
+}`, ownerField, contentFields)
 
 	var items []projectItem
 	cursor := ""
@@ -805,6 +820,47 @@ func (g GHCLI) listProjectItems(ctx context.Context, target target, filter strin
 		cursor = project.Items.PageInfo.EndCursor
 	}
 	return items, nil
+}
+
+// ProjectState returns a fingerprint of a project board's dispatchable state.
+// It fetches only item IDs, statuses, and issue identities, skipping the issue
+// bodies, labels, and the per-issue dependency lookups a dispatching poll
+// performs, so push mode can check an idle board cheaply and often.
+func (g GHCLI) ProjectState(ctx context.Context, repo string) (string, error) {
+	target, err := parseTarget(repo)
+	if err != nil {
+		return "", err
+	}
+	if !target.isProject {
+		return "", fmt.Errorf("project state requires a project target, got %q", repo)
+	}
+	var items []projectItem
+	if target.projectOwnerType != "" {
+		items, err = g.listProjectItemFields(ctx, target, g.Filter, g.AllIssues, projectItemKeyFields)
+	} else {
+		items, err = decodeProjectItems(g.run(ctx, projectListArgs(target, g.Filter, g.AllIssues)...))
+	}
+	if err != nil {
+		return "", err
+	}
+	return projectItemsFingerprint(items), nil
+}
+
+// projectItemsFingerprint hashes the board-visible identity and status of
+// every item, ordered independently of how GitHub returned them so that a
+// reshuffled response alone never looks like a change.
+func projectItemsFingerprint(items []projectItem) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		line := item.ID + "\x00" + item.Status
+		if item.Content != nil {
+			line += fmt.Sprintf("\x00%s\x00%s#%d\x00%s", item.Content.Type, item.Content.Repository, item.Content.Number, item.Content.State)
+		}
+		lines = append(lines, line)
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 func projectItemListError(output []byte, err error) error {

@@ -572,3 +572,59 @@ func TestTerminalUIReporterDoesNotWrapNilUI(t *testing.T) {
 		t.Fatalf("log output = %q", logs.String())
 	}
 }
+
+func TestProjectStateFingerprintIgnoresItemOrder(t *testing.T) {
+	items := []projectItem{
+		{ID: "a", Status: "Todo", Content: &projectContent{Issue: Issue{Number: 1, Repository: "o/r", State: "OPEN"}, Type: "Issue"}},
+		{ID: "b", Status: "Done", Content: &projectContent{Issue: Issue{Number: 2, Repository: "o/r", State: "OPEN"}, Type: "Issue"}},
+	}
+	reordered := []projectItem{items[1], items[0]}
+	if projectItemsFingerprint(items) != projectItemsFingerprint(reordered) {
+		t.Fatal("reordered board items produced a different fingerprint")
+	}
+	moved := []projectItem{items[0], {ID: "b", Status: "Todo", Content: items[1].Content}}
+	if projectItemsFingerprint(items) == projectItemsFingerprint(moved) {
+		t.Fatal("moving a card between columns did not change the fingerprint")
+	}
+	added := append(append([]projectItem(nil), items...), projectItem{ID: "c", Status: "Todo", Content: &projectContent{Issue: Issue{Number: 3, Repository: "o/r", State: "OPEN"}, Type: "Issue"}})
+	if projectItemsFingerprint(items) == projectItemsFingerprint(added) {
+		t.Fatal("dragging a new issue onto the board did not change the fingerprint")
+	}
+}
+
+func TestProjectStateQueriesOnlyBoardKeyFields(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte(`{"data":{"user":{"projectV2":{"items":{"nodes":[{"id":"PVTI_item","fieldValueByName":{"name":"Todo"},"content":{"__typename":"Issue","number":171,"state":"OPEN","repository":{"nameWithOwner":"lsegal/glorp"}}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor"}}}}}}`), nil
+	}}
+	state, err := gh.ProjectState(context.Background(), "https://github.com/users/lsegal/projects/3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == "" {
+		t.Fatal("project state fingerprint is empty")
+	}
+	if len(calls) != 1 {
+		t.Fatalf("gh calls = %#v, want a single request", calls)
+	}
+	query := calls[0][3]
+	for _, unwanted := range []string{"body", "labels(", "createdAt", "title"} {
+		if strings.Contains(query, unwanted) {
+			t.Fatalf("probe query fetches %q, want only board key fields:\n%s", unwanted, query)
+		}
+	}
+	if !strings.Contains(query, "number state repository{nameWithOwner}") {
+		t.Fatalf("probe query missing board key fields:\n%s", query)
+	}
+}
+
+func TestProjectStateRejectsRepositoryTarget(t *testing.T) {
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		t.Fatal("repository target should not reach gh")
+		return nil, nil
+	}}
+	if _, err := gh.ProjectState(context.Background(), "lsegal/glorp"); err == nil {
+		t.Fatal("repository target did not produce an error")
+	}
+}
