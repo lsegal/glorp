@@ -433,7 +433,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}
 				// Claude accepts a caller-provided session ID. Other runners retain
 				// the historical generated ID unless they replace it after launch.
-				if session.Agent != "codex" {
+				if agentProvider(session.Agent) != "codex" {
 					session.ID, err = newSessionID()
 					if err != nil {
 						return err

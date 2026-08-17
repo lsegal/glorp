@@ -46,10 +46,8 @@ func main() {
 	webUIPort := flag.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
 	yolo := flag.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
-	agents := agentFlag{values: []string{"codex"}}
-	flag.Var(&agents, "agent", "agent to run: codex or claude (repeatable to load balance evenly across concurrency)")
-	model := flag.String("model", "", "model to use for the agent")
-	modelLevel := flag.String("model-level", "", "model reasoning level: low, medium, or high")
+	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	flag.Var(&agents, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
 	readyState := flag.String("ready-state", "", "project status that marks an issue ready for an agent")
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
@@ -86,16 +84,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
 		os.Exit(2)
 	}
-	if *modelLevel != "" && *modelLevel != "low" && *modelLevel != "medium" && *modelLevel != "high" {
-		fmt.Fprintln(os.Stderr, "model-level must be low, medium, or high")
-		os.Exit(2)
-	}
 	limit := *concurrency
 	if limit == 0 {
 		limit = 3
 	}
 	binary := *codexBinary
-	if agents.values[0] == "claude" {
+	if agents.values[0].Name == "claude" {
 		binary = *claudeBinary
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -147,7 +141,7 @@ func main() {
 	if ui != nil {
 		wOut = io.Discard
 	}
-	quota := combinedQuotaReader(namedQuotaReaders(agents.values, func(agent string) string {
+	quota := combinedQuotaReader(namedQuotaReaders(agents.names(), func(agent string) string {
 		if agent == "claude" {
 			return *claudeBinary
 		}
@@ -157,7 +151,7 @@ func main() {
 	if len(agents.values) > 1 {
 		agentCursor = &atomic.Uint64{}
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.values, Agent: agents.values[0], Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -349,28 +343,107 @@ func (f *filterFlag) Set(value string) error {
 	return nil
 }
 
+// agentSpec is a single --agent value: the agent to run plus the optional
+// model and reasoning level to run it with. Each agent carries its own model
+// so repeated --agent values can mix agents and models freely.
+type agentSpec struct {
+	Name  string
+	Model string
+	Level string
+}
+
+// String renders the spec back into its provider/model:level form so it can be
+// persisted in the work state and parsed again when a session resumes.
+func (s agentSpec) String() string {
+	value := s.Name
+	if s.Model != "" {
+		value += "/" + s.Model
+	}
+	if s.Level != "" {
+		value += ":" + s.Level
+	}
+	return value
+}
+
+// parseAgentSpec parses provider/model:level, where the model and level are
+// both optional (for example codex, claude/opus, or codex/gpt-5.6:high).
+func parseAgentSpec(value string) (agentSpec, error) {
+	name := strings.TrimSpace(value)
+	var spec agentSpec
+	if index := strings.LastIndex(name, ":"); index >= 0 {
+		spec.Level = strings.TrimSpace(name[index+1:])
+		name = strings.TrimSpace(name[:index])
+		if spec.Level != "low" && spec.Level != "medium" && spec.Level != "high" {
+			return agentSpec{}, fmt.Errorf("agent level must be low, medium, or high")
+		}
+	}
+	if base, model, ok := strings.Cut(name, "/"); ok {
+		name, spec.Model = strings.TrimSpace(base), strings.TrimSpace(model)
+		if spec.Model == "" {
+			return agentSpec{}, fmt.Errorf("agent model cannot be empty")
+		}
+	}
+	if name != "codex" && name != "claude" {
+		return agentSpec{}, fmt.Errorf("agent must be codex or claude")
+	}
+	spec.Name = name
+	return spec, nil
+}
+
+// agentProvider returns the agent name from a spec, falling back to the raw
+// value so work state written by older versions still resolves.
+func agentProvider(value string) string {
+	spec, err := parseAgentSpec(value)
+	if err != nil {
+		return value
+	}
+	return spec.Name
+}
+
 // agentFlag collects repeated --agent values so multiple agents can be
 // configured and load balanced evenly across concurrency.
 type agentFlag struct {
-	values []string
+	values []agentSpec
 	set    bool
 }
 
 func (f *agentFlag) String() string {
-	return strings.Join(f.values, ",")
+	names := make([]string, 0, len(f.values))
+	for _, spec := range f.values {
+		names = append(names, spec.String())
+	}
+	return strings.Join(names, ",")
 }
 
 func (f *agentFlag) Set(value string) error {
-	value = strings.TrimSpace(value)
-	if value != "codex" && value != "claude" {
-		return fmt.Errorf("agent must be codex or claude")
+	spec, err := parseAgentSpec(value)
+	if err != nil {
+		return err
 	}
 	if !f.set {
 		f.values = nil
 		f.set = true
 	}
-	f.values = append(f.values, value)
+	f.values = append(f.values, spec)
 	return nil
+}
+
+// specs renders every configured agent into its string form for the runner.
+func (f *agentFlag) specs() []string {
+	specs := make([]string, 0, len(f.values))
+	for _, spec := range f.values {
+		specs = append(specs, spec.String())
+	}
+	return specs
+}
+
+// names lists the agent names, without models, for quota lookups.
+func (f *agentFlag) names() []string {
+	names := make([]string, 0, len(f.values))
+	for _, spec := range f.values {
+		names = append(names, spec.Name)
+	}
+	return names
 }
 
 type projectFieldOption struct {
@@ -914,12 +987,13 @@ func projectStatusError(number int, err error, detail string) error {
 
 type CommandRunner struct {
 	Binary, CodexBinary, ClaudeBinary string
-	// Agents holds every configured agent to load balance across when
-	// dispatching new issues. AgentName rotates through it round robin.
-	Agents                         []string
-	Agent, Model, ModelLevel, Repo string
-	Output                         io.Writer
-	Yolo                           bool
+	// Agents holds every configured agent spec (agent/model:level) to load
+	// balance across when dispatching new issues. AgentName rotates through it
+	// round robin.
+	Agents      []string
+	Agent, Repo string
+	Output      io.Writer
+	Yolo        bool
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
 	// round robin selection advances consistently regardless of how many
 	// times the struct is copied.
@@ -950,11 +1024,8 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 			}
 		}
 	}
-	agent := session.Agent
-	if agent == "" {
-		agent = r.Agent
-	}
-	if agent == "codex" {
+	spec := r.specForSession(session)
+	if spec.Name == "codex" {
 		args := []string{"exec"}
 		if session.Resume {
 			args = append(args, "resume")
@@ -962,11 +1033,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		if r.Yolo {
 			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 		}
-		if !session.Resume && r.Model != "" {
-			args = append(args, "--model", r.Model)
+		if !session.Resume && spec.Model != "" {
+			args = append(args, "--model", spec.Model)
 		}
-		if !session.Resume && r.ModelLevel != "" {
-			args = append(args, "-c", "model_reasoning_effort="+r.ModelLevel)
+		if !session.Resume && spec.Level != "" {
+			args = append(args, "-c", "model_reasoning_effort="+spec.Level)
 		}
 		if session.Resume {
 			args = append(args, session.ID)
@@ -987,11 +1058,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		// shell commands the issue workflow needs and exiting successfully.
 		args = append(args, "--permission-mode", "auto")
 	}
-	if !session.Resume && r.Model != "" {
-		args = append(args, "--model", r.Model)
+	if !session.Resume && spec.Model != "" {
+		args = append(args, "--model", spec.Model)
 	}
-	if !session.Resume && r.ModelLevel != "" {
-		args = append(args, "--effort", r.ModelLevel)
+	if !session.Resume && spec.Level != "" {
+		args = append(args, "--effort", spec.Level)
 	}
 	// Claude's default text output only prints once the full response is
 	// ready. Stream JSON events instead so the dashboard shows live progress
@@ -1008,9 +1079,24 @@ func (r CommandRunner) RunWithOutput(ctx context.Context, issue Issue, output io
 	return r.run(ctx, issue, AgentSession{}, nil, output)
 }
 
-// AgentName returns the agent to use for the next newly dispatched issue,
-// rotating round robin through Agents when more than one is configured so
-// work is load balanced evenly across concurrency.
+// specForSession resolves the agent, model, and level to run with. A resumed
+// or dispatched session carries the spec it was assigned so load balanced runs
+// keep the model they started with.
+func (r CommandRunner) specForSession(session AgentSession) agentSpec {
+	value := session.Agent
+	if value == "" {
+		value = r.Agent
+	}
+	spec, err := parseAgentSpec(value)
+	if err != nil {
+		return agentSpec{Name: value}
+	}
+	return spec
+}
+
+// AgentName returns the agent spec (agent/model:level) to use for the next
+// newly dispatched issue, rotating round robin through Agents when more than
+// one is configured so work is load balanced evenly across concurrency.
 func (r CommandRunner) AgentName() string {
 	if len(r.Agents) == 0 {
 		if r.Agent != "" {
@@ -1230,10 +1316,7 @@ func (r CommandRunner) binary(agent string) string {
 }
 
 func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession), jobOutput io.Writer) error {
-	agent := session.Agent
-	if agent == "" {
-		agent = r.Agent
-	}
+	agent := r.specForSession(session).Name
 	args := commandArgsForSession(r, issue, session)
 	cmd := newAgentCommand(ctx, r.binary(agent), args...)
 	if session.CheckoutDirectory != "" {
