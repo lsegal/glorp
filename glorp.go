@@ -21,6 +21,10 @@ const (
 	pushFallbackInterval  = 15 * time.Minute
 	webhookRetryLimit     = 3
 	workClosureInterval   = 10 * time.Second
+	// reapPollInterval is the longest an instance goes without a reap pass
+	// over abandoned work. Polling can be much less frequent than this in
+	// webhook push mode, so reaping gets its own floor (issue #239).
+	reapPollInterval = 10 * time.Minute
 )
 
 var errWorkClosedByUser = errors.New("work closed by user")
@@ -147,7 +151,12 @@ type Glorp struct {
 	Comments CommentClient
 	// ownershipWait overrides the reap grace-period wait in tests.
 	ownershipWait func(context.Context) bool
-	logMu         sync.Mutex
+	// reapInterval overrides the periodic reap cadence in tests.
+	reapInterval time.Duration
+	// staleClaim overrides the age at which another instance's claim is
+	// considered abandoned in tests.
+	staleClaim time.Duration
+	logMu      sync.Mutex
 }
 
 func (w *Glorp) periodicPollInterval() time.Duration {
@@ -158,6 +167,27 @@ func (w *Glorp) periodicPollInterval() time.Duration {
 		return pushFallbackInterval
 	}
 	return w.Interval
+}
+
+// reapPollTick is how often a reap pass runs when ordinary polling is slower
+// than reapPollInterval. It returns 0 when polling already runs at least that
+// often, in which case every poll doubles as a reap pass.
+func (w *Glorp) reapPollTick() time.Duration {
+	interval := reapPollInterval
+	if w.reapInterval > 0 {
+		interval = w.reapInterval
+	}
+	if w.periodicPollInterval() <= interval {
+		return 0
+	}
+	return interval
+}
+
+func (w *Glorp) staleClaimAfter() time.Duration {
+	if w.staleClaim > 0 {
+		return w.staleClaim
+	}
+	return staleClaimDuration
 }
 
 func (w *Glorp) activeWorkClosureInterval() time.Duration {
@@ -183,7 +213,13 @@ type pendingIssue struct {
 // negotiation loses (or errors) are dropped from the batch but stay marked as
 // seen, so a later poll retries them as contested work and renegotiates
 // instead of dispatching them as if nothing had ever claimed them.
-func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool) []pendingIssue {
+//
+// The first reap after startup is aggressive: every contested candidate is
+// asked about immediately. Later reaps run on a timer (issue #239), so they
+// first check how old the newest claim from another instance is and stand
+// down silently on anything claimed within staleClaimDuration, rather than
+// re-posting "does anyone have this?" on every pass.
+func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool, aggressive bool) []pendingIssue {
 	if w.Comments == nil || len(newIssues) == 0 {
 		return newIssues
 	}
@@ -198,6 +234,17 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 		go func(i int, issue Issue) {
 			defer wg.Done()
 			target := ownershipTargetFor(ctx, checker, issue)
+			if !aggressive {
+				fresh, err := w.claimIsFresh(ctx, target)
+				if err != nil {
+					w.logf("issue #%d reap check failed: %v", issue.Number, err)
+					return
+				}
+				if fresh {
+					w.logf("issue #%d claimed by another instance within %s; skipping reap", issue.Number, w.staleClaimAfter())
+					return
+				}
+			}
 			claimed, err := w.negotiateOwnership(ctx, target)
 			if err != nil {
 				w.logf("issue #%d ownership handoff failed: %v", issue.Number, err)
@@ -542,7 +589,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}})
 			}
 		}
-		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen)
+		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen, n == 1)
 		workMu.Lock()
 		err = saveScopedWorkState(w.StatePath, work, targets)
 		workMu.Unlock()
@@ -832,6 +879,16 @@ func (w *Glorp) Run(ctx context.Context) error {
 	ticker = time.NewTicker(periodicInterval)
 	defer ticker.Stop()
 	tick = ticker.C
+	// Reaping abandoned work rides along with polling, so when polling is
+	// slower than reapPollInterval (webhook push mode) it gets its own,
+	// faster ticker (issue #239).
+	var reap <-chan time.Time
+	if reapTick := w.reapPollTick(); reapTick > 0 {
+		reapTicker := time.NewTicker(reapTick)
+		defer reapTicker.Stop()
+		reap = reapTicker.C
+		w.logf("reaping abandoned work every %s", reapTick)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -849,6 +906,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 					return nil
 				}
 				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, periodicInterval)
+			}
+		case <-reap:
+			w.logf("periodic reap started")
+			if err := poll(); err != nil && ctx.Err() == nil {
+				w.logf("reap poll #%d error: %v", pollNumber, err)
 			}
 		case event := <-w.Events:
 			w.logWebhookEvent(event)

@@ -1960,3 +1960,29 @@ func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
 		t.Fatal("closed dependency still blocks issue")
 	}
 }
+
+func TestGlorpReapsOnItsOwnTickerWhenPollingIsSlow(t *testing.T) {
+	src := &fakeSource{batches: [][]Issue{{}}}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, UseWebhooks: true,
+		fallbackInterval: time.Hour, reapInterval: time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 3 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("reap ticker did not run additional polls while the poll interval was an hour away")
+}
