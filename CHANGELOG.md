@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reclaim project items stranded at `In Progress` by an instance that died mid-run: a new instance now runs the cooperative handoff handshake on them instead of skipping them forever, and only stands down when another instance answers that it still owns the work.
+- Keep renegotiating ownership of an issue after standing down for another instance, instead of treating it as brand new on the next poll and dispatching it anyway.
+
 - Add a `glorp upgrade` command that re-runs the published install script for the current platform.
 
 ## v1.1.0 - 2026-08-17
