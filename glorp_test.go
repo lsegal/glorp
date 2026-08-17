@@ -510,7 +510,7 @@ func TestGlorpPeriodicPollInterval(t *testing.T) {
 		want        time.Duration
 	}{
 		{name: "poll mode", want: 12 * time.Second},
-		{name: "push mode", useWebhooks: true, want: 90 * time.Second},
+		{name: "push mode", useWebhooks: true, want: 15 * time.Minute},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1367,6 +1367,145 @@ func TestScopedWorkStateKeepsTargetsSeparate(t *testing.T) {
 	got, err := loadScopedWorkState(path, targets)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("scoped state error=%v value=%v, want %v", err, got, want)
+	}
+}
+
+func TestWebhookEventNeedsRefresh(t *testing.T) {
+	tests := []struct {
+		event WebhookEvent
+		want  bool
+	}{
+		{event: WebhookEvent{Kind: "push", Ref: "refs/heads/main", CommitCount: 3}},
+		{event: WebhookEvent{Kind: "ping"}},
+		{event: WebhookEvent{Kind: "pull_request", Action: "opened"}},
+		{event: WebhookEvent{Kind: "pull_request", Action: "closed"}},
+		{event: WebhookEvent{Kind: "issue_comment", Action: "created"}},
+		{event: WebhookEvent{Kind: "issues", Action: "edited"}},
+		{event: WebhookEvent{Kind: "issues", Action: "assigned"}},
+		{event: WebhookEvent{Kind: "issues", Action: "locked"}},
+		{event: WebhookEvent{Kind: "issues", Action: "opened"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "reopened"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "closed"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "labeled"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "unlabeled"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "transferred"}, want: true},
+		{event: WebhookEvent{Kind: "projects_v2_item", Action: "reordered"}},
+		{event: WebhookEvent{Kind: "projects_v2_item", Action: "edited"}, want: true},
+		{event: WebhookEvent{Kind: "projects_v2_item", Action: "created"}, want: true},
+		{event: WebhookEvent{Kind: "release", Action: "published"}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(webhookEventLabel(test.event), func(t *testing.T) {
+			if got := webhookEventNeedsRefresh(test.event); got != test.want {
+				t.Fatalf("needs refresh = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestGlorpSkipsRefreshForIrrelevantWebhookDeliveries(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	events := make(chan WebhookEvent, 4)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
+		UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	waitForCalls := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			src.mu.Lock()
+			calls := src.calls
+			src.mu.Unlock()
+			if calls >= want {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %d list call(s)", want)
+	}
+	waitForCalls(1)
+
+	events <- WebhookEvent{Kind: "push", Repository: "o/r", Ref: "refs/heads/main", CommitCount: 2}
+	events <- WebhookEvent{Kind: "pull_request", Repository: "o/r", Action: "synchronize"}
+	events <- WebhookEvent{Kind: "issues", Repository: "o/r", Action: "edited", IssueNumber: 7}
+	// A relevant delivery queued last drains the ignored ones ahead of it, so
+	// its own refresh proves they were processed without polling.
+	events <- WebhookEvent{Kind: "issues", Repository: "o/r", Action: "opened", IssueNumber: 8}
+	waitForCalls(2)
+
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("list calls = %d, want 2 (initial poll plus the relevant delivery)", calls)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpStopsWebhookFollowUpOnceIssueIsObserved(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}, {{Number: 1, Repository: "o/r"}}}}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: 20 * time.Millisecond, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
+		UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events <- WebhookEvent{Kind: "issues", Action: "opened", Repository: "o/r", IssueNumber: 1}
+
+	select {
+	case n := <-r.dispatched:
+		if n != 1 {
+			t.Fatalf("dispatched issue #%d, want #1", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("issue #1 was not dispatched")
+	}
+
+	// The webhook-triggered refresh already observed issue #1, so the full
+	// follow-up chain (three more polls at the 20ms interval) must not run.
+	time.Sleep(150 * time.Millisecond)
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("list calls = %d, want 2 (initial poll plus the webhook refresh)", calls)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
