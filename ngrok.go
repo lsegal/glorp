@@ -21,13 +21,10 @@ type NgrokTunnel struct {
 func (t *NgrokTunnel) URL() string { return t.publicURL }
 
 func (t *NgrokTunnel) Close() error {
-	if t == nil || t.cmd == nil || t.cmd.Process == nil {
+	if t == nil || t.cmd == nil {
 		return nil
 	}
-	if err := t.cmd.Process.Kill(); err != nil {
-		return err
-	}
-	return t.cmd.Wait()
+	return stopChildProcess(t.cmd)
 }
 
 type ngrokTunnels struct {
@@ -63,7 +60,7 @@ func startNgrok(ctx context.Context, binary, listenAddr, apiURL string, out io.W
 	if out != nil {
 		cmd.Stdout, cmd.Stderr = out, out
 	}
-	if err := cmd.Start(); err != nil {
+	if err := startChildProcess(cmd); err != nil {
 		return nil, fmt.Errorf("start ngrok: %w", err)
 	}
 	tunnel := &NgrokTunnel{cmd: cmd}

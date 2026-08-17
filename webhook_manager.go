@@ -341,7 +341,7 @@ func (g GHCLI) api(ctx context.Context, path, method string, body ...string) ([]
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	output, err := outputChildProcess(cmd)
 	if err != nil {
 		detail := strings.TrimSpace(stderr.String())
 		if detail != "" {

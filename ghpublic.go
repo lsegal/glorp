@@ -114,7 +114,7 @@ func (g GHCLI) dependencyIssueView(ctx context.Context, public bool, repo string
 		}
 	}
 	cmd := exec.CommandContext(ctx, g.Binary, "issue", "view", strconv.Itoa(number), "--repo", repo, "--json", "state")
-	return cmd.Output()
+	return outputChildProcess(cmd)
 }
 
 // apiGETPaginated mirrors `gh api PATH --paginate`: it follows RFC 5988

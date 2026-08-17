@@ -29,15 +29,10 @@ func startWebUIFrontend(ctx context.Context, output io.Writer) (func(), error) {
 	command.Dir = "web"
 	command.Stdout = output
 	command.Stderr = output
-	if err := command.Start(); err != nil {
+	if err := startChildProcess(command); err != nil {
 		return nil, err
 	}
-	return func() {
-		if command.Process != nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-		}
-	}, nil
+	return func() { _ = stopChildProcess(command) }, nil
 }
 
 func ensureViteInstalled(ctx context.Context, output io.Writer) error {
@@ -52,7 +47,7 @@ func ensureViteInstalled(ctx context.Context, output io.Writer) error {
 	command.Dir = "web"
 	command.Stdout = output
 	command.Stderr = output
-	if err := command.Run(); err != nil {
+	if err := runChildProcess(command); err != nil {
 		return fmt.Errorf("install web UI dependencies: %w", err)
 	}
 	return nil
