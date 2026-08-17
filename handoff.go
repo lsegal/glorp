@@ -159,8 +159,8 @@ func ownershipTargetFor(ctx context.Context, checker WorkClosureChecker, issue I
 }
 
 // negotiateOwnership runs the "does anyone have this?" handshake before
-// reaping work that already looks claimed (an agent-started label or an
-// open draft pull request with no local record of ownership). It asks,
+// reaping work that already looks claimed (a reappearing issue or an open
+// draft pull request with no local record of ownership). It asks,
 // waits at least ownershipWaitDuration, and only claims the work if no
 // other instance answered or claimed it first. The last instance to post a
 // starting/continuing claim always wins.

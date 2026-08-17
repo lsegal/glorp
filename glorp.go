@@ -91,9 +91,6 @@ type WorkClosureChecker interface {
 type LabelEnsurer interface {
 	EnsureLabels(context.Context, string) error
 }
-type IssueLabeler interface {
-	SetIssueLabel(context.Context, string, int, bool) error
-}
 type IssueStatuser interface {
 	SetIssueStatus(context.Context, string, Issue, string) error
 }
@@ -173,13 +170,18 @@ func (w *Glorp) activeWorkClosureInterval() time.Duration {
 type pendingIssue struct {
 	issue   Issue
 	session AgentSession
+	// contested marks a dispatch candidate that this instance has no local
+	// record of handling as its own resumed work (a reclaim of another
+	// instance's apparent work, or a stale local record), so its ownership
+	// must be negotiated through the comment protocol before dispatch.
+	contested bool
 }
 
 // negotiateContestedIssues runs the handoff handshake for every candidate
-// issue that already carries the agent-started label but has no local
-// record of being this instance's own resumed work. Uncontested issues pass
-// through untouched. Issues whose negotiation loses (or errors) are dropped
-// from the batch and unmarked as seen so a later poll retries them.
+// issue marked contested (no local record of being this instance's own
+// resumed work). Uncontested issues pass through untouched. Issues whose
+// negotiation loses (or errors) are dropped from the batch and unmarked as
+// seen so a later poll retries them.
 func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool) []pendingIssue {
 	if w.Comments == nil || len(newIssues) == 0 {
 		return newIssues
@@ -187,7 +189,7 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 	keep := make([]bool, len(newIssues))
 	var wg sync.WaitGroup
 	for i, pending := range newIssues {
-		if pending.session.Resume || !hasLabel(pending.issue, agentStartedLabel) {
+		if pending.session.Resume || !pending.contested {
 			keep[i] = true
 			continue
 		}
@@ -313,8 +315,6 @@ func (w *Glorp) watchForCompetingClaim(ctx context.Context, target ownershipTarg
 	}
 }
 
-const agentStartedLabel = "agent-started"
-
 type workState struct {
 	Status            string `json:"status"`
 	SessionID         string `json:"sessionId,omitempty"`
@@ -406,9 +406,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	labeler, _ := w.Labels.(IssueLabeler)
 	closureChecker, _ := w.Issues.(WorkClosureChecker)
-	if err := w.resetFailedWork(context.Background(), work, labeler); err != nil {
+	if err := w.resetFailedWork(context.Background(), work); err != nil {
 		return err
 	}
 	seen := make(map[string]bool, len(work))
@@ -485,6 +484,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			key := issueKey(issue)
 			workMu.Lock()
 			state := work[key]
+			// hadLocalRecord captures, before any reset below, whether this
+			// instance already had a record of this issue (persisted from a
+			// prior run or seen earlier this run). Its absence means the
+			// issue was picked up fresh, so no other instance can plausibly
+			// believe it already owns it.
+			hadLocalRecord := restored[key] || seen[key]
 			reconcileCompleted := isProjectTarget(issue.Target) && state.Status == "completed"
 			staleRestoredState := (restored[key] || reconcileCompleted) && !workStateMatchesRemote(issue.Target, issue, state)
 			if staleRestoredState {
@@ -498,11 +503,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 			_, isActive := active[key]
 			wasActive := work[key].Status == "active"
 			wasFailed := work[key].Status == "failed"
+			wasCompleted := work[key].Status == "completed"
 			workMu.Unlock()
-			if issue.Number > 0 && (wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, seen[key], w.ReadyState)) {
+			if issue.Number > 0 && (wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState)) {
 				seen[key] = true
 				delete(restored, key)
-				newIssues = append(newIssues, pendingIssue{issue: issue, session: AgentSession{
+				// A known local failure or an active resume is unambiguously
+				// this instance's own work; anything else reappearing after
+				// having a local record is a reclaim that must be negotiated
+				// through the comment protocol before dispatch.
+				contested := hadLocalRecord && !wasFailed && !wasActive
+				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: AgentSession{
 					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
 					// Persisted work is not an active worker after a daemon restart or
 					// a prior failure. If it has a complete session identity, resume it
@@ -545,11 +556,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 					}
 				}
 			}
-			if labeler != nil && !isProjectTarget(issue.Target) {
-				if err := labeler.SetIssueLabel(ctx, issueRepository(issue.Target, issue), issue.Number, true); err != nil {
-					return err
-				}
-			}
 			if w.Status != nil {
 				if err := w.Status.SetIssueStatus(ctx, issue.Target, issue, "In Progress"); err != nil {
 					return err
@@ -558,7 +564,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			// Contested issues already posted their starting/continuing claim
 			// during negotiation. Uncontested first-time pickups still need to
 			// announce ownership so other instances know it's spoken for.
-			if w.Comments != nil && !session.Resume && !hasLabel(issue, agentStartedLabel) {
+			if w.Comments != nil && !session.Resume && !pending.contested {
 				repo := issueRepository(issue.Target, issue)
 				if err := w.Comments.PostComment(ctx, repo, issue.Number, claimComment(w.Identity, false)); err != nil {
 					w.logf("issue #%d failed to post ownership claim: %v", issue.Number, err)
@@ -692,9 +698,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
 						}
 					}
-					if labeler != nil && !isProjectTarget(i.Target) {
-						_ = labeler.SetIssueLabel(context.Background(), issueRepository(i.Target, i), i.Number, false)
-					}
 					workMu.Lock()
 					key := issueKey(i)
 					delete(active, key)
@@ -728,9 +731,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, "Done"); statusErr != nil {
 							w.logf("issue #%d failed to update project status: %v", i.Number, statusErr)
 						}
-					}
-					if labeler != nil && !isProjectTarget(i.Target) {
-						_ = labeler.SetIssueLabel(context.Background(), issueRepository(i.Target, i), i.Number, false)
 					}
 					workMu.Lock()
 					key := issueKey(i)
@@ -952,7 +952,7 @@ func (w *Glorp) logWebhookEvent(event WebhookEvent) {
 	}
 }
 
-func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState, labeler IssueLabeler) error {
+func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState) error {
 	for key, state := range work {
 		if state.Status != "failed" {
 			continue
@@ -967,11 +967,6 @@ func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState, 
 			return fmt.Errorf("invalid failed work key %q: %w", key, err)
 		}
 		issue := Issue{Number: number, Target: target}
-		if labeler != nil && !isProjectTarget(target) {
-			if err := labeler.SetIssueLabel(ctx, issueRepository(target, issue), number, false); err != nil {
-				return fmt.Errorf("reset failed issue #%d label: %w", number, err)
-			}
-		}
 		if w.Status != nil {
 			readyState := projectReadyState(w.ReadyState, "")
 			if err := w.Status.SetIssueStatus(ctx, target, issue, readyState); err != nil {
@@ -1014,16 +1009,15 @@ func issueNumbers(issues []Issue) string {
 	}
 	return strings.Join(numbers, ", ")
 }
-func hasLabel(issue Issue, name string) bool {
-	for _, label := range issue.Labels {
-		if label.Name == name {
-			return true
-		}
-	}
-	return false
-}
 
-func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen bool, readyState string) bool {
+// shouldDispatchIssue decides whether a repository or project issue that is
+// not already active locally is a dispatch candidate. Remote ownership can
+// no longer be read synchronously for repository issues (no label survives
+// to check), so a never-seen issue is always a candidate, and one this
+// instance has already seen is a candidate again only if it wasn't already
+// completed; negotiateContestedIssues is what asks, via comments, whether
+// another instance already owns a reappearing candidate.
+func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, wasCompleted, seen bool, readyState string) bool {
 	if isActive {
 		return false
 	}
@@ -1042,7 +1036,7 @@ func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, seen boo
 	if !seen {
 		return true
 	}
-	return hasLabel(issue, agentStartedLabel)
+	return !wasCompleted
 }
 
 func workStateMatchesRemote(target string, issue Issue, state workState) bool {
@@ -1051,7 +1045,13 @@ func workStateMatchesRemote(target string, issue Issue, state workState) bool {
 		if isProjectTarget(target) {
 			return strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress")
 		}
-		return hasLabel(issue, agentStartedLabel)
+		// Repository work state persists only in this instance's own
+		// .glorp.json, and there is no remote label left to cross-check.
+		// Trust it only when it carries enough identity to actually resume
+		// (a session ID and agent); an incomplete record can't be resumed
+		// reliably, so treat it as stale and let a fresh pickup negotiate
+		// ownership through the comment protocol instead.
+		return state.SessionID != "" && state.Agent != ""
 	case "completed":
 		if !isProjectTarget(target) {
 			// Repository issue queries only return open issues, so an issue present

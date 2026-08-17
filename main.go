@@ -545,7 +545,6 @@ type managedLabel struct {
 
 var managedLabels = []managedLabel{
 	{name: "agent-ready", color: "0E8A16", description: "Issue is ready for an agent"},
-	{name: "agent-started", color: "FBCA04", description: "An agent is working on this issue"},
 }
 
 func (g GHCLI) EnsureLabels(ctx context.Context, repo string) error {
@@ -824,25 +823,6 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 		issue.DependsOn = append(issue.DependsOn, dependency)
 	}
 	slices.SortFunc(issue.DependsOn, func(a, b IssueDependency) int { return a.Number - b.Number })
-	return nil
-}
-
-func (g GHCLI) SetIssueLabel(ctx context.Context, repo string, number int, add bool) error {
-	target, err := parseTarget(repo)
-	if err != nil {
-		return err
-	}
-	if target.isProject {
-		return nil
-	}
-	action := "--remove-label"
-	if add {
-		action = "--add-label"
-	}
-	cmd := exec.CommandContext(ctx, g.Binary, "issue", "edit", fmt.Sprintf("%d", number), "--repo", repo, action, "agent-started")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s agent-started label on issue #%d: %w: %s", strings.TrimPrefix(action, "--"), number, err, strings.TrimSpace(string(out)))
-	}
 	return nil
 }
 
