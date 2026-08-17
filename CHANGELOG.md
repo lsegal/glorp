@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Remove the `agent-started` issue label; the cooperative comment-based handoff protocol is now the sole authority for whether a repository issue is claimed.
 - Add a cooperative handoff protocol so multiple glorp instances sharing a repository negotiate ownership through signed `/glorp:UUID` comments ("Does anyone have this?" / "Starting work on this issue" / "Continuing work on this issue" / "I am working on this") before reaping a ticket that already looks claimed, instead of silently duplicating or abandoning work. Each instance gets a random in-memory identity, and the last instance to claim a ticket wins.
 - Watch for a competing starting/continuing claim from another instance while an agent is actively working an issue, cooperatively stopping the run and removing its local checkout directory if one takes over mid-run.
 - Subscribe repository webhooks to GitHub's `issue_comment` event so a `Does anyone have this?` handoff comment gets an immediate `I am working on this` reply from the owning instance instead of waiting for the next poll.

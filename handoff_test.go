@@ -239,15 +239,15 @@ func TestOwnershipTargetForFallsBackToIssueWithoutOpenPullRequest(t *testing.T) 
 
 func TestNegotiateContestedIssuesFiltersDeclinedClaims(t *testing.T) {
 	comments := newFakeCommentClient()
-	// Issue #1 is contested and another instance answers; issue #2 has no
-	// label so it passes straight through without negotiation.
+	// Issue #1 is contested and another instance answers; issue #2 is
+	// uncontested so it passes straight through without negotiation.
 	comments.inject("o/r", 1, Comment{})
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool {
 		comments.inject("o/r", 1, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: time.Now()})
 		return true
 	}}
 	pending := []pendingIssue{
-		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r", Labels: []IssueLabel{{Name: agentStartedLabel}}}},
+		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true},
 		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}},
 	}
 	declinedKey := issueKey(pending[0].issue)
@@ -265,7 +265,7 @@ func TestNegotiateContestedIssuesSkipsResumedSessions(t *testing.T) {
 	comments := newFakeCommentClient()
 	w := &Glorp{Comments: comments, Identity: "SELF"}
 	pending := []pendingIssue{
-		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r", Labels: []IssueLabel{{Name: agentStartedLabel}}}, session: AgentSession{Resume: true}},
+		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true, session: AgentSession{Resume: true}},
 	}
 	result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{})
 	if len(result) != 1 {

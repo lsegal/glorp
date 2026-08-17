@@ -115,19 +115,6 @@ type fakeLabelEnsurer struct {
 	err    error
 }
 
-type fakeIssueLabeler struct {
-	labels []bool
-}
-
-func (f *fakeIssueLabeler) EnsureLabels(_ context.Context, _ string) error {
-	return nil
-}
-
-func (f *fakeIssueLabeler) SetIssueLabel(_ context.Context, _ string, _ int, add bool) error {
-	f.labels = append(f.labels, add)
-	return nil
-}
-
 type fakeIssueStatuser struct {
 	mu       sync.Mutex
 	statuses []string
@@ -574,7 +561,7 @@ func TestGlorpPeriodicPollResyncsRepositoryIssueInWebhookMode(t *testing.T) {
 	}
 	src := &fakeSource{batches: [][]Issue{
 		{{Number: 7}},
-		{{Number: 7, Labels: []IssueLabel{{Name: agentStartedLabel}}}},
+		{{Number: 7}},
 	}}
 	r := &fakeRunner{release: make(chan struct{})}
 	w := &Glorp{
@@ -604,7 +591,7 @@ func TestGlorpPeriodicPollResyncsRepositoryIssueInWebhookMode(t *testing.T) {
 	}
 	cancel()
 	<-done
-	t.Fatal("periodic poll did not reclaim repository issue with agent-started label")
+	t.Fatal("periodic poll did not resync stale completed repository issue")
 }
 
 func TestGlorpShowsAgentOutputInJobSnapshot(t *testing.T) {
@@ -731,34 +718,6 @@ func TestGlorpUpdatesProjectStatus(t *testing.T) {
 	}
 }
 
-func TestGlorpDoesNotLabelProjectIssues(t *testing.T) {
-	r := &fakeRunner{release: make(chan struct{})}
-	labels := &fakeIssueLabeler{}
-	status := &fakeIssueStatuser{}
-	w := &Glorp{
-		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
-		Issues: &fakeSource{batches: [][]Issue{{{Number: 7, ProjectStatus: "Todo"}}}}, Runner: r, Labels: labels, Status: status,
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- w.Run(ctx) }()
-	time.Sleep(20 * time.Millisecond)
-	close(r.release)
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if len(labels.labels) != 0 {
-		t.Fatalf("project issue labels = %v, want no label changes", labels.labels)
-	}
-	status.mu.Lock()
-	defer status.mu.Unlock()
-	if got, want := status.statuses, []string{"In Progress", "Done"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("project statuses = %v, want %v", got, want)
-	}
-}
 func TestInvalidRepo(t *testing.T) {
 	w := &Glorp{Repo: "bad", Interval: time.Second, Concurrency: 1}
 	if w.Run(context.Background()) == nil {
@@ -793,20 +752,16 @@ func TestGlorpResetsFailedWorkOnStart(t *testing.T) {
 	if err := saveWorkState(statePath, map[int]workState{7: {Status: "failed"}, 8: {Status: "completed"}}); err != nil {
 		t.Fatal(err)
 	}
-	labels := &fakeIssueLabeler{}
 	status := &fakeIssueStatuser{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})},
-		Labels: labels, Status: status,
+		Status: status,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := w.Run(ctx); err != nil {
 		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(labels.labels, []bool{false}) {
-		t.Fatalf("labels = %v, want [false]", labels.labels)
 	}
 	status.mu.Lock()
 	defer status.mu.Unlock()
@@ -821,20 +776,16 @@ func TestGlorpResetsFailedProjectWorkOnStart(t *testing.T) {
 	if err := saveWorkState(statePath, map[int]workState{7: {Status: "failed"}}); err != nil {
 		t.Fatal(err)
 	}
-	labels := &fakeIssueLabeler{}
 	status := &fakeIssueStatuser{}
 	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})},
-		Labels: labels, Status: status, ReadyState: "Agent Queue",
+		Status: status, ReadyState: "Agent Queue",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := w.Run(ctx); err != nil {
 		t.Fatal(err)
-	}
-	if len(labels.labels) != 0 {
-		t.Fatalf("project labels = %v, want no changes", labels.labels)
 	}
 	status.mu.Lock()
 	defer status.mu.Unlock()
@@ -1207,7 +1158,7 @@ func TestGlorpResumesPersistedSessionWithOriginalAgent(t *testing.T) {
 	runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 1)}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
-		Issues: &fakeSource{batches: [][]Issue{{{Number: 7, Labels: []IssueLabel{{Name: agentStartedLabel}}}}}}, Runner: runner,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: runner,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -1486,51 +1437,47 @@ func TestGlorpPersistsSessionIDAfterCompletion(t *testing.T) {
 	}
 }
 
-func TestHasAgentStartedLabel(t *testing.T) {
-	issue := Issue{Labels: []IssueLabel{{Name: "agent-ready"}, {Name: agentStartedLabel}}}
-	if !hasLabel(issue, agentStartedLabel) {
-		t.Fatal("agent-started label was not found")
-	}
-}
-
 func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
 	project := "https://github.com/users/lsegal/projects/3"
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, "") {
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, false, "") {
 		t.Fatal("new in-progress project issue was dispatched")
 	}
 	for _, status := range []string{"Done", "Completed"} {
-		if shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, "") {
+		if shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, false, "") {
 			t.Fatalf("new %s project issue was dispatched", status)
 		}
 	}
 	for _, status := range []string{"Todo", "TODO", "Ready", "ready"} {
-		if !shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, "") {
+		if !shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, false, "") {
 			t.Fatalf("new %s project issue was not dispatched", status)
 		}
 	}
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "Backlog"}, false, false, false, "") {
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Backlog"}, false, false, false, false, "") {
 		t.Fatal("new backlog project issue was dispatched")
 	}
-	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Agent Queue"}, false, false, false, "agent queue") {
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Agent Queue"}, false, false, false, false, "agent queue") {
 		t.Fatal("configured ready project issue was not dispatched")
 	}
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "Ready"}, false, false, false, "Agent Queue") {
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Ready"}, false, false, false, false, "Agent Queue") {
 		t.Fatal("default ready status was used despite configured ready state")
 	}
-	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, true, "") {
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, true, "") {
 		t.Fatal("in-progress project issue was not reclaimed")
 	}
-	if !shouldDispatchIssue(project, Issue{ProjectStatus: "in progress"}, false, false, true, "") {
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "in progress"}, false, false, false, true, "") {
 		t.Fatal("case-insensitive in-progress project issue was not reclaimed")
 	}
-	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, true, "") {
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "Todo"}, false, false, false, true, "") {
 		t.Fatal("previously seen project issue moved back to Todo was not dispatched")
 	}
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "Backlog"}, false, false, true, "") {
+	if shouldDispatchIssue(project, Issue{ProjectStatus: "Backlog"}, false, false, false, true, "") {
 		t.Fatal("previously seen backlog project issue was dispatched")
 	}
-	if !shouldDispatchIssue("o/r", Issue{Labels: []IssueLabel{{Name: agentStartedLabel}}}, false, false, true, "") {
-		t.Fatal("agent-started repository issue was not reclaimed")
+	if !shouldDispatchIssue("o/r", Issue{}, false, false, false, true, "") {
+		t.Fatal("previously seen repository issue was not made a reclaim candidate")
+	}
+	if shouldDispatchIssue("o/r", Issue{}, false, false, true, true, "") {
+		t.Fatal("previously completed repository issue was redispatched")
 	}
 }
 
@@ -1543,8 +1490,8 @@ func TestRestoredWorkStateMatchesRemote(t *testing.T) {
 		state  workState
 		want   bool
 	}{
-		{name: "repository active matches label", target: "o/r", issue: Issue{Labels: []IssueLabel{{Name: agentStartedLabel}}}, state: workState{Status: "active"}, want: true},
-		{name: "repository active missing label", target: "o/r", state: workState{Status: "active"}},
+		{name: "repository active session is resumable", target: "o/r", state: workState{Status: "active", SessionID: "s", Agent: "codex"}, want: true},
+		{name: "repository active session missing agent is stale", target: "o/r", state: workState{Status: "active", SessionID: "s"}},
 		{name: "repository completed issue is open", target: "o/r", state: workState{Status: "completed"}},
 		{name: "project active matches status", target: project, issue: Issue{ProjectStatus: "In Progress"}, state: workState{Status: "active"}, want: true},
 		{name: "project active reset to ready", target: project, issue: Issue{ProjectStatus: "Ready"}, state: workState{Status: "active"}},
