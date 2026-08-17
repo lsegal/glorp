@@ -145,6 +145,11 @@ type Glorp struct {
 	// Comments drives the cooperative handoff handshake (issue #214). When
 	// nil, ownership negotiation is skipped and dispatch behaves as before.
 	Comments CommentClient
+	// Webhooks re-reconciles push webhooks on every periodic poll so a
+	// repository that joins a project board after startup gets a webhook
+	// without a restart (issue #238). Nil skips reconciliation, as in poll
+	// mode where no webhooks are configured at all.
+	Webhooks func(context.Context)
 	// ownershipWait overrides the reap grace-period wait in tests.
 	ownershipWait func(context.Context) bool
 	logMu         sync.Mutex
@@ -841,6 +846,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("stopped (tasks: %d running, %d queued, %d completed, %d failed)", running, queued, completed, failed)
 			return nil
 		case <-tick:
+			if w.Webhooks != nil {
+				w.Webhooks(ctx)
+			}
 			if err := poll(); err != nil {
 				if ctx.Err() != nil {
 					w.logf("shutdown requested during poll; waiting for running tasks to finish")

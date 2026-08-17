@@ -1960,3 +1960,37 @@ func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
 		t.Fatal("closed dependency still blocks issue")
 	}
 }
+
+// Push webhooks have to be reconciled while the daemon runs, not only at
+// startup, so a repository added to a project board later gets a webhook
+// without a restart (issue #238).
+func TestGlorpReconcilesWebhooksOnPeriodicPoll(t *testing.T) {
+	src := &fakeSource{batches: [][]Issue{{}}}
+	reconciled := make(chan struct{}, 1)
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
+		Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, UseWebhooks: true,
+		fallbackInterval: time.Millisecond,
+		Webhooks: func(context.Context) {
+			select {
+			case reconciled <- struct{}{}:
+			default:
+			}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-reconciled:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("periodic poll did not reconcile webhooks")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -31,38 +31,50 @@ type webhookSpec struct {
 	events  []string
 }
 
-func (g GHCLI) ConfigureWebhook(ctx context.Context, value, endpoint, secret string) error {
+// ConfigureWebhook ensures every webhook the target needs exists, and reports
+// the names of the ones it had to create. Existing webhooks pointing at the
+// endpoint are left untouched, so calling this repeatedly against the same
+// target is safe.
+func (g GHCLI) ConfigureWebhook(ctx context.Context, value, endpoint, secret string) ([]string, error) {
 	target, err := parseTarget(value)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	specs, err := g.webhookSpecs(ctx, target)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var created []string
 	failures := make([]error, 0, len(specs))
 	for _, spec := range specs {
-		if err := g.configureWebhookSpec(ctx, spec, endpoint, secret); err != nil {
+		added, err := g.configureWebhookSpec(ctx, spec, endpoint, secret)
+		if err != nil {
 			failures = append(failures, err)
+			continue
+		}
+		if added {
+			created = append(created, spec.name)
 		}
 	}
 	if len(failures) == 0 {
-		return nil
+		return created, nil
 	}
 	if len(failures) == len(specs) {
-		return errors.Join(failures...)
+		return created, errors.Join(failures...)
 	}
-	return fmt.Errorf("%w (%d of %d): %w", errWebhookPartiallyConfigured, len(failures), len(specs), errors.Join(failures...))
+	return created, fmt.Errorf("%w (%d of %d): %w", errWebhookPartiallyConfigured, len(failures), len(specs), errors.Join(failures...))
 }
 
-func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpoint, secret string) error {
+// configureWebhookSpec creates the spec's webhook when the endpoint is not
+// already registered, reporting whether it created one.
+func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpoint, secret string) (bool, error) {
 	output, err := g.api(ctx, spec.apiPath, "")
 	if err != nil {
-		return webhookAccessError("list", spec, err)
+		return false, webhookAccessError("list", spec, err)
 	}
 	var hooks []managedHook
 	if err := json.Unmarshal(output, &hooks); err != nil {
-		return fmt.Errorf("decode webhooks for %s: %w", spec.name, err)
+		return false, fmt.Errorf("decode webhooks for %s: %w", spec.name, err)
 	}
 	found := false
 	for _, hook := range hooks {
@@ -72,12 +84,12 @@ func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpo
 		}
 		if ngrokURL(hook.Config.URL) {
 			if _, err := g.api(ctx, fmt.Sprintf("%s/%d", spec.apiPath, hook.ID), "DELETE"); err != nil {
-				return webhookAccessError(fmt.Sprintf("remove old ngrok webhook %d from", hook.ID), spec, err)
+				return false, webhookAccessError(fmt.Sprintf("remove old ngrok webhook %d from", hook.ID), spec, err)
 			}
 		}
 	}
 	if found {
-		return nil
+		return false, nil
 	}
 	config := map[string]interface{}{
 		"url":          endpoint,
@@ -94,12 +106,66 @@ func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpo
 		"config": config,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := g.api(ctx, spec.apiPath, "POST", string(body)); err != nil {
-		return webhookAccessError("create", spec, err)
+		return false, webhookAccessError("create", spec, err)
 	}
-	return nil
+	return true, nil
+}
+
+// webhookConfigurer configures the push webhooks a target needs, reporting the
+// names of the webhooks it newly created.
+type webhookConfigurer interface {
+	ConfigureWebhook(ctx context.Context, target, endpoint, secret string) ([]string, error)
+}
+
+// webhookReconciler re-runs webhook configuration for every target while the
+// daemon runs. The repositories backing a project board are enumerated when
+// the board's webhooks are configured, so a repository added to the board
+// after startup would otherwise have no webhook until glorp restarts (issue
+// #238). ConfigureWebhook only creates a webhook whose endpoint is not already
+// registered, so reconciling repeatedly neither duplicates webhooks nor churns
+// existing ones. Failures are reported and non-fatal: the repositories that
+// could be configured keep receiving pushes, and the rest stay on the
+// periodic poller.
+type webhookReconciler struct {
+	gh       webhookConfigurer
+	targets  []string
+	endpoint string
+	secret   string
+	logf     func(string, ...interface{})
+	// reported remembers the last failure logged per target so a persistent
+	// error is reported once instead of on every cycle. The reconciler runs
+	// only from the daemon's poll loop, so this needs no locking.
+	reported map[string]string
+}
+
+func newWebhookReconciler(gh webhookConfigurer, targets []string, endpoint, secret string, logf func(string, ...interface{})) *webhookReconciler {
+	return &webhookReconciler{gh: gh, targets: targets, endpoint: endpoint, secret: secret, logf: logf, reported: map[string]string{}}
+}
+
+func (r *webhookReconciler) reconcile(ctx context.Context) {
+	for _, target := range r.targets {
+		created, err := r.gh.ConfigureWebhook(ctx, target, r.endpoint, r.secret)
+		for _, name := range created {
+			r.logf("configured GitHub webhook for %s", name)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		message := ""
+		if err != nil {
+			message = fmt.Sprintf("webhook reconciliation for %s: %v", target, err)
+		}
+		if r.reported[target] == message {
+			continue
+		}
+		r.reported[target] = message
+		if message != "" {
+			r.logf("%s", message)
+		}
+	}
 }
 
 // webhookSpecs lists every webhook a target needs. A repository target and an
