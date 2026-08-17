@@ -19,7 +19,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,86 +34,108 @@ var version = "dev"
 
 var errProjectIssueNotFound = errors.New("project issue not found")
 
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "upgrade" {
-		if len(os.Args) > 2 {
-			fmt.Fprintln(os.Stderr, "usage: glorp upgrade")
-			os.Exit(2)
-		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		repo := upgradeRepo(os.Getenv)
-		if err := runUpgrade(ctx, os.Stdout, func(ctx context.Context) *exec.Cmd {
-			return upgradeCommand(ctx, runtime.GOOS, repo)
-		}); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
+// watchFlagSet builds the `glorp watch` flag set. It is also used, without
+// being parsed, to print the command's defaults in `glorp help watch`.
+func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
+	flags := flag.NewFlagSet("watch", flag.ExitOnError)
+	flags.Duration("interval", 30*time.Second, "time between GitHub issue polls")
+	flags.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
+	flags.String("listen", ":0", "address for the GitHub webhook server")
+	flags.String("webhook-path", "/webhook", "path for GitHub webhook deliveries")
+	flags.String("webhook-secret", "", "optional GitHub webhook secret")
+	flags.String("ngrok-binary", "ngrok", "ngrok executable")
+	flags.String("ngrok-api", "http://127.0.0.1:4040", "ngrok local API URL")
+	flags.String("ui", "web", "user interface: web, tui, or none")
+	flags.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
+	flags.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
+	flags.Bool("yolo", false, "disable agent sandboxes and permission checks")
+	flags.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
+	flags.Var(agents, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
+	flags.String("ready-state", "", "project status that marks an issue ready for an agent")
+	flags.String("codex-binary", "codex", "Codex executable")
+	flags.String("claude-binary", "claude", "Claude executable")
+	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
+	flags.Var(filter, "filter", "GitHub issue search filter (repeatable)")
+	flags.Bool("all-issues", false, "disable the default issue filter")
+	return flags
+}
+
+// commandFlags returns the flag set backing a subcommand so help can print its
+// defaults, or nil for commands that take no flags.
+func commandFlags(name string) *flag.FlagSet {
+	switch name {
+	case "watch":
+		return watchFlagSet(&agentFlag{values: []agentSpec{{Name: "codex"}}}, &filterFlag{values: []string{defaultIssueFilter}})
+	case "ui":
+		return uiFlagSet()
 	}
-	showVersion := flag.Bool("version", false, "print the version and exit")
-	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
-	poll := flag.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
-	listen := flag.String("listen", ":0", "address for the GitHub webhook server")
-	webhookPath := flag.String("webhook-path", "/webhook", "path for GitHub webhook deliveries")
-	webhookSecret := flag.String("webhook-secret", "", "optional GitHub webhook secret")
-	ngrokBinary := flag.String("ngrok-binary", "ngrok", "ngrok executable")
-	ngrokAPI := flag.String("ngrok-api", "http://127.0.0.1:4040", "ngrok local API URL")
-	uiMode := flag.String("ui", "web", "user interface: web, tui, or none")
-	noUI := flag.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
-	webUIPort := flag.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
-	yolo := flag.Bool("yolo", false, "disable agent sandboxes and permission checks")
-	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
+	return nil
+}
+
+func runWatch(args []string) int {
 	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
-	flag.Var(&agents, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
-	readyState := flag.String("ready-state", "", "project status that marks an issue ready for an agent")
-	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
-	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
-	statePath := flag.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	filter := filterFlag{values: []string{defaultIssueFilter}}
-	flag.Var(&filter, "filter", "GitHub issue search filter (repeatable)")
-	allIssues := flag.Bool("all-issues", false, "disable the default issue filter")
-	flag.Parse()
-	if *showVersion {
-		fmt.Println(version)
-		return
+	flags := watchFlagSet(&agents, &filter)
+	flags.Usage = func() {
+		cmd, _ := lookupCommand("watch")
+		fmt.Fprintln(os.Stderr, cmd.usage)
+		flags.PrintDefaults()
 	}
-	targets := flag.Args()
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	interval := flagValue[time.Duration](flags, "interval")
+	poll := flagValue[bool](flags, "poll")
+	listen := flagValue[string](flags, "listen")
+	webhookPath := flagValue[string](flags, "webhook-path")
+	webhookSecret := flagValue[string](flags, "webhook-secret")
+	ngrokBinary := flagValue[string](flags, "ngrok-binary")
+	ngrokAPI := flagValue[string](flags, "ngrok-api")
+	uiMode := flagValue[string](flags, "ui")
+	noUI := flagValue[bool](flags, "no-ui")
+	webUIPort := flagValue[int](flags, "web-ui-port")
+	yolo := flagValue[bool](flags, "yolo")
+	concurrency := flagValue[int](flags, "concurrency")
+	readyState := flagValue[string](flags, "ready-state")
+	codexBinary := flagValue[string](flags, "codex-binary")
+	claudeBinary := flagValue[string](flags, "claude-binary")
+	statePath := flagValue[string](flags, "state")
+	allIssues := flagValue[bool](flags, "all-issues")
+	targets := flags.Args()
 	if len(targets) == 0 {
 		if repo, ok := originRemoteTarget(); ok {
 			targets = []string{repo}
 		}
 	}
 	if len(targets) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: glorp [flags] TARGET [TARGET ...]\n       glorp upgrade")
-		flag.PrintDefaults()
-		os.Exit(2)
+		flags.Usage()
+		return 2
 	}
-	if *interval <= 0 || *concurrency < 0 {
+	if interval <= 0 || concurrency < 0 {
 		fmt.Fprintln(os.Stderr, "interval must be positive and concurrency cannot be negative")
-		os.Exit(2)
+		return 2
 	}
-	mode, err := selectedUIMode(*uiMode, *noUI)
+	mode, err := selectedUIMode(uiMode, noUI)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return 2
 	}
-	if mode == "web" && (*webUIPort < 1 || *webUIPort > 65535) {
+	if mode == "web" && (webUIPort < 1 || webUIPort > 65535) {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
-		os.Exit(2)
+		return 2
 	}
-	limit := *concurrency
+	limit := concurrency
 	if limit == 0 {
 		limit = 3
 	}
-	binary := *codexBinary
+	binary := codexBinary
 	if agents.values[0].Name == "claude" {
-		binary = *claudeBinary
+		binary = claudeBinary
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(*readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
-	gh.Filter, gh.AllIssues = filter.String(), *allIssues
+	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
+	gh.Filter, gh.AllIssues = filter.String(), allIssues
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
@@ -130,18 +151,18 @@ func main() {
 		webUI, err = NewWebUI()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
-		listener, port, err := listenForWebUI(*webUIPort)
+		listener, port, err := listenForWebUI(webUIPort)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 		webServer = &http.Server{Handler: webUI}
 		stopFrontend, err := startWebUIFrontend(ctx, output)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "start web UI frontend: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		defer stopFrontend()
 		go func() {
@@ -162,9 +183,9 @@ func main() {
 	}
 	quota := combinedQuotaReader(namedQuotaReaders(agents.names(), func(agent string) string {
 		if agent == "claude" {
-			return *claudeBinary
+			return claudeBinary
 		}
-		return *codexBinary
+		return codexBinary
 	}))
 	var agentCursor *atomic.Uint64
 	if len(agents.values) > 1 {
@@ -173,17 +194,17 @@ func main() {
 	identity, err := newIdentity()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
-	if !*poll {
-		listener, err := listenForWebhooks(*listen)
+	if !poll {
+		listener, err := listenForWebhooks(listen)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
-		server = &http.Server{Addr: *listen, Handler: WebhookHandler{Events: events, Secret: *webhookSecret, WebhookPath: *webhookPath}}
+		server = &http.Server{Addr: listen, Handler: WebhookHandler{Events: events, Secret: webhookSecret, WebhookPath: webhookPath}}
 		go func() {
 			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "webhook server: %v\n", err)
@@ -191,30 +212,30 @@ func main() {
 		}()
 		defer server.Close()
 		listenAddr := listener.Addr().String()
-		fmt.Fprintf(output, "webhook server listening on %s%s\n", listenAddr, *webhookPath)
+		fmt.Fprintf(output, "webhook server listening on %s%s\n", listenAddr, webhookPath)
 		fmt.Fprintf(output, "starting ngrok tunnel for %s\n", listenAddr)
-		tunnel, err := startNgrok(ctx, *ngrokBinary, listenAddr, *ngrokAPI, output)
+		tunnel, err := startNgrok(ctx, ngrokBinary, listenAddr, ngrokAPI, output)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 		defer tunnel.Close()
-		endpoint, err := webhookURL(tunnel.URL(), *webhookPath)
+		endpoint, err := webhookURL(tunnel.URL(), webhookPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 		fmt.Fprintf(output, "ngrok tunnel ready at %s\n", tunnel.URL())
 		configured := 0
 		for _, target := range targets {
-			if _, err := gh.ConfigureWebhook(ctx, target, endpoint, *webhookSecret); err != nil {
+			if _, err := gh.ConfigureWebhook(ctx, target, endpoint, webhookSecret); err != nil {
 				if errors.Is(err, errProjectWebhookUnavailable) {
 					fmt.Fprintln(output, err)
 					continue
 				}
 				if !errors.Is(err, errWebhookPartiallyConfigured) {
 					fmt.Fprintln(os.Stderr, err)
-					os.Exit(1)
+					return 1
 				}
 				fmt.Fprintln(output, err)
 			}
@@ -227,18 +248,39 @@ func main() {
 		// A project board can gain a repository that was not on it at startup,
 		// and that repository has no webhook until the target is configured
 		// again, so keep reconciling while the daemon runs (issue #238).
-		w.Webhooks = newWebhookReconciler(gh, targets, endpoint, *webhookSecret, w.logf).reconcile
+		w.Webhooks = newWebhookReconciler(gh, targets, endpoint, webhookSecret, w.logf).reconcile
 	}
 	if err := w.Run(ctx); err != nil {
 		if ui != nil {
 			ui.program.Quit()
 		}
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 	if ui != nil {
 		ui.program.Quit()
 	}
+	return 0
+}
+
+// flagValue reads a parsed flag's value from a flag set by name, keeping the
+// watch command's long option list readable without threading two dozen
+// pointers through it.
+func flagValue[T any](flags *flag.FlagSet, name string) T {
+	var zero T
+	found := flags.Lookup(name)
+	if found == nil {
+		return zero
+	}
+	getter, ok := found.Value.(flag.Getter)
+	if !ok {
+		return zero
+	}
+	value, ok := getter.Get().(T)
+	if !ok {
+		return zero
+	}
+	return value
 }
 
 func listenForWebhooks(address string) (net.Listener, error) {
