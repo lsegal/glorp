@@ -73,74 +73,91 @@ The command re-runs the installer for the current platform, so it picks up the l
 
 ## Quick start
 
+Every glorp invocation starts with a subcommand:
+
+| Command | Description |
+| --- | --- |
+| `glorp watch [flags] [TARGET ...]` | Watch GitHub targets and dispatch agents for ready issues. |
+| `glorp ui [flags]` | Open a running glorp dashboard in a browser. |
+| `glorp version` | Print the glorp version. |
+| `glorp upgrade` | Upgrade glorp to the latest release. |
+| `glorp help [command]` | Show help for glorp or one of its commands. |
+
 Options must appear before the first target. A target can be an `OWNER/REPO`, a GitHub repository URL, a GitHub Project URL, or a GitHub Discussions board URL.
 
 Watch a repository using the default Codex agent and webhook mode:
 
 ```sh
-glorp owner/repo
+glorp watch owner/repo
 ```
 
 By default, repository targets select open issues authored by the authenticated GitHub user. Watch all open issues instead:
 
 ```sh
-glorp --all-issues owner/repo
+glorp watch --all-issues owner/repo
 ```
 
 Select issues using GitHub issue-search syntax:
 
 ```sh
-glorp --filter "label:agent-ready" --filter "-label:blocked" owner/repo
+glorp watch --filter "label:agent-ready" --filter "-label:blocked" owner/repo
 ```
 
 Run without ngrok or managed webhooks by polling every 30 seconds:
 
 ```sh
-glorp --poll --interval 30s owner/repo
+glorp watch --poll --interval 30s owner/repo
 ```
 
 The browser dashboard is available at `http://localhost:8765` by default. If that port is occupied, glorp uses the next available port and logs the selected URL. Choose a different starting port, switch to the terminal dashboard, or disable UI entirely:
 
 ```sh
-glorp --web-ui-port 9000 owner/repo
-glorp --ui tui owner/repo
-glorp --ui none owner/repo
+glorp watch --web-ui-port 9000 owner/repo
+glorp watch --ui tui owner/repo
+glorp watch --ui none owner/repo
 ```
 
 `--no-ui` remains available as an alias for `--ui none`:
 
 ```sh
-glorp --no-ui owner/repo
+glorp watch --no-ui owner/repo
+```
+
+Open a running dashboard in a browser without hunting for its URL. `glorp ui` scans localhost from port 8765 upward, and when several instances are running it shows an interactive picker (or opens the lowest port when stdout is not a terminal):
+
+```sh
+glorp ui
+glorp ui --port 9000
 ```
 
 Use Claude Code and run up to three agent jobs concurrently:
 
 ```sh
-glorp --agent claude --concurrency 3 owner/repo
+glorp watch --agent claude --concurrency 3 owner/repo
 ```
 
 Load balance work evenly across Codex and Claude by repeating `--agent`:
 
 ```sh
-glorp --agent codex --agent claude --concurrency 4 owner/repo
+glorp watch --agent codex --agent claude --concurrency 4 owner/repo
 ```
 
 Pick the model and reasoning level per agent with `--agent AGENT/MODEL:LEVEL`:
 
 ```sh
-glorp --agent codex/gpt-5.6:high --agent claude/opus:medium --concurrency 4 owner/repo
+glorp watch --agent codex/gpt-5.6:high --agent claude/opus:medium --concurrency 4 owner/repo
 ```
 
 Allow agents to run without sandbox or permission checks:
 
 ```sh
-glorp --yolo owner/repo
+glorp watch --yolo owner/repo
 ```
 
 Watch several repositories and projects in one process:
 
 ```sh
-glorp --concurrency 3 owner/first owner/second https://github.com/orgs/example/projects/3
+glorp watch --concurrency 3 owner/first owner/second https://github.com/orgs/example/projects/3
 ```
 
 The concurrency limit is shared across all targets. GitHub webhook deliveries cause an immediate refresh, while `--interval` controls the periodic synchronization cadence.
@@ -172,15 +189,29 @@ Glorp serves either a localhost-only browser dashboard or an interactive termina
 ## CLI reference
 
 ```text
-glorp [options] [TARGET [TARGET ...]]
+glorp <command> [arguments]
+```
+
+| Command | Description |
+| --- | --- |
+| `watch` | Watch GitHub targets and dispatch agents for ready issues. |
+| `ui` | Open a running glorp dashboard in a browser. |
+| `version` | Print the glorp version. |
+| `upgrade` | Upgrade glorp to the latest release. |
+| `help` | Show help for glorp or one of its commands. |
+
+`glorp --version` and `glorp -h` are accepted as aliases for `glorp version` and `glorp help`. Running `glorp` with no command, or with a target instead of a command, prints the command list and exits with status 2.
+
+### `glorp watch`
+
+```text
+glorp watch [options] [TARGET [TARGET ...]]
 ```
 
 If no `TARGET` is given, glorp uses the current directory's `origin` git remote when it points to a GitHub repository.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `-h`, `--help` | — | Print command usage and option defaults. |
-| `--version` | `false` | Print the glorp version and exit. |
 | `--agent AGENT[/MODEL][:LEVEL]` | `codex` | Agent to run, with an optional model and reasoning level, such as `claude`, `claude/opus`, or `codex/gpt-5.6:high`. Supported agents are `codex` and `claude`; supported levels are `low`, `medium`, and `high`. Repeatable; when given more than once, new issues are load balanced evenly across the listed agents, each using its own model and level. |
 | `--all-issues` | `false` | Disable the default issue-search filter and consider all open issues. |
 | `--claude-binary PATH` | `claude` | Claude Code executable name or path. |
@@ -201,6 +232,18 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--webhook-secret SECRET` | empty | Shared secret used to verify GitHub `X-Hub-Signature-256` signatures. The same secret is set when glorp creates each webhook. |
 | `--yolo` | `false` | Disable the selected agent's sandbox, approval, and permission checks. Codex receives `--dangerously-bypass-approvals-and-sandbox`; Claude receives `--dangerously-skip-permissions`. |
 
+### `glorp ui`
+
+```text
+glorp ui [options]
+```
+
+Finds glorp dashboards by probing 16 consecutive localhost ports and opens one in the default browser. A port only counts as a dashboard when it answers glorp's own state endpoint, so unrelated local servers are skipped. When exactly one instance is found it opens directly; with several, an interactive picker appears on a terminal and the lowest port is opened otherwise. Exits with status 1 when nothing is running.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--port PORT` | `8765` | First localhost port to scan. |
+
 Supported target forms are:
 
 ```text
@@ -218,7 +261,7 @@ discussions:OWNER/REPOSITORY
 discussions:CATEGORY
 ```
 
-The `projects:` and `discussions:` forms are shorthands for the URLs above. The `OWNER/REPOSITORY` prefix may be omitted inside a git checkout whose `origin` remote points at a GitHub repository, so `glorp projects:3 discussions:q-a` watches project 3 and the Q&A discussions category of the current repository. A discussions category is named by its URL slug (`q-a`) or its display name (`Q&A`); without one, every category is watched.
+The `projects:` and `discussions:` forms are shorthands for the URLs above. The `OWNER/REPOSITORY` prefix may be omitted inside a git checkout whose `origin` remote points at a GitHub repository, so `glorp watch projects:3 discussions:q-a` watches project 3 and the Q&A discussions category of the current repository. A discussions category is named by its URL slug (`q-a`) or its display name (`Q&A`); without one, every category is watched.
 
 A Discussions board target (`https://github.com/OWNER/REPOSITORY/discussions`) is watched differently from repository and Project targets: instead of the `gh-fix` skill, glorp dispatches the read-only `gh-discuss` skill for each new top-level Discussion thread that has no replies yet. `gh-discuss` only reads the repository to answer the question and posts a single top-level reply when it can do so accurately and positively; otherwise it leaves the thread untouched. Discussions targets work in both push and poll mode: in push mode glorp subscribes the repository webhook to GitHub's `discussion` event so a new thread dispatches immediately, with the periodic synchronization interval as the fallback. They are not affected by `--filter` or `--all-issues`, and do not use the `agent-ready` label or the comment-based ownership handoff protocol described below.
 

@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+- Restructure the CLI around subcommands: `glorp watch`, `glorp ui`, `glorp version`, `glorp upgrade`, and `glorp help`. Watching now requires the `watch` subcommand — the old top-level form (`glorp owner/repo`, `glorp --poll …`) has been removed — while `glorp --version` and `glorp -h` still work as aliases for `glorp version` and `glorp help`.
+- Add `glorp ui`, which finds running glorp dashboards on localhost (from port 8765 upward, or `--port`) and opens one in the default browser. When several instances are running it shows an interactive picker; on a non-interactive terminal it opens the lowest-numbered port.
 - Fix a panic on the first log line when `glorp` runs with `--ui none` or `--ui tui`. The unused browser dashboard was still registered as a UI reporter as a typed-nil pointer, so the first log message dereferenced it.
-- Add a `projects:` / `discussions:` target shorthand so boards no longer need a full GitHub URL: `glorp projects:lsegal/glorp/3 discussions:lsegal/glorp/q-a`, or `glorp projects:3 discussions:q-a` inside a checkout, where the `OWNER/REPO` is taken from the `origin` remote. A discussions target can now also name a single category (`https://github.com/OWNER/REPO/discussions/categories/q-a`), and only threads in that category are watched.
+- Add a `projects:` / `discussions:` target shorthand so boards no longer need a full GitHub URL: `glorp watch projects:lsegal/glorp/3 discussions:lsegal/glorp/q-a`, or `glorp watch projects:3 discussions:q-a` inside a checkout, where the `OWNER/REPO` is taken from the `origin` remote. A discussions target can now also name a single category (`https://github.com/OWNER/REPO/discussions/categories/q-a`), and only threads in that category are watched.
 
 ## v1.2.1 - 2026-08-17
 
