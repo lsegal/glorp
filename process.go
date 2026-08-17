@@ -57,8 +57,11 @@ func (t *processTracker) track(cmd *exec.Cmd) {
 
 func (t *processTracker) forget(cmd *exec.Cmd) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	delete(t.running, cmd)
+	t.mu.Unlock()
+	// A child glorp no longer owns must stop being a reap target, or a platform
+	// guard that reaps recorded process groups could signal a reused id.
+	releaseOrphanedProcess(cmd)
 }
 
 func (t *processTracker) commands() []*exec.Cmd {

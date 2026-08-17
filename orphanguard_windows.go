@@ -72,3 +72,7 @@ func adoptOrphanedProcess(cmd *exec.Cmd) {
 	defer func() { _ = windows.CloseHandle(handle) }()
 	_ = windows.AssignProcessToJobObject(job, handle)
 }
+
+// releaseOrphanedProcess has nothing to do on Windows: a child that exits leaves
+// the job object on its own, and the job only kills processes still in it.
+func releaseOrphanedProcess(*exec.Cmd) {}
