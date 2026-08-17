@@ -15,20 +15,30 @@ Treat `/gh-fix ISSUENUMBER` as authorization to implement, publish, continuously
 4. Read the issue title, body, labels, comments, state, and linked context. Stop if it does not exist or is not actionable. If it is already closed, explain that and do not mutate the repository unless the user explicitly requested follow-up work.
 5. Read repository instructions, including applicable `AGENTS.md`, contribution guidance, branch/PR rules, CI configuration, and changelog conventions.
 
+## Resume existing work (re-entrant mode)
+
+`/gh-fix N` must be safe to run again after being interrupted (Ctrl+C, a crashed session, a new session started later) or handed off from another glorp instance. Before creating anything new:
+
+1. Determine whether `N` names an issue or an already-open pull request. If `N` is a pull request, treat the issue it closes (from its body's `Closes #<ISSUENUMBER>` line) as the originating issue and drive the PR itself to completion rather than opening a new one.
+2. If `N` is an issue, search for an open, non-merged pull request that closes it (by branch naming convention `fix/issue-N-*` and by `Closes #N` in open PR bodies). If one exists, resume that PR and branch instead of creating a new draft.
+3. Before adopting a PR or branch you did not just create in this session, check whether another agent might still be actively working it: read the PR's comments for a `/glorp:UUID`-signed claim (see issue #214's cooperative handoff protocol). If the most recent claim is a `Starting work on this issue` or `Continuing work on this issue` comment with no later stand-down, post `Does anyone have this? /glorp:<a-fresh-identifier>`, wait at least 2 minutes, and only continue if nothing answers `I am working on this` or posts a newer starting/continuing claim in that window. If another agent claims it during or after your wait, stop and leave the branch alone. Skip this check for a PR or branch this same session already created and is actively pushing to.
+4. When resuming, clone the existing branch (not the default branch) so its commit history, checkpoints, and any partial implementation are preserved. Read the PR body and its comments to recover what has already been done, tested, and what remains.
+5. Once cloned, continue the rest of this workflow exactly as if the branch were newly created: keep checkpointing, keep the PR draft until it is genuinely ready, and drive CI to completion. Do not restart implementation from scratch when prior work is still valid.
+
 ## Create an isolated clone and branch
 
 1. Resolve the canonical `OWNER/REPO`, clone URL, and default branch.
 2. Create a uniquely named sibling or temporary directory outside the current checkout, such as `<repo>-gh-fix-<N>`. Never reuse or modify the user's current working tree, and do not substitute a worktree for the separate clone.
-3. Clone the repository normally and verify that the clone's default-branch HEAD matches the remote.
+3. Clone the repository normally. If resuming per the section above, clone and check out the existing branch and verify its HEAD matches the remote; otherwise verify the clone's default-branch HEAD matches the remote.
 4. Immediately after verifying the clone, emit `GLORP_CHECKOUT_DIRECTORY=<absolute clone path>` as an exact, plain-text progress line without Markdown formatting. This lets callers display and persist the real isolated checkout. Emit the line again if a missing checkout is regenerated while resuming.
-5. Create a new branch from the current remote default branch. Prefer `fix/issue-<N>-<short-slug>` unless repository instructions require another naming scheme.
+5. When not resuming an existing branch, create a new branch from the current remote default branch. Prefer `fix/issue-<N>-<short-slug>` unless repository instructions require another naming scheme.
 6. Register cleanup of every clone directory created by this workflow immediately after it is created. Remove those directories before exiting, including on normal completion, errors, or panics. Do not remove the user's existing checkout or unrelated directories.
 
 The cleanup must be unconditional: use a deferred/finally-style cleanup guard as soon as each clone is created, and make cleanup errors visible while preserving the original failure when one exists.
 
 ## Open the draft pull request
 
-Immediately after creating the branch, publish it and open a draft pull request so progress is visible throughout development:
+Immediately after creating the branch, publish it and open a draft pull request so progress is visible throughout development. Skip this section entirely when resuming an existing draft PR per "Resume existing work" above — it already has an open PR.
 
 1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER>`, then push the new branch with upstream tracking. Never force-push.
 2. Open a draft PR against the current default branch with a concise title describing the intended fix.
