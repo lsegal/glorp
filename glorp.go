@@ -18,7 +18,7 @@ import (
 const (
 	stateFilePollInterval = 100 * time.Millisecond
 	stateReloadDebounce   = 5 * time.Second
-	pushFallbackInterval  = 90 * time.Second
+	pushFallbackInterval  = 15 * time.Minute
 	webhookRetryLimit     = 3
 	workClosureInterval   = 10 * time.Second
 )
@@ -456,6 +456,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quotas: quotas, Jobs: list})
 	}
 	pollNumber := 0
+	// observed records the "repo#number" keys returned by the most recent
+	// poll. Webhook follow-up refreshes exist only to outlast GitHub's issue
+	// index lag (issue #176), so once the delivered issue shows up here the
+	// remaining refreshes have nothing left to catch. Only the run loop's own
+	// goroutine reads or writes it.
+	var observed map[string]bool
 	poll := func() error {
 		pollNumber++
 		n := pollNumber
@@ -480,6 +486,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 		}
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
+		observed = make(map[string]bool, len(issues))
+		for _, issue := range issues {
+			if issue.Repository != "" && issue.Number > 0 {
+				observed[issue.Repository+"#"+strconv.Itoa(issue.Number)] = true
+			}
+		}
 		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
 			if blocked, reason := issueBlocked(issue); blocked {
@@ -804,6 +816,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
 	retriesRemaining := 0
+	// pendingWebhookIssue names the issue whose delivery scheduled the current
+	// follow-up chain, so the chain can stop early once a refresh sees it.
+	pendingWebhookIssue := ""
 	var stateReloadTimer *time.Timer
 	var stateReload <-chan time.Time
 	defer func() {
@@ -838,6 +853,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 		case event := <-w.Events:
 			w.logWebhookEvent(event)
 			respondToOwnershipAsk(ctx, event)
+			// The payload alone decides whether this delivery could have
+			// changed dispatchable work. Pushes, pull request activity, and
+			// ordinary comments never do, so they no longer cost a refresh.
+			if !webhookEventNeedsRefresh(event) {
+				w.logf("webhook %s delivery cannot change issue state; skipping refresh", webhookEventLabel(event))
+				continue
+			}
 			if err := poll(); err != nil {
 				if ctx.Err() != nil {
 					wg.Wait()
@@ -850,6 +872,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			// the timer in that case can make the refresh observe the previous
 			// issue and miss the newest one until another delivery arrives.
 			if retryTimer == nil {
+				if key, ok := webhookIssueKey(event); ok && observed[key] {
+					// The refresh above already saw the delivered issue, so
+					// there is no index lag left for follow-ups to outlast.
+					continue
+				}
+				pendingWebhookIssue, _ = webhookIssueKey(event)
 				retryTimer = time.NewTimer(w.Interval)
 				retry = retryTimer.C
 				retriesRemaining = webhookRetryLimit
@@ -861,10 +889,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
 			}
 			retriesRemaining--
+			if pendingWebhookIssue != "" && observed[pendingWebhookIssue] {
+				w.logf("webhook follow-up refreshes complete; issue %s observed", pendingWebhookIssue)
+				retriesRemaining = 0
+			}
 			if retriesRemaining > 0 {
 				retryTimer = time.NewTimer(w.Interval)
 				retry = retryTimer.C
 			} else {
+				pendingWebhookIssue = ""
 				retry = nil
 			}
 		case <-stateChanges:
@@ -944,6 +977,52 @@ func stateFileFingerprint(path string) string {
 		return ""
 	}
 	return string(b)
+}
+
+// webhookEventNeedsRefresh reports whether a delivery could have changed which
+// issues are dispatchable, using only the payload glorp already decoded. Push,
+// pull request, ping, and comment deliveries never do: closing an issue from a
+// merged pull request arrives separately as an `issues` closed event, and the
+// handoff handshake answers comments directly without a refresh. Unrecognized
+// event kinds refresh so a newly subscribed event is never silently dropped.
+func webhookEventNeedsRefresh(event WebhookEvent) bool {
+	switch event.Kind {
+	case "push", "ping", "pull_request", "issue_comment":
+		return false
+	case "issues":
+		switch event.Action {
+		case "opened", "reopened", "closed", "deleted", "transferred", "labeled", "unlabeled":
+			return true
+		default:
+			// edited, assigned, milestoned, locked, pinned, and friends leave
+			// every dispatch input (labels, state, dependencies) untouched.
+			return false
+		}
+	case "projects_v2_item":
+		// Only reordering leaves an item's status untouched; every other
+		// action can move it into or out of the ready state.
+		return event.Action != "reordered"
+	default:
+		return true
+	}
+}
+
+// webhookIssueKey returns the "repo#number" key the delivery refers to, when it
+// names one.
+func webhookIssueKey(event WebhookEvent) (string, bool) {
+	if event.Repository == "" || event.IssueNumber <= 0 {
+		return "", false
+	}
+	return event.Repository + "#" + strconv.Itoa(event.IssueNumber), true
+}
+
+// webhookEventLabel names a delivery for logging, including its action when the
+// payload carried one.
+func webhookEventLabel(event WebhookEvent) string {
+	if event.Action == "" {
+		return event.Kind
+	}
+	return event.Kind + "/" + event.Action
 }
 
 func (w *Glorp) logWebhookEvent(event WebhookEvent) {

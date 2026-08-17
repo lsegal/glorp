@@ -6,6 +6,9 @@
 - Keep renegotiating ownership of an issue after standing down for another instance, instead of treating it as brand new on the next poll and dispatching it anyway.
 
 - Add a `glorp upgrade` command that re-runs the published install script for the current platform.
+- Stop polling GitHub for webhook deliveries that cannot change which issues are dispatchable. Push, pull request, ping, and ordinary comment deliveries, along with `issues` actions such as `edited`, `assigned`, and `locked`, no longer trigger a refresh.
+- Stop the webhook follow-up refresh chain as soon as a refresh actually observes the issue the delivery named, instead of always running the full retry budget.
+- Increase the push-mode fallback synchronization interval from 90 seconds to 15 minutes, since webhook deliveries already provide the real-time path and the fallback only needs to recover missed deliveries.
 
 ## v1.1.0 - 2026-08-17
 
