@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.2 - 2026-08-17
+
 - Restructure the CLI around subcommands: `glorp watch`, `glorp ui`, `glorp version`, `glorp upgrade`, and `glorp help`. Watching now requires the `watch` subcommand — the old top-level form (`glorp owner/repo`, `glorp --poll …`) has been removed — while `glorp --version` and `glorp -h` still work as aliases for `glorp version` and `glorp help`.
 - Add `glorp ui`, which finds running glorp dashboards on localhost and opens one in the default browser. Each `glorp watch` records the dashboard port it bound, so instances started with a distant `--web-ui-port` are found without repeating the port, and a localhost scan (from port 8765 upward, or `--port`) still finds instances that left no record. When several instances are running it shows an interactive picker; on a non-interactive terminal it opens the lowest-numbered port.
 - Fix a panic on the first log line when `glorp` runs with `--ui none` or `--ui tui`. The unused browser dashboard was still registered as a UI reporter as a typed-nil pointer, so the first log message dereferenced it.
