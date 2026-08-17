@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -1451,9 +1452,52 @@ func TestClaudeJSONOutputWriterDecodesStreamEvents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := "Looking into the issue.\nRunning: go test ./...\nRunning: Read\n"
+	want := "Looking into the issue.\nRunning: go test ./...\nRunning: Read main.go\n"
 	if got := output.String(); got != want {
 		t.Fatalf("decoded output = %q, want %q", got, want)
+	}
+}
+
+func TestClaudeToolUseSummaryAddsContext(t *testing.T) {
+	longPath := "/tmp/" + strings.Repeat("nested/", 30) + "deep.go"
+	tests := []struct {
+		name  string
+		tool  string
+		input string
+		want  string
+	}{
+		{name: "bash command drops tool name", tool: "Bash", input: `{"command":"go test ./..."}`, want: "go test ./..."},
+		{name: "read shows file", tool: "Read", input: `{"file_path":"main.go","limit":20}`, want: "Read main.go"},
+		{name: "edit shows file not contents", tool: "Edit", input: `{"file_path":"ui.go","old_string":"a","new_string":"b"}`, want: "Edit ui.go"},
+		{name: "notebook shows path", tool: "NotebookEdit", input: `{"notebook_path":"run.ipynb"}`, want: "NotebookEdit run.ipynb"},
+		{name: "grep shows pattern", tool: "Grep", input: `{"pattern":"Running:","path":"web/src"}`, want: "Grep Running:"},
+		{name: "glob shows pattern", tool: "Glob", input: `{"pattern":"**/*.go"}`, want: "Glob **/*.go"},
+		{name: "fetch shows url", tool: "WebFetch", input: `{"url":"https://example.com/a","prompt":"summarize"}`, want: "WebFetch https://example.com/a"},
+		{name: "search shows query", tool: "WebSearch", input: `{"query":"go stream json"}`, want: "WebSearch go stream json"},
+		{name: "task shows description", tool: "Task", input: `{"description":"audit webhooks","subagent_type":"Explore"}`, want: "Task audit webhooks"},
+		{name: "list shows path", tool: "Bash", input: `{"path":"/tmp"}`, want: "Bash /tmp"},
+		{name: "detail collapses whitespace", tool: "Task", input: `{"description":"audit\n  webhooks"}`, want: "Task audit webhooks"},
+		{name: "no useful field keeps name", tool: "TodoWrite", input: `{"todos":[{"content":"x"}]}`, want: "TodoWrite"},
+		{name: "empty field keeps name", tool: "Read", input: `{"file_path":"  "}`, want: "Read"},
+		{name: "missing input keeps name", tool: "TodoWrite", input: ``, want: "TodoWrite"},
+		{name: "invalid input keeps name", tool: "Read", input: `not json`, want: "Read"},
+		{
+			name: "long prompt truncates from the end", tool: "Task",
+			input: `{"description":"` + strings.Repeat("x", 200) + `"}`,
+			want:  "Task " + strings.Repeat("x", 120) + "…",
+		},
+		{
+			name: "long path truncates from the front", tool: "Read",
+			input: `{"file_path":"` + longPath + `"}`,
+			want:  "Read …" + longPath[len(longPath)-120:],
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := claudeToolUseSummary(test.tool, json.RawMessage(test.input)); got != test.want {
+				t.Fatalf("claudeToolUseSummary(%q, %s) = %q, want %q", test.tool, test.input, got, test.want)
+			}
+		})
 	}
 }
 
