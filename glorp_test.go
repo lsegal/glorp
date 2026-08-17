@@ -583,7 +583,7 @@ func TestGlorpPeriodicPollInterval(t *testing.T) {
 		want        time.Duration
 	}{
 		{name: "poll mode", want: 12 * time.Second},
-		{name: "push mode", useWebhooks: true, want: 90 * time.Second},
+		{name: "push mode", useWebhooks: true, want: 15 * time.Minute},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -791,6 +791,111 @@ func TestGlorpUpdatesProjectStatus(t *testing.T) {
 	}
 }
 
+// statusFailingOnce fails SetIssueStatus exactly once (for whichever issue
+// asks first), then succeeds for every subsequent call.
+type statusFailingOnce struct {
+	mu      sync.Mutex
+	failed  bool
+	numbers []int
+}
+
+func (f *statusFailingOnce) SetIssueStatus(_ context.Context, _ string, issue Issue, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if status == "In Progress" && !f.failed {
+		f.failed = true
+		return errors.New("transient status update failure")
+	}
+	f.numbers = append(f.numbers, issue.Number)
+	return nil
+}
+
+func TestGlorpDispatchSkipsIssueOnStatusUpdateFailureWithoutAbortingOthers(t *testing.T) {
+	r := &fakeRunner{release: make(chan struct{})}
+	status := &statusFailingOnce{}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 2,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}, {Number: 8}}}}, Runner: r, Status: status, Out: &logs,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	close(r.release)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	got := append([]int(nil), r.got...)
+	r.mu.Unlock()
+	if len(got) != 1 || got[0] != 8 {
+		t.Fatalf("dispatched issues = %v, want only #8 (the one whose status update succeeded)", got)
+	}
+	if !strings.Contains(logs.String(), "issue #7 not dispatched; failed to set project status") {
+		t.Fatalf("logs = %q, want a not-dispatched message for issue #7", logs.String())
+	}
+}
+
+// erroringThenSucceedingSource fails ListIssues for its first failN calls,
+// then serves batches normally.
+type erroringThenSucceedingSource struct {
+	mu      sync.Mutex
+	calls   int
+	failN   int
+	batches [][]Issue
+}
+
+func (f *erroringThenSucceedingSource) ListIssues(_ context.Context, _ string) ([]Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := f.calls
+	f.calls++
+	if n < f.failN {
+		return nil, errors.New("transient listing failure")
+	}
+	idx := n - f.failN
+	if idx >= len(f.batches) {
+		idx = len(f.batches) - 1
+	}
+	return f.batches[idx], nil
+}
+
+func TestGlorpInitialPollFailureIsNotFatal(t *testing.T) {
+	src := &erroringThenSucceedingSource{failN: 1, batches: [][]Issue{{{Number: 7}}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	var logs bytes.Buffer
+	w := &Glorp{Repo: "o/r", Interval: 10 * time.Millisecond, Concurrency: 1, Issues: src, Runner: r, Out: &logs}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		r.mu.Lock()
+		got := len(r.got)
+		r.mu.Unlock()
+		if got > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("issue was never dispatched after the initial poll failure")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "initial poll error") {
+		t.Fatalf("logs = %q, want an initial poll error message", logs.String())
+	}
+}
+
 func TestInvalidRepo(t *testing.T) {
 	w := &Glorp{Repo: "bad", Interval: time.Second, Concurrency: 1}
 	if w.Run(context.Background()) == nil {
@@ -864,6 +969,95 @@ func TestGlorpResetsFailedProjectWorkOnStart(t *testing.T) {
 	defer status.mu.Unlock()
 	if !reflect.DeepEqual(status.statuses, []string{"Agent Queue"}) {
 		t.Fatalf("statuses = %v, want [Agent Queue]", status.statuses)
+	}
+}
+
+// A project item left at "In Progress" by an instance that died mid-run is
+// invisible to the new instance's local state, so it must be reclaimed
+// through the handoff handshake rather than skipped forever (issue #231).
+func TestGlorpReclaimsStrandedInProgressProjectItem(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		Comments: comments, Identity: "SELF", ownershipWait: func(context.Context) bool { return true },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case got := <-runner.dispatched:
+		if got != 7 {
+			t.Fatalf("dispatched issue #%d, want #7", got)
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatalf("stranded in-progress project item was never reclaimed:\n%s", logs.String())
+	}
+
+	posted, err := comments.ListComments(context.Background(), "o/r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 2 {
+		t.Fatalf("posted comments = %v, want an ask followed by a claim", posted)
+	}
+	if kind, id, ok := parseClaim(posted[0].Body); !ok || kind != claimAsking || id != "SELF" {
+		t.Fatalf("first comment = %q, want the ownership ask", posted[0].Body)
+	}
+	if kind, id, ok := parseClaim(posted[1].Body); !ok || kind != claimStarting || id != "SELF" {
+		t.Fatalf("second comment = %q, want our starting claim", posted[1].Body)
+	}
+
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The reclaim above must still respect a live owner: when another instance
+// answers the ask, this one stands down and leaves the item alone.
+func TestGlorpStandsDownOnStrandedProjectItemStillOwned(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		Comments: comments, Identity: "SELF", ownershipWait: func(context.Context) bool {
+			comments.inject("o/r", 7, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: time.Now()})
+			return true
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case got := <-runner.dispatched:
+		cancel()
+		<-done
+		t.Fatalf("issue #%d was dispatched despite another instance owning it", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "ownership claimed by another instance; standing down") {
+		t.Fatalf("standing down was not logged:\n%s", logs.String())
 	}
 }
 
@@ -1348,6 +1542,145 @@ func TestScopedWorkStateKeepsTargetsSeparate(t *testing.T) {
 	}
 }
 
+func TestWebhookEventNeedsRefresh(t *testing.T) {
+	tests := []struct {
+		event WebhookEvent
+		want  bool
+	}{
+		{event: WebhookEvent{Kind: "push", Ref: "refs/heads/main", CommitCount: 3}},
+		{event: WebhookEvent{Kind: "ping"}},
+		{event: WebhookEvent{Kind: "pull_request", Action: "opened"}},
+		{event: WebhookEvent{Kind: "pull_request", Action: "closed"}},
+		{event: WebhookEvent{Kind: "issue_comment", Action: "created"}},
+		{event: WebhookEvent{Kind: "issues", Action: "edited"}},
+		{event: WebhookEvent{Kind: "issues", Action: "assigned"}},
+		{event: WebhookEvent{Kind: "issues", Action: "locked"}},
+		{event: WebhookEvent{Kind: "issues", Action: "opened"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "reopened"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "closed"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "labeled"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "unlabeled"}, want: true},
+		{event: WebhookEvent{Kind: "issues", Action: "transferred"}, want: true},
+		{event: WebhookEvent{Kind: "projects_v2_item", Action: "reordered"}},
+		{event: WebhookEvent{Kind: "projects_v2_item", Action: "edited"}, want: true},
+		{event: WebhookEvent{Kind: "projects_v2_item", Action: "created"}, want: true},
+		{event: WebhookEvent{Kind: "release", Action: "published"}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(webhookEventLabel(test.event), func(t *testing.T) {
+			if got := webhookEventNeedsRefresh(test.event); got != test.want {
+				t.Fatalf("needs refresh = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestGlorpSkipsRefreshForIrrelevantWebhookDeliveries(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	events := make(chan WebhookEvent, 4)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
+		UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	waitForCalls := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			src.mu.Lock()
+			calls := src.calls
+			src.mu.Unlock()
+			if calls >= want {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %d list call(s)", want)
+	}
+	waitForCalls(1)
+
+	events <- WebhookEvent{Kind: "push", Repository: "o/r", Ref: "refs/heads/main", CommitCount: 2}
+	events <- WebhookEvent{Kind: "pull_request", Repository: "o/r", Action: "synchronize"}
+	events <- WebhookEvent{Kind: "issues", Repository: "o/r", Action: "edited", IssueNumber: 7}
+	// A relevant delivery queued last drains the ignored ones ahead of it, so
+	// its own refresh proves they were processed without polling.
+	events <- WebhookEvent{Kind: "issues", Repository: "o/r", Action: "opened", IssueNumber: 8}
+	waitForCalls(2)
+
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("list calls = %d, want 2 (initial poll plus the relevant delivery)", calls)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpStopsWebhookFollowUpOnceIssueIsObserved(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}, {{Number: 1, Repository: "o/r"}}}}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: 20 * time.Millisecond, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
+		UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events <- WebhookEvent{Kind: "issues", Action: "opened", Repository: "o/r", IssueNumber: 1}
+
+	select {
+	case n := <-r.dispatched:
+		if n != 1 {
+			t.Fatalf("dispatched issue #%d, want #1", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("issue #1 was not dispatched")
+	}
+
+	// The webhook-triggered refresh already observed issue #1, so the full
+	// follow-up chain (three more polls at the 20ms interval) must not run.
+	time.Sleep(150 * time.Millisecond)
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("list calls = %d, want 2 (initial poll plus the webhook refresh)", calls)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGlorpKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{
@@ -1522,8 +1855,8 @@ func TestGlorpPersistsSessionIDAfterCompletion(t *testing.T) {
 
 func TestShouldDispatchIssueUsesProjectStatusForRecovery(t *testing.T) {
 	project := "https://github.com/users/lsegal/projects/3"
-	if shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, false, "") {
-		t.Fatal("new in-progress project issue was dispatched")
+	if !shouldDispatchIssue(project, Issue{ProjectStatus: "In Progress"}, false, false, false, false, "") {
+		t.Fatal("in-progress project item stranded by another instance was not a reclaim candidate")
 	}
 	for _, status := range []string{"Done", "Completed"} {
 		if shouldDispatchIssue(project, Issue{ProjectStatus: status}, false, false, false, false, "") {
@@ -1709,4 +2042,199 @@ func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
 	if blocked, _ := issueBlocked(Issue{DependsOn: []IssueDependency{{Number: 7, State: "closed"}}}); blocked {
 		t.Fatal("closed dependency still blocks issue")
 	}
+}
+
+// fakeProjectState serves board fingerprints for the push-mode project probe.
+type fakeProjectState struct {
+	mu     sync.Mutex
+	calls  int
+	states []string
+	err    error
+}
+
+func (f *fakeProjectState) ProjectState(_ context.Context, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return "", f.err
+	}
+	if len(f.states) == 0 {
+		return "", nil
+	}
+	if f.calls > len(f.states) {
+		return f.states[len(f.states)-1], nil
+	}
+	return f.states[f.calls-1], nil
+}
+
+func (f *fakeProjectState) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func TestGlorpDispatchesProjectBoardChangeBeforeFallbackPoll(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{
+		{}, // initial poll: nothing on the board yet
+		{{Number: 9, ProjectStatus: "Todo", State: "OPEN"}}, // card moved into Todo
+	}}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	// The board changes on the second probe, and the fallback poll is an hour
+	// away, so only the probe can produce this dispatch.
+	board := &fakeProjectState{states: []string{"before", "after"}}
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r, UseWebhooks: true,
+		Projects: board, fallbackInterval: time.Hour, probeInterval: time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case number := <-r.dispatched:
+		if number != 9 {
+			t.Fatalf("dispatched issue #%d, want #9", number)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("board-only project change was not dispatched before the fallback poll")
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpSkipsPollWhileProjectBoardIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	board := &fakeProjectState{states: []string{"steady"}}
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: &fakeRunner{release: make(chan struct{})},
+		UseWebhooks: true, Projects: board, fallbackInterval: time.Hour, probeInterval: time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && board.callCount() < 10 {
+		time.Sleep(time.Millisecond)
+	}
+	probes := board.callCount()
+	src.mu.Lock()
+	calls := src.calls
+	src.mu.Unlock()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if probes < 10 {
+		t.Fatalf("board probed %d time(s), want at least 10", probes)
+	}
+	if calls != 1 {
+		t.Fatalf("idle board triggered %d issue list call(s), want only the initial poll", calls)
+	}
+}
+
+func TestGlorpDoesNotProbeBoardsWithoutProjectTargetsOrPushMode(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		targets     []string
+		useWebhooks bool
+		projects    ProjectStateSource
+		want        int
+	}{
+		{name: "push project target", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: true, projects: &fakeProjectState{}, want: 1},
+		{name: "repository target", targets: []string{"o/r"}, useWebhooks: true, projects: &fakeProjectState{}, want: 0},
+		{name: "poll mode", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: false, projects: &fakeProjectState{}, want: 0},
+		{name: "no source", targets: []string{"https://github.com/users/o/projects/3"}, useWebhooks: true, want: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			w := &Glorp{UseWebhooks: test.useWebhooks, Projects: test.projects}
+			if got := len(w.projectProbeTargets(test.targets)); got != test.want {
+				t.Fatalf("probed targets = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestProjectBoardProbeInterval(t *testing.T) {
+	if got := (&Glorp{}).projectBoardProbeInterval(); got != projectProbeInterval {
+		t.Fatalf("default probe interval = %s, want %s", got, projectProbeInterval)
+	}
+	if got := (&Glorp{probeInterval: time.Second}).projectBoardProbeInterval(); got != time.Second {
+		t.Fatalf("override probe interval = %s, want 1s", got)
+	}
+	if projectProbeInterval >= pushFallbackInterval {
+		t.Fatalf("probe interval %s must be shorter than the fallback interval %s", projectProbeInterval, pushFallbackInterval)
+	}
+}
+
+// Push webhooks have to be reconciled while the daemon runs, not only at
+// startup, so a repository added to a project board later gets a webhook
+// without a restart (issue #238).
+func TestGlorpReconcilesWebhooksOnPeriodicPoll(t *testing.T) {
+	src := &fakeSource{batches: [][]Issue{{}}}
+	reconciled := make(chan struct{}, 1)
+	w := &Glorp{
+		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1,
+		Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, UseWebhooks: true,
+		fallbackInterval: time.Millisecond,
+		Webhooks: func(context.Context) {
+			select {
+			case reconciled <- struct{}{}:
+			default:
+			}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-reconciled:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("periodic poll did not reconcile webhooks")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpReapsOnItsOwnTickerWhenPollingIsSlow(t *testing.T) {
+	src := &fakeSource{batches: [][]Issue{{}}}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, UseWebhooks: true,
+		fallbackInterval: time.Hour, reapInterval: time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 3 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("reap ticker did not run additional polls while the poll interval was an hour away")
 }

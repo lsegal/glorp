@@ -252,12 +252,12 @@ func TestNegotiateContestedIssuesFiltersDeclinedClaims(t *testing.T) {
 	}
 	declinedKey := issueKey(pending[0].issue)
 	seen := map[string]bool{declinedKey: true, issueKey(pending[1].issue): true}
-	result := w.negotiateContestedIssues(context.Background(), nil, pending, seen)
+	result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, true)
 	if len(result) != 1 || result[0].issue.Number != 2 {
 		t.Fatalf("result = %+v, want only issue #2 to survive", result)
 	}
-	if seen[declinedKey] {
-		t.Fatalf("declined issue #1 should be unmarked as seen so it is retried")
+	if !seen[declinedKey] {
+		t.Fatalf("declined issue #1 should stay marked as seen so the next poll renegotiates instead of dispatching it")
 	}
 }
 
@@ -267,11 +267,101 @@ func TestNegotiateContestedIssuesSkipsResumedSessions(t *testing.T) {
 	pending := []pendingIssue{
 		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true, session: AgentSession{Resume: true}},
 	}
-	result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{})
+	result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true)
 	if len(result) != 1 {
 		t.Fatalf("resumed local sessions should skip negotiation entirely, got %+v", result)
 	}
 	if posted, _ := comments.ListComments(context.Background(), "o/r", 1); len(posted) != 0 {
 		t.Fatalf("expected no comments posted for a resumed session, got %v", posted)
+	}
+}
+
+func TestLatestClaimByOtherPicksNewestForeignClaim(t *testing.T) {
+	now := time.Now()
+	comments := []Comment{
+		{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: now.Add(-3 * time.Hour)},
+		{Body: signComment(askClaimBody, "OTHER"), CreatedAt: now.Add(-time.Minute)},
+		{Body: signComment(continuingClaimBody, "OTHER"), CreatedAt: now.Add(-time.Hour)},
+		{Body: signComment(startingClaimBody, "SELF"), CreatedAt: now},
+		{Body: "unrelated chatter", CreatedAt: now},
+	}
+	at, ok := latestClaimByOther(comments, "SELF")
+	if !ok || !at.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("latestClaimByOther = (%v, %v), want the 1h-old continuing claim", at, ok)
+	}
+	if _, ok := latestClaimByOther(comments[3:], "SELF"); ok {
+		t.Fatalf("own claims and non-protocol comments should not count as a foreign claim")
+	}
+}
+
+func TestClaimIsFreshHonoursStaleClaimAge(t *testing.T) {
+	comments := newFakeCommentClient()
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	target := ownershipTarget{Repo: "o/r", Number: 1}
+
+	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || fresh {
+		t.Fatalf("unclaimed work should never look fresh, got fresh=%v err=%v", fresh, err)
+	}
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Hour)})
+	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || !fresh {
+		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got fresh=%v err=%v", fresh, err)
+	}
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
+	w.staleClaim = 30 * time.Minute
+	if fresh, err := w.claimIsFresh(context.Background(), target); err != nil || fresh {
+		t.Fatalf("claims older than the staleness window should be reapable, got fresh=%v err=%v", fresh, err)
+	}
+}
+
+func TestNegotiateContestedIssuesSkipsFreshlyClaimedWorkWhenNotAggressive(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	comments.inject("o/r", 2, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{
+		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true},
+		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
+	}
+	seen := map[string]bool{issueKey(pending[0].issue): true, issueKey(pending[1].issue): true}
+	result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, false)
+	if len(result) != 1 || result[0].issue.Number != 2 {
+		t.Fatalf("result = %+v, want only the staled issue #2 to be reaped", result)
+	}
+	posted, _ := comments.ListComments(context.Background(), "o/r", 1)
+	if len(posted) != 1 {
+		t.Fatalf("a periodic reap must not comment on freshly claimed work, got %v", posted)
+	}
+	if !seen[issueKey(pending[0].issue)] {
+		t.Fatalf("skipped issue #1 should stay marked as seen")
+	}
+}
+
+func TestNegotiateContestedIssuesAggressiveIgnoresFreshClaims(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
+	result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true)
+	if len(result) != 1 {
+		t.Fatalf("the first reap after startup should ask regardless of claim age, got %+v", result)
+	}
+	posted, _ := comments.ListComments(context.Background(), "o/r", 1)
+	if len(posted) != 3 {
+		t.Fatalf("expected the original claim plus an ask and a starting claim, got %v", posted)
+	}
+}
+
+func TestReapPollTickOnlyWhenPollingIsSlower(t *testing.T) {
+	fast := &Glorp{Interval: time.Minute}
+	if tick := fast.reapPollTick(); tick != 0 {
+		t.Fatalf("tick = %v, want 0 when polling is already faster than the reap interval", tick)
+	}
+	push := &Glorp{Interval: time.Minute, UseWebhooks: true}
+	if tick := push.reapPollTick(); tick != reapPollInterval {
+		t.Fatalf("tick = %v, want %v in webhook push mode", tick, reapPollInterval)
+	}
+	slow := &Glorp{Interval: time.Hour}
+	if tick := slow.reapPollTick(); tick != reapPollInterval {
+		t.Fatalf("tick = %v, want %v for slow polling", tick, reapPollInterval)
 	}
 }

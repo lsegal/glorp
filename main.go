@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,6 +36,22 @@ var version = "dev"
 var errProjectIssueNotFound = errors.New("project issue not found")
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "upgrade" {
+		if len(os.Args) > 2 {
+			fmt.Fprintln(os.Stderr, "usage: glorp upgrade")
+			os.Exit(2)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		repo := upgradeRepo(os.Getenv)
+		if err := runUpgrade(ctx, os.Stdout, func(ctx context.Context) *exec.Cmd {
+			return upgradeCommand(ctx, runtime.GOOS, repo)
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	interval := flag.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	poll := flag.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
@@ -67,7 +86,7 @@ func main() {
 		}
 	}
 	if len(targets) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: glorp [flags] TARGET [TARGET ...]")
+		fmt.Fprintln(os.Stderr, "usage: glorp [flags] TARGET [TARGET ...]\n       glorp upgrade")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
@@ -94,7 +113,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(*readyState)}
+	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(*readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), *allIssues
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
@@ -156,7 +175,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -188,13 +207,16 @@ func main() {
 		fmt.Fprintf(output, "ngrok tunnel ready at %s\n", tunnel.URL())
 		configured := 0
 		for _, target := range targets {
-			if err := gh.ConfigureWebhook(ctx, target, endpoint, *webhookSecret); err != nil {
+			if _, err := gh.ConfigureWebhook(ctx, target, endpoint, *webhookSecret); err != nil {
 				if errors.Is(err, errProjectWebhookUnavailable) {
 					fmt.Fprintln(output, err)
 					continue
 				}
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				if !errors.Is(err, errWebhookPartiallyConfigured) {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				fmt.Fprintln(output, err)
 			}
 			configured++
 			fmt.Fprintf(output, "configured GitHub webhook for %s\n", target)
@@ -202,6 +224,10 @@ func main() {
 		if configured == 0 {
 			fmt.Fprintln(output, "no targets available for webhook configuration")
 		}
+		// A project board can gain a repository that was not on it at startup,
+		// and that repository has no webhook until the target is configured
+		// again, so keep reconciling while the daemon runs (issue #238).
+		w.Webhooks = newWebhookReconciler(gh, targets, endpoint, *webhookSecret, w.logf).reconcile
 	}
 	if err := w.Run(ctx); err != nil {
 		if ui != nil {
@@ -261,6 +287,18 @@ type GHCLI struct {
 	AllIssues  bool
 	ReadyState string
 	runCommand func(context.Context, ...string) ([]byte, error)
+	// publicAPI overrides the unauthenticated public GitHub API request used
+	// to poll public repositories without spending the authenticated gh
+	// token's rate limit. Nil uses the real network implementation.
+	publicAPI publicAPIDoer
+	// publicRepoCache memoizes repo visibility across the lifetime of a run.
+	// It is a pointer so copies of GHCLI (it is passed by value throughout)
+	// share one cache; nil (the zero value used in tests that build GHCLI
+	// literals directly) simply disables memoization rather than panicking.
+	publicRepoCache *sync.Map
+	// selfLoginCache memoizes the authenticated gh user's login, needed only
+	// to translate the "author:@me" search qualifier for the public API.
+	selfLoginCache *sync.Map
 }
 
 func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -271,7 +309,8 @@ func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
-	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number))
+	public := g.isPublicRepo(ctx, repo)
+	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number))
 	if err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("read issue #%d state: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -281,7 +320,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 	if err := json.Unmarshal(output, &issue); err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("decode issue #%d state: %w", number, err)
 	}
-	output, err = g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline")
+	output, err = g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline")
 	if err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("read issue #%d timeline: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -307,7 +346,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 		if event.Event != "cross-referenced" || pullRequest.PullRequest == nil || !closesIssue(pullRequest.Body, repo, number) {
 			continue
 		}
-		output, err := g.run(ctx, "api", "repos/"+repo+"/pulls/"+strconv.Itoa(pullRequest.Number))
+		output, err := g.apiGET(ctx, public, "repos/"+repo+"/pulls/"+strconv.Itoa(pullRequest.Number))
 		if err != nil {
 			return OriginatingWorkState{}, fmt.Errorf("read pull request #%d state for issue #%d: %w: %s", pullRequest.Number, number, err, strings.TrimSpace(string(output)))
 		}
@@ -582,12 +621,21 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 		}
 		return issues, nil
 	}
+	if !target.isProject && g.isPublicRepo(ctx, target.repo) {
+		if issues, ok := g.listPublicIssues(ctx, target.repo, g.Filter, g.AllIssues); ok {
+			for i := range issues {
+				if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+					return nil, err
+				}
+			}
+			return issues, nil
+		}
+	}
 	args := issueListArgs(repo, g.Filter, g.AllIssues)
 	if target.isProject {
 		args = projectListArgs(target, g.Filter, g.AllIssues)
 	}
-	cmd := exec.CommandContext(ctx, g.Binary, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := g.run(ctx, args...)
 	var issues []Issue
 	if target.isProject {
 		issues, err = decodeProjectIssues(output, err)
@@ -751,6 +799,19 @@ func projectItemQuery(filter string, allIssues bool) string {
 }
 
 func (g GHCLI) listProjectItems(ctx context.Context, target target, filter string, allIssues bool) ([]projectItem, error) {
+	return g.listProjectItemFields(ctx, target, filter, allIssues, projectItemFields)
+}
+
+// projectItemFields is the issue selection a dispatching poll needs.
+// projectItemKeyFields is the much smaller selection a board fingerprint
+// needs: enough to notice an item appearing, disappearing, or changing
+// status, and nothing else.
+const (
+	projectItemFields    = "number title body state createdAt repository{nameWithOwner} labels(first:100){nodes{name}}"
+	projectItemKeyFields = "number state repository{nameWithOwner}"
+)
+
+func (g GHCLI) listProjectItemFields(ctx context.Context, target target, filter string, allIssues bool, contentFields string) ([]projectItem, error) {
 	ownerField := target.projectOwnerType
 	if ownerField == "users" {
 		ownerField = "user"
@@ -768,14 +829,14 @@ func (g GHCLI) listProjectItems(ctx context.Context, target target, filter strin
           fieldValueByName(name:$statusField){... on ProjectV2ItemFieldSingleSelectValue{name}}
           content{
             __typename
-            ... on Issue{number title body state createdAt repository{nameWithOwner} labels(first:100){nodes{name}}}
+            ... on Issue{%s}
           }
         }
         pageInfo{hasNextPage endCursor}
       }
     }
   }
-}`, ownerField)
+}`, ownerField, contentFields)
 
 	var items []projectItem
 	cursor := ""
@@ -825,6 +886,47 @@ func (g GHCLI) listProjectItems(ctx context.Context, target target, filter strin
 	return items, nil
 }
 
+// ProjectState returns a fingerprint of a project board's dispatchable state.
+// It fetches only item IDs, statuses, and issue identities, skipping the issue
+// bodies, labels, and the per-issue dependency lookups a dispatching poll
+// performs, so push mode can check an idle board cheaply and often.
+func (g GHCLI) ProjectState(ctx context.Context, repo string) (string, error) {
+	target, err := parseTarget(repo)
+	if err != nil {
+		return "", err
+	}
+	if !target.isProject {
+		return "", fmt.Errorf("project state requires a project target, got %q", repo)
+	}
+	var items []projectItem
+	if target.projectOwnerType != "" {
+		items, err = g.listProjectItemFields(ctx, target, g.Filter, g.AllIssues, projectItemKeyFields)
+	} else {
+		items, err = decodeProjectItems(g.run(ctx, projectListArgs(target, g.Filter, g.AllIssues)...))
+	}
+	if err != nil {
+		return "", err
+	}
+	return projectItemsFingerprint(items), nil
+}
+
+// projectItemsFingerprint hashes the board-visible identity and status of
+// every item, ordered independently of how GitHub returned them so that a
+// reshuffled response alone never looks like a change.
+func projectItemsFingerprint(items []projectItem) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		line := item.ID + "\x00" + item.Status
+		if item.Content != nil {
+			line += fmt.Sprintf("\x00%s\x00%s#%d\x00%s", item.Content.Type, item.Content.Repository, item.Content.Number, item.Content.State)
+		}
+		lines = append(lines, line)
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
 func projectItemListError(output []byte, err error) error {
 	detail := strings.TrimSpace(string(output))
 	if strings.Contains(detail, "missing required scopes") && strings.Contains(detail, "read:project") {
@@ -847,13 +949,13 @@ var dependencyPattern = regexp.MustCompile(`(?i)\bdepends\s+on\s+#(\d+)`)
 
 func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) error {
 	dependencies := make(map[int]IssueDependency)
+	public := repo != "" && g.isPublicRepo(ctx, repo)
 	for _, match := range dependencyPattern.FindAllStringSubmatch(issue.Body, -1) {
 		number := 0
 		if _, err := fmt.Sscanf(match[1], "%d", &number); err == nil && number > 0 {
 			dependency := IssueDependency{Number: number}
 			if repo != "" {
-				cmd := exec.CommandContext(ctx, g.Binary, "issue", "view", fmt.Sprint(number), "--repo", repo, "--json", "state")
-				output, viewErr := cmd.Output()
+				output, viewErr := g.dependencyIssueView(ctx, public, repo, number)
 				if viewErr != nil {
 					return fmt.Errorf("read dependency #%d for issue #%d: %w", number, issue.Number, viewErr)
 				}
@@ -869,8 +971,7 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 		}
 	}
 	if repo != "" {
-		cmd := exec.CommandContext(ctx, g.Binary, "api", "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
-		output, err := cmd.CombinedOutput()
+		output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
 		if err != nil {
 			return fmt.Errorf("list dependencies for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
 		}
@@ -899,7 +1000,8 @@ func (g GHCLI) PostComment(ctx context.Context, repo string, number int, body st
 }
 
 func (g GHCLI) ListComments(ctx context.Context, repo string, number int) ([]Comment, error) {
-	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments", "--paginate")
+	public := g.isPublicRepo(ctx, repo)
+	output, err := g.apiGETPaginated(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments")
 	if err != nil {
 		return nil, fmt.Errorf("list comments on #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -942,8 +1044,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 
 	itemID := issue.ProjectItemID
 	if itemID == "" {
-		list := exec.CommandContext(ctx, g.Binary, projectListArgs(parsedTarget, "", true)...)
-		output, err := list.Output()
+		output, err := g.run(ctx, projectListArgs(parsedTarget, "", true)...)
 		items, err := decodeProjectItems(output, err)
 		if err != nil {
 			return err
@@ -1007,7 +1108,7 @@ func (g GHCLI) setProjectItemStatus(ctx context.Context, target target, itemID s
 
 	viewOutput, err := g.run(ctx, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
 	if err != nil {
-		return fmt.Errorf("view project: %w", err)
+		return fmt.Errorf("view project: %w: %s", err, strings.TrimSpace(string(viewOutput)))
 	}
 	var view projectView
 	if err := json.Unmarshal(viewOutput, &view); err != nil {

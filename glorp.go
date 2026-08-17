@@ -18,9 +18,14 @@ import (
 const (
 	stateFilePollInterval = 100 * time.Millisecond
 	stateReloadDebounce   = 5 * time.Second
-	pushFallbackInterval  = 90 * time.Second
+	pushFallbackInterval  = 15 * time.Minute
 	webhookRetryLimit     = 3
 	workClosureInterval   = 10 * time.Second
+	projectProbeInterval  = 30 * time.Second
+	// reapPollInterval is the longest an instance goes without a reap pass
+	// over abandoned work. Polling can be much less frequent than this in
+	// webhook push mode, so reaping gets its own floor (issue #239).
+	reapPollInterval = 10 * time.Minute
 )
 
 var errWorkClosedByUser = errors.New("work closed by user")
@@ -104,6 +109,16 @@ type WorkClosureChecker interface {
 type LabelEnsurer interface {
 	EnsureLabels(context.Context, string) error
 }
+
+// ProjectStateSource returns a cheap fingerprint of a project board's
+// dispatchable state. GitHub publishes no projects_v2 webhook for user-owned
+// Projects, so board-only edits (dragging an issue onto the board, moving a
+// card into the ready column) produce no delivery at all. Push mode probes
+// this fingerprint on a short interval and only pays for a full poll when it
+// actually changes, instead of waiting out the fallback interval.
+type ProjectStateSource interface {
+	ProjectState(context.Context, string) (string, error)
+}
 type IssueStatuser interface {
 	SetIssueStatus(context.Context, string, Issue, string) error
 }
@@ -152,19 +167,34 @@ type Glorp struct {
 	fallbackInterval time.Duration
 	// closureInterval overrides active-work closure polling in tests.
 	closureInterval time.Duration
-	Labels          LabelEnsurer
-	Status          IssueStatuser
-	UI              UIReporter
-	Quota           func(context.Context) map[string]string
+	// Projects supplies the push-mode project board fingerprint. When nil,
+	// board changes are only picked up by the fallback poll.
+	Projects ProjectStateSource
+	// probeInterval overrides the project board probe interval in tests.
+	probeInterval time.Duration
+	Labels        LabelEnsurer
+	Status        IssueStatuser
+	UI            UIReporter
+	Quota         func(context.Context) map[string]string
 	// Identity names this instance in cooperative handoff comments. It is
 	// generated once at startup and never persisted.
 	Identity Identity
 	// Comments drives the cooperative handoff handshake (issue #214). When
 	// nil, ownership negotiation is skipped and dispatch behaves as before.
 	Comments CommentClient
+	// Webhooks re-reconciles push webhooks on every periodic poll so a
+	// repository that joins a project board after startup gets a webhook
+	// without a restart (issue #238). Nil skips reconciliation, as in poll
+	// mode where no webhooks are configured at all.
+	Webhooks func(context.Context)
 	// ownershipWait overrides the reap grace-period wait in tests.
 	ownershipWait func(context.Context) bool
-	logMu         sync.Mutex
+	// reapInterval overrides the periodic reap cadence in tests.
+	reapInterval time.Duration
+	// staleClaim overrides the age at which another instance's claim is
+	// considered abandoned in tests.
+	staleClaim time.Duration
+	logMu      sync.Mutex
 }
 
 func (w *Glorp) periodicPollInterval() time.Duration {
@@ -175,6 +205,51 @@ func (w *Glorp) periodicPollInterval() time.Duration {
 		return pushFallbackInterval
 	}
 	return w.Interval
+}
+
+// projectBoardProbeInterval is how often push mode checks project targets for
+// board-only changes that produce no webhook delivery.
+func (w *Glorp) projectBoardProbeInterval() time.Duration {
+	if w.probeInterval > 0 {
+		return w.probeInterval
+	}
+	return projectProbeInterval
+}
+
+// projectProbeTargets lists the targets whose boards need fingerprint probing.
+// Only push mode needs it; poll mode already refreshes every Interval.
+func (w *Glorp) projectProbeTargets(targets []string) []string {
+	if !w.UseWebhooks || w.Projects == nil {
+		return nil
+	}
+	var probed []string
+	for _, target := range targets {
+		if isProjectTarget(target) {
+			probed = append(probed, target)
+		}
+	}
+	return probed
+}
+
+// reapPollTick is how often a reap pass runs when ordinary polling is slower
+// than reapPollInterval. It returns 0 when polling already runs at least that
+// often, in which case every poll doubles as a reap pass.
+func (w *Glorp) reapPollTick() time.Duration {
+	interval := reapPollInterval
+	if w.reapInterval > 0 {
+		interval = w.reapInterval
+	}
+	if w.periodicPollInterval() <= interval {
+		return 0
+	}
+	return interval
+}
+
+func (w *Glorp) staleClaimAfter() time.Duration {
+	if w.staleClaim > 0 {
+		return w.staleClaim
+	}
+	return staleClaimDuration
 }
 
 func (w *Glorp) activeWorkClosureInterval() time.Duration {
@@ -197,9 +272,16 @@ type pendingIssue struct {
 // negotiateContestedIssues runs the handoff handshake for every candidate
 // issue marked contested (no local record of being this instance's own
 // resumed work). Uncontested issues pass through untouched. Issues whose
-// negotiation loses (or errors) are dropped from the batch and unmarked as
-// seen so a later poll retries them.
-func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool) []pendingIssue {
+// negotiation loses (or errors) are dropped from the batch but stay marked as
+// seen, so a later poll retries them as contested work and renegotiates
+// instead of dispatching them as if nothing had ever claimed them.
+//
+// The first reap after startup is aggressive: every contested candidate is
+// asked about immediately. Later reaps run on a timer (issue #239), so they
+// first check how old the newest claim from another instance is and stand
+// down silently on anything claimed within staleClaimDuration, rather than
+// re-posting "does anyone have this?" on every pass.
+func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool, aggressive bool) []pendingIssue {
 	if w.Comments == nil || len(newIssues) == 0 {
 		return newIssues
 	}
@@ -214,6 +296,17 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 		go func(i int, issue Issue) {
 			defer wg.Done()
 			target := ownershipTargetFor(ctx, checker, issue)
+			if !aggressive {
+				fresh, err := w.claimIsFresh(ctx, target)
+				if err != nil {
+					w.logf("issue #%d reap check failed: %v", issue.Number, err)
+					return
+				}
+				if fresh {
+					w.logf("issue #%d claimed by another instance within %s; skipping reap", issue.Number, w.staleClaimAfter())
+					return
+				}
+			}
 			claimed, err := w.negotiateOwnership(ctx, target)
 			if err != nil {
 				w.logf("issue #%d ownership handoff failed: %v", issue.Number, err)
@@ -231,7 +324,11 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 		if keep[i] {
 			filtered = append(filtered, pending)
 		} else {
-			delete(seen, issueKey(pending.issue))
+			// Keep the seen marker: it is what makes the next poll treat this
+			// issue as contested again. Clearing it would make the issue look
+			// brand new, and the next poll would dispatch it outright, taking
+			// work from the instance this one just stood down for.
+			seen[issueKey(pending.issue)] = true
 		}
 	}
 	return filtered
@@ -533,6 +630,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quotas: quotas, Jobs: list})
 	}
 	pollNumber := 0
+	// observed records the "repo#number" keys returned by the most recent
+	// poll. Webhook follow-up refreshes exist only to outlast GitHub's issue
+	// index lag (issue #176), so once the delivered issue shows up here the
+	// remaining refreshes have nothing left to catch. Only the run loop's own
+	// goroutine reads or writes it.
+	var observed map[string]bool
 	poll := func() error {
 		pollNumber++
 		n := pollNumber
@@ -561,6 +664,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		w.logf("poll #%d found %d open issue(s)", n, len(issues))
 		w.pollDiscussions(ctx, n, targets, sem, &wg, &workMu, active)
+		observed = make(map[string]bool, len(issues))
+		for _, issue := range issues {
+			if issue.Repository != "" && issue.Number > 0 {
+				observed[issue.Repository+"#"+strconv.Itoa(issue.Number)] = true
+			}
+		}
 		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
 			if blocked, reason := issueBlocked(issue); blocked {
@@ -597,8 +706,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// A known local failure or an active resume is unambiguously
 				// this instance's own work; anything else reappearing after
 				// having a local record is a reclaim that must be negotiated
-				// through the comment protocol before dispatch.
-				contested := hadLocalRecord && !wasFailed && !wasActive
+				// through the comment protocol before dispatch. A project item
+				// sitting at "In Progress" that this instance has no record of
+				// is another instance's apparent work (typically stranded by
+				// one that died mid-run), so it must be negotiated too.
+				contested := (hadLocalRecord && !wasFailed && !wasActive) || (!hadLocalRecord && projectItemInProgress(issue.Target, issue))
 				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: AgentSession{
 					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
 					// Persisted work is not an active worker after a daemon restart or
@@ -608,7 +720,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}})
 			}
 		}
-		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen)
+		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen, n == 1)
 		workMu.Lock()
 		err = saveScopedWorkState(w.StatePath, work, targets)
 		workMu.Unlock()
@@ -644,7 +756,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			if w.Status != nil {
 				if err := w.Status.SetIssueStatus(ctx, issue.Target, issue, "In Progress"); err != nil {
-					return err
+					w.logf("issue #%d not dispatched; failed to set project status: %v", issue.Number, err)
+					continue
 				}
 			}
 			// Contested issues already posted their starting/continuing claim
@@ -873,14 +986,43 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("stopped during initial poll")
 			return nil
 		}
-		return err
+		w.logf("initial poll error: %v; will retry in %s", err, w.periodicPollInterval())
 	}
 	publish()
+	// Board-only project changes never reach a webhook, so push mode probes a
+	// cheap board fingerprint instead. Seeding it here (rather than on the
+	// first tick) means an idle board costs one small request per probe and
+	// never triggers a redundant full poll at startup.
+	probedTargets := w.projectProbeTargets(targets)
+	boardState := make(map[string]string, len(probedTargets))
+	probeBoards := func(ctx context.Context) bool {
+		changed := false
+		for _, target := range probedTargets {
+			state, err := w.Projects.ProjectState(ctx, target)
+			if err != nil {
+				if ctx.Err() == nil {
+					w.logf("project board probe for %s failed: %v", target, err)
+				}
+				continue
+			}
+			previous, known := boardState[target]
+			boardState[target] = state
+			if known && previous != state {
+				w.logf("project board change detected for %s; refreshing", target)
+				changed = true
+			}
+		}
+		return changed
+	}
+	probeBoards(ctx)
 	var ticker *time.Ticker
 	var tick <-chan time.Time
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
 	retriesRemaining := 0
+	// pendingWebhookIssue names the issue whose delivery scheduled the current
+	// follow-up chain, so the chain can stop early once a refresh sees it.
+	pendingWebhookIssue := ""
 	var stateReloadTimer *time.Timer
 	var stateReload <-chan time.Time
 	defer func() {
@@ -894,6 +1036,23 @@ func (w *Glorp) Run(ctx context.Context) error {
 	ticker = time.NewTicker(periodicInterval)
 	defer ticker.Stop()
 	tick = ticker.C
+	var boardTick <-chan time.Time
+	if len(probedTargets) > 0 {
+		boardTicker := time.NewTicker(w.projectBoardProbeInterval())
+		defer boardTicker.Stop()
+		boardTick = boardTicker.C
+		w.logf("probing %d project board(s) for board-only changes every %s", len(probedTargets), w.projectBoardProbeInterval())
+	}
+	// Reaping abandoned work rides along with polling, so when polling is
+	// slower than reapPollInterval (webhook push mode) it gets its own,
+	// faster ticker (issue #239).
+	var reap <-chan time.Time
+	if reapTick := w.reapPollTick(); reapTick > 0 {
+		reapTicker := time.NewTicker(reapTick)
+		defer reapTicker.Stop()
+		reap = reapTicker.C
+		w.logf("reaping abandoned work every %s", reapTick)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -903,6 +1062,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("stopped (tasks: %d running, %d queued, %d completed, %d failed)", running, queued, completed, failed)
 			return nil
 		case <-tick:
+			if w.Webhooks != nil {
+				w.Webhooks(ctx)
+			}
 			if err := poll(); err != nil {
 				if ctx.Err() != nil {
 					w.logf("shutdown requested during poll; waiting for running tasks to finish")
@@ -912,9 +1074,28 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}
 				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, periodicInterval)
 			}
+		case <-boardTick:
+			if !probeBoards(ctx) {
+				continue
+			}
+			if err := poll(); err != nil && ctx.Err() == nil {
+				w.logf("project board poll #%d error: %v", pollNumber, err)
+			}
+		case <-reap:
+			w.logf("periodic reap started")
+			if err := poll(); err != nil && ctx.Err() == nil {
+				w.logf("reap poll #%d error: %v", pollNumber, err)
+			}
 		case event := <-w.Events:
 			w.logWebhookEvent(event)
 			respondToOwnershipAsk(ctx, event)
+			// The payload alone decides whether this delivery could have
+			// changed dispatchable work. Pushes, pull request activity, and
+			// ordinary comments never do, so they no longer cost a refresh.
+			if !webhookEventNeedsRefresh(event) {
+				w.logf("webhook %s delivery cannot change issue state; skipping refresh", webhookEventLabel(event))
+				continue
+			}
 			if err := poll(); err != nil {
 				if ctx.Err() != nil {
 					wg.Wait()
@@ -927,6 +1108,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			// the timer in that case can make the refresh observe the previous
 			// issue and miss the newest one until another delivery arrives.
 			if retryTimer == nil {
+				if key, ok := webhookIssueKey(event); ok && observed[key] {
+					// The refresh above already saw the delivered issue, so
+					// there is no index lag left for follow-ups to outlast.
+					continue
+				}
+				pendingWebhookIssue, _ = webhookIssueKey(event)
 				retryTimer = time.NewTimer(w.Interval)
 				retry = retryTimer.C
 				retriesRemaining = webhookRetryLimit
@@ -938,10 +1125,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
 			}
 			retriesRemaining--
+			if pendingWebhookIssue != "" && observed[pendingWebhookIssue] {
+				w.logf("webhook follow-up refreshes complete; issue %s observed", pendingWebhookIssue)
+				retriesRemaining = 0
+			}
 			if retriesRemaining > 0 {
 				retryTimer = time.NewTimer(w.Interval)
 				retry = retryTimer.C
 			} else {
+				pendingWebhookIssue = ""
 				retry = nil
 			}
 		case <-stateChanges:
@@ -1021,6 +1213,52 @@ func stateFileFingerprint(path string) string {
 		return ""
 	}
 	return string(b)
+}
+
+// webhookEventNeedsRefresh reports whether a delivery could have changed which
+// issues are dispatchable, using only the payload glorp already decoded. Push,
+// pull request, ping, and comment deliveries never do: closing an issue from a
+// merged pull request arrives separately as an `issues` closed event, and the
+// handoff handshake answers comments directly without a refresh. Unrecognized
+// event kinds refresh so a newly subscribed event is never silently dropped.
+func webhookEventNeedsRefresh(event WebhookEvent) bool {
+	switch event.Kind {
+	case "push", "ping", "pull_request", "issue_comment":
+		return false
+	case "issues":
+		switch event.Action {
+		case "opened", "reopened", "closed", "deleted", "transferred", "labeled", "unlabeled":
+			return true
+		default:
+			// edited, assigned, milestoned, locked, pinned, and friends leave
+			// every dispatch input (labels, state, dependencies) untouched.
+			return false
+		}
+	case "projects_v2_item":
+		// Only reordering leaves an item's status untouched; every other
+		// action can move it into or out of the ready state.
+		return event.Action != "reordered"
+	default:
+		return true
+	}
+}
+
+// webhookIssueKey returns the "repo#number" key the delivery refers to, when it
+// names one.
+func webhookIssueKey(event WebhookEvent) (string, bool) {
+	if event.Repository == "" || event.IssueNumber <= 0 {
+		return "", false
+	}
+	return event.Repository + "#" + strconv.Itoa(event.IssueNumber), true
+}
+
+// webhookEventLabel names a delivery for logging, including its action when the
+// payload carried one.
+func webhookEventLabel(event WebhookEvent) string {
+	if event.Action == "" {
+		return event.Kind
+	}
+	return event.Kind + "/" + event.Action
 }
 
 func (w *Glorp) logWebhookEvent(event WebhookEvent) {
@@ -1114,15 +1352,25 @@ func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, wasCompl
 		if projectStatusAllowsDispatch(issue.ProjectStatus, readyState) {
 			return true
 		}
-		if !seen {
-			return false
-		}
-		return strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress")
+		// An item parked at "In Progress" is claimed work: either this
+		// instance's own reappearing item, or work stranded in that column by
+		// an instance that died mid-run and left this one no local record to
+		// recognize it by. Both are dispatch candidates;
+		// negotiateContestedIssues is what asks, through the comment protocol,
+		// whether another live instance still owns it before it is reclaimed.
+		return projectItemInProgress(repo, issue)
 	}
 	if !seen {
 		return true
 	}
 	return !wasCompleted
+}
+
+// projectItemInProgress reports whether issue is a project item currently
+// parked in the "In Progress" column, which is how a glorp instance marks
+// work it has claimed.
+func projectItemInProgress(target string, issue Issue) bool {
+	return isProjectTarget(target) && strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress")
 }
 
 func workStateMatchesRemote(target string, issue Issue, state workState) bool {
@@ -1265,6 +1513,9 @@ func decodeProjectItems(data []byte, err error) ([]projectItem, error) {
 
 func decodeProjectFields(data []byte, err error) ([]projectField, error) {
 	if err != nil {
+		if detail := strings.TrimSpace(string(data)); detail != "" {
+			return nil, fmt.Errorf("list project fields: %w: %s", err, detail)
+		}
 		return nil, fmt.Errorf("list project fields: %w", err)
 	}
 	var result projectFields

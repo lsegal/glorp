@@ -63,6 +63,14 @@ Installer behavior can be overridden with environment variables:
 
 The public `.agents/skills/gh-fix` and `.agents/skills/gh-discuss` directories in this repository are the skills.sh package sources.
 
+### Upgrading
+
+```sh
+glorp upgrade
+```
+
+The command re-runs the installer for the current platform, so it picks up the latest release along with the current `gh-fix` skill. `GLORP_REPO` and the other installer environment variables above still apply.
+
 ## Quick start
 
 Options must appear before the first target. A target can be an `OWNER/REPO`, a GitHub repository URL, a GitHub Project URL, or a GitHub Discussions board URL.
@@ -136,6 +144,8 @@ glorp --concurrency 3 owner/first owner/second https://github.com/orgs/example/p
 ```
 
 The concurrency limit is shared across all targets. GitHub webhook deliveries cause an immediate refresh, while `--interval` controls the periodic synchronization cadence.
+
+Only deliveries that can change which issues are dispatchable cause a refresh. Push, pull request, ping, and ordinary comment deliveries are logged and ignored, as are `issues` actions that leave labels, state, and dependencies untouched (`edited`, `assigned`, `locked`, and similar). In push mode, `--interval` therefore controls only the immediate follow-up refreshes that outlast GitHub's issue index lag; the periodic reconciliation that recovers missed deliveries runs every 15 minutes.
 
 ## How it works
 

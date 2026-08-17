@@ -389,6 +389,13 @@ func TestDecodeProjectFields(t *testing.T) {
 	}
 }
 
+func TestDecodeProjectFieldsIncludesOutputDetailOnFailure(t *testing.T) {
+	_, err := decodeProjectFields([]byte("missing required scopes [project]"), errors.New("exit status 1"))
+	if err == nil || !strings.Contains(err.Error(), "missing required scopes [project]") {
+		t.Fatalf("decodeProjectFields() error = %v, want it to include the gh output detail", err)
+	}
+}
+
 func TestDecodeRepositoryProjectItemsPage(t *testing.T) {
 	var page repositoryProjectItemsPage
 	err := json.Unmarshal([]byte(`{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"PVTI_item","project":{"id":"PVT_project","number":3,"owner":{"login":"owner"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor"}}}}}}`), &page)
@@ -398,6 +405,22 @@ func TestDecodeRepositoryProjectItemsPage(t *testing.T) {
 	}
 	if !items.PageInfo.HasNextPage || items.PageInfo.EndCursor != "cursor" {
 		t.Fatalf("repository project page info = %#v", items.PageInfo)
+	}
+}
+
+func TestSetIssueStatusProjectItemLookupSurfacesFailureDetail(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte("some other project error"), errors.New("exit status 1")
+	}}
+	err := gh.SetIssueStatus(context.Background(), "https://github.com/users/owner/projects/3", Issue{Number: 7}, "In Progress")
+	if err == nil || !strings.Contains(err.Error(), "some other project error") {
+		t.Fatalf("SetIssueStatus() error = %v, want it to include the gh output detail", err)
+	}
+	want := projectListArgs(target{owner: "owner", projectID: "3", isProject: true}, "", true)
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0], want) {
+		t.Fatalf("gh calls = %#v, want single call %#v", calls, want)
 	}
 }
 
@@ -428,6 +451,26 @@ func TestRepositoryIssueStatusUpdatesAttachedProject(t *testing.T) {
 	wantEdit := []string{"project", "item-edit", "--id", "PVTI_item", "--field-id", "PVTSSF_status", "--project-id", "PVT_project", "--single-select-option-id", "opt_progress"}
 	if !reflect.DeepEqual(calls[3], wantEdit) {
 		t.Fatalf("project edit call = %#v, want %#v", calls[3], wantEdit)
+	}
+}
+
+func TestRepositoryIssueStatusReportsProjectViewFailureDetail(t *testing.T) {
+	responses := [][]byte{
+		[]byte(`{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"PVTI_item","project":{"id":"PVT_project","number":3,"owner":{"login":"owner"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`),
+		[]byte("missing required scopes [read:project]"),
+	}
+	call := 0
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		response := responses[call]
+		call++
+		if call == 2 {
+			return response, errors.New("exit status 1")
+		}
+		return response, nil
+	}}
+	err := gh.SetIssueStatus(context.Background(), "owner/repo", Issue{Number: 148}, "In Progress")
+	if err == nil || !strings.Contains(err.Error(), "missing required scopes [read:project]") {
+		t.Fatalf("SetIssueStatus() error = %v, want it to include the gh output detail", err)
 	}
 }
 
@@ -576,5 +619,61 @@ func TestTerminalUIReporterDoesNotWrapNilUI(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "running without UI") {
 		t.Fatalf("log output = %q", logs.String())
+	}
+}
+
+func TestProjectStateFingerprintIgnoresItemOrder(t *testing.T) {
+	items := []projectItem{
+		{ID: "a", Status: "Todo", Content: &projectContent{Issue: Issue{Number: 1, Repository: "o/r", State: "OPEN"}, Type: "Issue"}},
+		{ID: "b", Status: "Done", Content: &projectContent{Issue: Issue{Number: 2, Repository: "o/r", State: "OPEN"}, Type: "Issue"}},
+	}
+	reordered := []projectItem{items[1], items[0]}
+	if projectItemsFingerprint(items) != projectItemsFingerprint(reordered) {
+		t.Fatal("reordered board items produced a different fingerprint")
+	}
+	moved := []projectItem{items[0], {ID: "b", Status: "Todo", Content: items[1].Content}}
+	if projectItemsFingerprint(items) == projectItemsFingerprint(moved) {
+		t.Fatal("moving a card between columns did not change the fingerprint")
+	}
+	added := append(append([]projectItem(nil), items...), projectItem{ID: "c", Status: "Todo", Content: &projectContent{Issue: Issue{Number: 3, Repository: "o/r", State: "OPEN"}, Type: "Issue"}})
+	if projectItemsFingerprint(items) == projectItemsFingerprint(added) {
+		t.Fatal("dragging a new issue onto the board did not change the fingerprint")
+	}
+}
+
+func TestProjectStateQueriesOnlyBoardKeyFields(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte(`{"data":{"user":{"projectV2":{"items":{"nodes":[{"id":"PVTI_item","fieldValueByName":{"name":"Todo"},"content":{"__typename":"Issue","number":171,"state":"OPEN","repository":{"nameWithOwner":"lsegal/glorp"}}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor"}}}}}}`), nil
+	}}
+	state, err := gh.ProjectState(context.Background(), "https://github.com/users/lsegal/projects/3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == "" {
+		t.Fatal("project state fingerprint is empty")
+	}
+	if len(calls) != 1 {
+		t.Fatalf("gh calls = %#v, want a single request", calls)
+	}
+	query := calls[0][3]
+	for _, unwanted := range []string{"body", "labels(", "createdAt", "title"} {
+		if strings.Contains(query, unwanted) {
+			t.Fatalf("probe query fetches %q, want only board key fields:\n%s", unwanted, query)
+		}
+	}
+	if !strings.Contains(query, "number state repository{nameWithOwner}") {
+		t.Fatalf("probe query missing board key fields:\n%s", query)
+	}
+}
+
+func TestProjectStateRejectsRepositoryTarget(t *testing.T) {
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		t.Fatal("repository target should not reach gh")
+		return nil, nil
+	}}
+	if _, err := gh.ProjectState(context.Background(), "lsegal/glorp"); err == nil {
+		t.Fatal("repository target did not produce an error")
 	}
 }
