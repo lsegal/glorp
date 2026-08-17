@@ -37,11 +37,22 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      # The default build needs no generated web assets: the web/dist embed is
-      # behind the production tag, so Go alone covers the Windows-only process
-      # handling in orphanguard_windows.go and process_windows.go.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      # The default build needs no generated web assets, since the web/dist
+      # embed is behind the production tag. The dependencies are still needed
+      # because the development web UI test starts Vite, which is one of the
+      # cases that exercises the Windows process handling under test here.
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
       - run: go test ./...
       - run: go vet ./...

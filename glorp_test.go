@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1247,23 +1246,18 @@ func TestCommandRunnerStartsClaudeWithPersistedSessionID(t *testing.T) {
 	}
 }
 
-// writeFakeAgent installs an executable stub that appends each invocation's
-// arguments to a log file and emits the supplied lines, exiting with code when
-// the invocation is a resume.
+// writeFakeAgent turns the test binary itself into an executable stub that
+// appends each invocation's arguments to a log file and emits the supplied
+// lines, exiting with code when the invocation is a resume. Re-executing the
+// test binary keeps the stub portable, where a shell script would not run on
+// Windows; see TestMain for the dispatch.
 func writeFakeAgent(t *testing.T, resumeOutput string, resumeCode int) (binary, log string) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("fake agent script requires a POSIX shell")
-	}
-	dir := t.TempDir()
-	binary, log = filepath.Join(dir, "agent.sh"), filepath.Join(dir, "invocations.log")
-	script := "#!/bin/sh\n{ echo \"$@\"; echo '<<<END>>>'; } >> " + log + "\nfor arg in \"$@\"; do\n" +
-		"  case \"$arg\" in --resume|resume) echo '" + resumeOutput + "'; exit " +
-		strconv.Itoa(resumeCode) + ";; esac\ndone\necho started\n"
-	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return binary, log
+	log = filepath.Join(t.TempDir(), "invocations.log")
+	t.Setenv(fakeAgentLogEnv, log)
+	t.Setenv(fakeAgentResumeOutputEnv, resumeOutput)
+	t.Setenv(fakeAgentResumeCodeEnv, strconv.Itoa(resumeCode))
+	return os.Args[0], log
 }
 
 func fakeAgentInvocations(t *testing.T, log string) []string {
