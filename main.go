@@ -46,10 +46,8 @@ func main() {
 	webUIPort := flag.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
 	yolo := flag.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	concurrency := flag.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
-	agents := agentFlag{values: []string{"codex"}}
-	flag.Var(&agents, "agent", "agent to run: codex or claude (repeatable to load balance evenly across concurrency)")
-	model := flag.String("model", "", "model to use for the agent")
-	modelLevel := flag.String("model-level", "", "model reasoning level: low, medium, or high")
+	agents := agentFlag{values: []agentSpec{{Provider: "codex"}}}
+	flag.Var(&agents, "agent", "agent to run, as provider[/model[:level]] where provider is codex or claude and level is low, medium, or high (repeatable to load balance evenly across concurrency)")
 	readyState := flag.String("ready-state", "", "project status that marks an issue ready for an agent")
 	codexBinary := flag.String("codex-binary", "codex", "Codex executable")
 	claudeBinary := flag.String("claude-binary", "claude", "Claude executable")
@@ -86,16 +84,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
 		os.Exit(2)
 	}
-	if *modelLevel != "" && *modelLevel != "low" && *modelLevel != "medium" && *modelLevel != "high" {
-		fmt.Fprintln(os.Stderr, "model-level must be low, medium, or high")
-		os.Exit(2)
-	}
 	limit := *concurrency
 	if limit == 0 {
 		limit = 3
 	}
 	binary := *codexBinary
-	if agents.values[0] == "claude" {
+	if agents.values[0].Provider == "claude" {
 		binary = *claudeBinary
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -147,7 +141,11 @@ func main() {
 	if ui != nil {
 		wOut = io.Discard
 	}
-	quota := combinedQuotaReader(namedQuotaReaders(agents.values, func(agent string) string {
+	agentNames := make([]string, len(agents.values))
+	for i, spec := range agents.values {
+		agentNames[i] = spec.Provider
+	}
+	quota := combinedQuotaReader(namedQuotaReaders(agentNames, func(agent string) string {
 		if agent == "claude" {
 			return *claudeBinary
 		}
@@ -157,7 +155,7 @@ func main() {
 	if len(agents.values) > 1 {
 		agentCursor = &atomic.Uint64{}
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.values, Agent: agents.values[0], Model: *model, ModelLevel: *modelLevel, Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: *interval, UseWebhooks: !*poll, Events: events, Concurrency: limit, StatePath: *statePath, ReadyState: gh.ReadyState, Issues: gh, Labels: gh, Status: gh, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: *codexBinary, ClaudeBinary: *claudeBinary, Agents: agents.values, Agent: agents.values[0].Provider, Repo: targets[0], Yolo: *yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !*poll {
 		listener, err := listenForWebhooks(*listen)
@@ -349,27 +347,68 @@ func (f *filterFlag) Set(value string) error {
 	return nil
 }
 
+// agentSpec identifies a single --agent entry: which provider to run and,
+// optionally, which model and reasoning level to pass to it.
+type agentSpec struct {
+	Provider, Model, Level string
+}
+
+func (s agentSpec) String() string {
+	value := s.Provider
+	if s.Model != "" {
+		value += "/" + s.Model
+		if s.Level != "" {
+			value += ":" + s.Level
+		}
+	}
+	return value
+}
+
+func parseAgentSpec(value string) (agentSpec, error) {
+	value = strings.TrimSpace(value)
+	provider, rest, hasModel := strings.Cut(value, "/")
+	if provider != "codex" && provider != "claude" {
+		return agentSpec{}, fmt.Errorf("agent must be codex or claude, optionally followed by /model or /model:level")
+	}
+	spec := agentSpec{Provider: provider}
+	if hasModel {
+		model, level, hasLevel := strings.Cut(rest, ":")
+		spec.Model = model
+		if hasLevel {
+			if level != "low" && level != "medium" && level != "high" {
+				return agentSpec{}, fmt.Errorf("agent level must be low, medium, or high")
+			}
+			spec.Level = level
+		}
+	}
+	return spec, nil
+}
+
 // agentFlag collects repeated --agent values so multiple agents can be
 // configured and load balanced evenly across concurrency.
 type agentFlag struct {
-	values []string
+	values []agentSpec
 	set    bool
 }
 
 func (f *agentFlag) String() string {
-	return strings.Join(f.values, ",")
+	parts := make([]string, len(f.values))
+	for i, spec := range f.values {
+		parts[i] = spec.String()
+	}
+	return strings.Join(parts, ",")
 }
 
 func (f *agentFlag) Set(value string) error {
-	value = strings.TrimSpace(value)
-	if value != "codex" && value != "claude" {
-		return fmt.Errorf("agent must be codex or claude")
+	spec, err := parseAgentSpec(value)
+	if err != nil {
+		return err
 	}
 	if !f.set {
 		f.values = nil
 		f.set = true
 	}
-	f.values = append(f.values, value)
+	f.values = append(f.values, spec)
 	return nil
 }
 
@@ -914,16 +953,29 @@ func projectStatusError(number int, err error, detail string) error {
 
 type CommandRunner struct {
 	Binary, CodexBinary, ClaudeBinary string
-	// Agents holds every configured agent to load balance across when
-	// dispatching new issues. AgentName rotates through it round robin.
-	Agents                         []string
-	Agent, Model, ModelLevel, Repo string
-	Output                         io.Writer
-	Yolo                           bool
+	// Agents holds every configured agent, including its optional model and
+	// reasoning level, to load balance across when dispatching new issues.
+	// AgentName rotates through it round robin.
+	Agents      []agentSpec
+	Agent, Repo string
+	Output      io.Writer
+	Yolo        bool
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
 	// round robin selection advances consistently regardless of how many
 	// times the struct is copied.
 	agentCursor *atomic.Uint64
+}
+
+// specForProvider returns the configured agentSpec for the given provider
+// name, falling back to a spec with no model or level if none is
+// configured for it.
+func (r CommandRunner) specForProvider(provider string) agentSpec {
+	for _, spec := range r.Agents {
+		if spec.Provider == provider {
+			return spec
+		}
+	}
+	return agentSpec{Provider: provider}
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
@@ -954,6 +1006,7 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 	if agent == "" {
 		agent = r.Agent
 	}
+	spec := r.specForProvider(agent)
 	if agent == "codex" {
 		args := []string{"exec"}
 		if session.Resume {
@@ -962,11 +1015,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		if r.Yolo {
 			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 		}
-		if !session.Resume && r.Model != "" {
-			args = append(args, "--model", r.Model)
+		if !session.Resume && spec.Model != "" {
+			args = append(args, "--model", spec.Model)
 		}
-		if !session.Resume && r.ModelLevel != "" {
-			args = append(args, "-c", "model_reasoning_effort="+r.ModelLevel)
+		if !session.Resume && spec.Level != "" {
+			args = append(args, "-c", "model_reasoning_effort="+spec.Level)
 		}
 		if session.Resume {
 			args = append(args, session.ID)
@@ -987,11 +1040,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		// shell commands the issue workflow needs and exiting successfully.
 		args = append(args, "--permission-mode", "auto")
 	}
-	if !session.Resume && r.Model != "" {
-		args = append(args, "--model", r.Model)
+	if !session.Resume && spec.Model != "" {
+		args = append(args, "--model", spec.Model)
 	}
-	if !session.Resume && r.ModelLevel != "" {
-		args = append(args, "--effort", r.ModelLevel)
+	if !session.Resume && spec.Level != "" {
+		args = append(args, "--effort", spec.Level)
 	}
 	// Claude's default text output only prints once the full response is
 	// ready. Stream JSON events instead so the dashboard shows live progress
@@ -1019,10 +1072,10 @@ func (r CommandRunner) AgentName() string {
 		return "codex"
 	}
 	if len(r.Agents) == 1 || r.agentCursor == nil {
-		return r.Agents[0]
+		return r.Agents[0].Provider
 	}
 	index := r.agentCursor.Add(1) - 1
-	return r.Agents[index%uint64(len(r.Agents))]
+	return r.Agents[index%uint64(len(r.Agents))].Provider
 }
 
 func (r CommandRunner) RunSession(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession)) error {

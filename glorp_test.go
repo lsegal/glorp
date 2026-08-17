@@ -720,17 +720,17 @@ func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 
 func TestCommandRunnerPassesModelAndLevel(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Model: "gpt-5.6-luna", ModelLevel: "high"}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Agents: []agentSpec{{Provider: "codex", Model: "gpt-5.6-luna", Level: "high"}}}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Model: "claude-sonnet", ModelLevel: "medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Agents: []agentSpec{{Provider: "claude", Model: "claude-sonnet", Level: "medium"}}}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
 	}
 }
 
 func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 	dir := t.TempDir()
-	codex := CommandRunner{Agent: "claude", Yolo: true, Model: "saved-model", ModelLevel: "high"}
+	codex := CommandRunner{Agent: "claude", Yolo: true, Agents: []agentSpec{{Provider: "codex", Model: "saved-model", Level: "high"}}}
 	session := AgentSession{ID: "session-7", Agent: "codex", CheckoutDirectory: dir, Resume: true}
 	resumePrompt := "continue\n\nRecover the existing work. If this issue has a draft pull request, inspect it and pull its branch before continuing."
 	wantCodex := []string{"exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "session-7", resumePrompt}
@@ -738,7 +738,7 @@ func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 		t.Fatalf("Codex resume args = %#v, want %#v", got, wantCodex)
 	}
 
-	claude := CommandRunner{Agent: "codex", Yolo: true, Model: "saved-model", ModelLevel: "medium"}
+	claude := CommandRunner{Agent: "codex", Yolo: true, Agents: []agentSpec{{Provider: "claude", Model: "saved-model", Level: "medium"}}}
 	session.Agent = "claude"
 	wantClaude := []string{"-p", "--resume", "session-7", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", resumePrompt}
 	if got := commandArgsForSession(claude, Issue{Number: 7}, session); !reflect.DeepEqual(got, wantClaude) {
@@ -765,7 +765,7 @@ func TestCommandRunnerRegeneratesWorkWhenCheckoutIsMissing(t *testing.T) {
 }
 
 func TestCommandRunnerAgentNameLoadBalancesEvenlyAcrossAgents(t *testing.T) {
-	runner := CommandRunner{Agents: []string{"codex", "claude"}, agentCursor: &atomic.Uint64{}}
+	runner := CommandRunner{Agents: []agentSpec{{Provider: "codex"}, {Provider: "claude"}}, agentCursor: &atomic.Uint64{}}
 	got := make([]string, 6)
 	for i := range got {
 		got[i] = runner.AgentName()

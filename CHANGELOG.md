@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remove the `--model` and `--model-level` flags; select a model and reasoning level per agent with `--agent provider/model:level` instead.
+
 ## v1.0.7 - 2026-08-16
 
 - Support repeating `--agent` to configure multiple agents, load balanced evenly across concurrency, with each agent's quota shown by name in the dashboard.

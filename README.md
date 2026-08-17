@@ -117,6 +117,12 @@ Load balance work evenly across Codex and Claude by repeating `--agent`:
 glorp --agent codex --agent claude --concurrency 4 owner/repo
 ```
 
+Select a specific model and reasoning level per agent with `--agent provider/model:level`:
+
+```sh
+glorp --agent codex/o3:high --agent claude/opus:medium --concurrency 4 owner/repo
+```
+
 Allow agents to run without sandbox or permission checks:
 
 ```sh
@@ -161,7 +167,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | --- | --- | --- |
 | `-h`, `--help` | — | Print command usage and option defaults. |
 | `--version` | `false` | Print the glorp version and exit. |
-| `--agent NAME` | `codex` | Agent to run. Supported values are `codex` and `claude`. Repeatable; when given more than once, new issues are load balanced evenly across the listed agents. |
+| `--agent NAME[/MODEL[:LEVEL]]` | `codex` | Agent to run, as `provider`, `provider/model`, or `provider/model:level`. Supported providers are `codex` and `claude`; supported levels are `low`, `medium`, and `high`. Repeatable; when given more than once, new issues are load balanced evenly across the listed agents. |
 | `--all-issues` | `false` | Disable the default issue-search filter and consider all open issues. |
 | `--claude-binary PATH` | `claude` | Claude Code executable name or path. |
 | `--codex-binary PATH` | `codex` | Codex executable name or path. |
@@ -169,8 +175,6 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--filter QUERY` | `is:issue state:open author:@me` | GitHub issue-search filter. Repeat the option to combine terms. The default author filter applies to repository targets; Project targets default to all open project issues. |
 | `--interval DURATION` | `30s` | Periodic GitHub synchronization interval. Uses Go duration syntax such as `10s`, `2m`, or `1h30m`; must be positive. |
 | `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
-| `--model MODEL` | agent default | Model passed to the selected agent. |
-| `--model-level LEVEL` | agent default | Reasoning or effort level passed to the selected agent. Supported values are `low`, `medium`, and `high`. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | URL of the ngrok local API used to discover the public tunnel. |
 | `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. |
 | `--ui MODE` | `web` | Select the UI: `web`, `tui`, or `none`. |

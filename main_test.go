@@ -414,7 +414,7 @@ func TestFilterFlagDefaultsToMyOpenIssues(t *testing.T) {
 }
 
 func TestAgentFlagAccumulatesValues(t *testing.T) {
-	got := agentFlag{values: []string{"codex"}}
+	got := agentFlag{values: []agentSpec{{Provider: "codex"}}}
 	if err := got.Set("claude"); err != nil {
 		t.Fatal(err)
 	}
@@ -427,9 +427,26 @@ func TestAgentFlagAccumulatesValues(t *testing.T) {
 }
 
 func TestAgentFlagRejectsUnknownAgent(t *testing.T) {
-	got := agentFlag{values: []string{"codex"}}
+	got := agentFlag{values: []agentSpec{{Provider: "codex"}}}
 	if err := got.Set("gemini"); err == nil {
 		t.Fatal("expected error for unknown agent")
+	}
+}
+
+func TestAgentFlagParsesModelAndLevel(t *testing.T) {
+	got := agentFlag{}
+	if err := got.Set("codex/o3:high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := got.Set("claude/opus"); err != nil {
+		t.Fatal(err)
+	}
+	want := []agentSpec{{Provider: "codex", Model: "o3", Level: "high"}, {Provider: "claude", Model: "opus"}}
+	if !reflect.DeepEqual(got.values, want) {
+		t.Fatalf("agents = %#v, want %#v", got.values, want)
+	}
+	if err := got.Set("codex/o3:extreme"); err == nil {
+		t.Fatal("expected error for invalid level")
 	}
 }
 
