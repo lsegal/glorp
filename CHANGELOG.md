@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add support for watching a GitHub Discussions board target (`https://github.com/OWNER/REPO/discussions`). glorp dispatches the new read-only `gh-discuss` skill for each new top-level Discussion thread with no replies yet; the skill only reads the repository to answer the question and posts a single top-level reply when it can do so accurately and positively, otherwise it leaves the thread untouched.
+
 ## v1.1.0 - 2026-08-17
 
 - Replace the manual full-version `Release` workflow input with a `major`/`minor`/`patch`/`version` level chooser that computes the next tag from the latest existing tag, matching the release bump logic from `lsegal/aviary`.

@@ -201,6 +201,55 @@ func TestParseTargetURLs(t *testing.T) {
 	if err != nil || !got.isProject || got.owner != "example" || got.projectID != "4" || got.projectOwnerType != "orgs" {
 		t.Fatalf("organization project target = %#v, %v", got, err)
 	}
+	for _, input := range []string{
+		"https://github.com/lsegal/glorp/discussions",
+		"https://github.com/lsegal/glorp/discussions/",
+	} {
+		got, err := parseTarget(input)
+		if err != nil || !got.isDiscussion || got.repo != "lsegal/glorp" || got.isProject {
+			t.Fatalf("parseTarget(%q) = %#v, %v", input, got, err)
+		}
+	}
+}
+
+func TestGHCLIListUnansweredDiscussions(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte(`{"data":{"repository":{"discussions":{"nodes":[
+			{"number":5,"title":"Unanswered","body":"question","createdAt":"2026-08-01T00:00:00Z","comments":{"totalCount":0}},
+			{"number":3,"title":"Answered","body":"question","createdAt":"2026-07-01T00:00:00Z","comments":{"totalCount":2}}
+		]}}}}`), nil
+	}}
+	discussions, err := gh.ListUnansweredDiscussions(context.Background(), "https://github.com/owner/repo/discussions")
+	if err != nil {
+		t.Fatalf("ListUnansweredDiscussions: %v", err)
+	}
+	if len(discussions) != 1 || discussions[0].Number != 5 || discussions[0].Title != "Unanswered" {
+		t.Fatalf("discussions = %#v", discussions)
+	}
+	if len(calls) != 1 || calls[0][0] != "api" || calls[0][1] != "graphql" {
+		t.Fatalf("call = %#v", calls)
+	}
+}
+
+func TestGHCLIListUnansweredDiscussionsRejectsNonDiscussionTarget(t *testing.T) {
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		t.Fatal("runCommand should not be called for a non-discussion target")
+		return nil, nil
+	}}
+	if _, err := gh.ListUnansweredDiscussions(context.Background(), "owner/repo"); err == nil {
+		t.Fatal("expected an error for a non-discussion target")
+	}
+}
+
+func TestGHCLIListUnansweredDiscussionsReturnsError(t *testing.T) {
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte("boom"), errors.New("exit status 1")
+	}}
+	if _, err := gh.ListUnansweredDiscussions(context.Background(), "https://github.com/owner/repo/discussions"); err == nil {
+		t.Fatal("expected an error")
+	}
 }
 
 func TestParseGitHubRemote(t *testing.T) {

@@ -34,7 +34,8 @@ try {
         [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $installDir).Trim(';')), 'User')
     }
     & npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y
-    Write-Host "Installed glorp to $installDir\glorp.exe and gh-fix globally."
+    & npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code -y
+    Write-Host "Installed glorp to $installDir\glorp.exe and gh-fix/gh-discuss globally."
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
