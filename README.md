@@ -63,6 +63,14 @@ Installer behavior can be overridden with environment variables:
 
 The public `.agents/skills/gh-fix` directory in this repository is the skills.sh package source.
 
+### Upgrading
+
+```sh
+glorp upgrade
+```
+
+The command re-runs the installer for the current platform, so it picks up the latest release along with the current `gh-fix` skill. `GLORP_REPO` and the other installer environment variables above still apply.
+
 ## Quick start
 
 Options must appear before the first target. A target can be an `OWNER/REPO`, a GitHub repository URL, or a GitHub Project URL.
