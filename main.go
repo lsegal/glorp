@@ -94,7 +94,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(*readyState)}
+	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(*readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), *allIssues
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
@@ -261,6 +261,18 @@ type GHCLI struct {
 	AllIssues  bool
 	ReadyState string
 	runCommand func(context.Context, ...string) ([]byte, error)
+	// publicAPI overrides the unauthenticated public GitHub API request used
+	// to poll public repositories without spending the authenticated gh
+	// token's rate limit. Nil uses the real network implementation.
+	publicAPI publicAPIDoer
+	// publicRepoCache memoizes repo visibility across the lifetime of a run.
+	// It is a pointer so copies of GHCLI (it is passed by value throughout)
+	// share one cache; nil (the zero value used in tests that build GHCLI
+	// literals directly) simply disables memoization rather than panicking.
+	publicRepoCache *sync.Map
+	// selfLoginCache memoizes the authenticated gh user's login, needed only
+	// to translate the "author:@me" search qualifier for the public API.
+	selfLoginCache *sync.Map
 }
 
 func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -271,7 +283,8 @@ func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
-	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number))
+	public := g.isPublicRepo(ctx, repo)
+	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number))
 	if err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("read issue #%d state: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -281,7 +294,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 	if err := json.Unmarshal(output, &issue); err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("decode issue #%d state: %w", number, err)
 	}
-	output, err = g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline")
+	output, err = g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline")
 	if err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("read issue #%d timeline: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -307,7 +320,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 		if event.Event != "cross-referenced" || pullRequest.PullRequest == nil || !closesIssue(pullRequest.Body, repo, number) {
 			continue
 		}
-		output, err := g.run(ctx, "api", "repos/"+repo+"/pulls/"+strconv.Itoa(pullRequest.Number))
+		output, err := g.apiGET(ctx, public, "repos/"+repo+"/pulls/"+strconv.Itoa(pullRequest.Number))
 		if err != nil {
 			return OriginatingWorkState{}, fmt.Errorf("read pull request #%d state for issue #%d: %w: %s", pullRequest.Number, number, err, strings.TrimSpace(string(output)))
 		}
@@ -582,12 +595,21 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 		}
 		return issues, nil
 	}
+	if !target.isProject && g.isPublicRepo(ctx, target.repo) {
+		if issues, ok := g.listPublicIssues(ctx, target.repo, g.Filter, g.AllIssues); ok {
+			for i := range issues {
+				if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+					return nil, err
+				}
+			}
+			return issues, nil
+		}
+	}
 	args := issueListArgs(repo, g.Filter, g.AllIssues)
 	if target.isProject {
 		args = projectListArgs(target, g.Filter, g.AllIssues)
 	}
-	cmd := exec.CommandContext(ctx, g.Binary, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := g.run(ctx, args...)
 	var issues []Issue
 	if target.isProject {
 		issues, err = decodeProjectIssues(output, err)
@@ -783,13 +805,13 @@ var dependencyPattern = regexp.MustCompile(`(?i)\bdepends\s+on\s+#(\d+)`)
 
 func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) error {
 	dependencies := make(map[int]IssueDependency)
+	public := repo != "" && g.isPublicRepo(ctx, repo)
 	for _, match := range dependencyPattern.FindAllStringSubmatch(issue.Body, -1) {
 		number := 0
 		if _, err := fmt.Sscanf(match[1], "%d", &number); err == nil && number > 0 {
 			dependency := IssueDependency{Number: number}
 			if repo != "" {
-				cmd := exec.CommandContext(ctx, g.Binary, "issue", "view", fmt.Sprint(number), "--repo", repo, "--json", "state")
-				output, viewErr := cmd.Output()
+				output, viewErr := g.dependencyIssueView(ctx, public, repo, number)
 				if viewErr != nil {
 					return fmt.Errorf("read dependency #%d for issue #%d: %w", number, issue.Number, viewErr)
 				}
@@ -805,8 +827,7 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 		}
 	}
 	if repo != "" {
-		cmd := exec.CommandContext(ctx, g.Binary, "api", "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
-		output, err := cmd.CombinedOutput()
+		output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
 		if err != nil {
 			return fmt.Errorf("list dependencies for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
 		}
@@ -835,7 +856,8 @@ func (g GHCLI) PostComment(ctx context.Context, repo string, number int, body st
 }
 
 func (g GHCLI) ListComments(ctx context.Context, repo string, number int) ([]Comment, error) {
-	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments", "--paginate")
+	public := g.isPublicRepo(ctx, repo)
+	output, err := g.apiGETPaginated(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments")
 	if err != nil {
 		return nil, fmt.Errorf("list comments on #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
