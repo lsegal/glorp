@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.1 - 2026-08-17
+
 - Stop probing organization-owned project boards in push mode. Those boards already deliver every card change over their `projects_v2_item` webhook, so the 30-second board fingerprint probe was duplicate polling; it now runs only for boards GitHub gives no board-level push signal for (user-owned and repository-scoped Projects). The startup line also reports the real refresh strategy in push mode (`webhook push with a 15m0s fallback poll`) instead of the unused `-interval` value.
 
 ## v1.2.0 - 2026-08-17
