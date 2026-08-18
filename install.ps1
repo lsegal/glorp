@@ -27,6 +27,15 @@ try {
     Invoke-WebRequest -Uri $url -OutFile $zip
     Expand-Archive -Path $zip -DestinationPath $temp -Force
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    $installedExe = Join-Path $installDir 'glorp.exe'
+    if (Test-Path $installedExe) {
+        # Windows won't let us overwrite a running glorp.exe in place, but it
+        # will let us rename one out of the way, so upgrading a running
+        # instance still succeeds.
+        $backupExe = Join-Path $installDir 'glorp.exe.bak'
+        Remove-Item $backupExe -Force -ErrorAction SilentlyContinue
+        Rename-Item $installedExe 'glorp.exe.bak' -Force
+    }
     Copy-Item (Join-Path $temp 'glorp.exe') (Join-Path $installDir 'glorp.exe') -Force
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($null -eq $userPath) { $userPath = '' }
