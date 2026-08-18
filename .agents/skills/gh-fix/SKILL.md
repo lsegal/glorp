@@ -12,7 +12,7 @@ Treat `/gh-fix ISSUENUMBER` as authorization to implement, publish, continuously
 1. Require exactly one positive integer issue number; accept an optional leading `#`.
 2. Identify the GitHub repository from the user's explicit repository or the current checkout's GitHub remote.
 3. Require `git`, `gh`, and an authenticated `gh` session with repository and workflow access.
-4. Read the issue title, body, labels, comments, state, and linked context. Stop if it does not exist or is not actionable. If it is already closed, explain that and do not mutate the repository unless the user explicitly requested follow-up work.
+4. Read the issue title, body, labels, comments, state, and linked context. If it does not exist, stop; there is nothing to comment on. If it is not actionable, or is already closed, stop without opening a pull request or otherwise mutating the repository — but post a single comment on the issue explaining why no fix was implemented, unless the user explicitly requested follow-up work instead. This keeps the reason visible on GitHub instead of only in the final report to the caller.
 5. Read repository instructions, including applicable `AGENTS.md`, contribution guidance, branch/PR rules, CI configuration, and changelog conventions.
 
 ## Resume existing work (re-entrant mode)
@@ -135,7 +135,7 @@ Only after the pull request is merged, review its body, review comments, and con
 
 ## Report the result
 
-Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, completed CI checks, follow-up issue URLs or confirmation that none were needed, and UI screenshots or screen recordings, or confirmation that they were not applicable. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log details, and the remaining requirement; preserve the isolated clone and branch for continuation.
+Lead with the merged outcome. Include the issue and PR URLs, branch name, final commit or merge SHA, clone path, changelog file, local tests, completed CI checks, follow-up issue URLs or confirmation that none were needed, and UI screenshots or screen recordings, or confirmation that they were not applicable. Confirm both PR merge and issue closure. If genuinely blocked, identify the exact failed step, relevant URL or log details, and the remaining requirement; preserve the isolated clone and branch for continuation. If the workflow stopped during validation without opening a pull request, report that no PR was created, quote the reason, and include the URL of the explanatory comment posted on the issue (or confirm none was needed if the issue does not exist).
 
 ## Clean up the clone
 
