@@ -20,8 +20,14 @@ const (
 	stateReloadDebounce   = 5 * time.Second
 	pushFallbackInterval  = 15 * time.Minute
 	webhookRetryLimit     = 3
-	workClosureInterval   = 10 * time.Second
-	projectProbeInterval  = 30 * time.Second
+	// workClosureInterval governs how often each actively-worked issue is
+	// polled for closure/competing-claim signals. It matches the default
+	// base poll interval rather than undercutting it, since every active
+	// issue runs two of these loops in parallel and each poll costs several
+	// GitHub API requests; a tighter interval was burning quota far faster
+	// than the base issue-list poll (issue #276).
+	workClosureInterval  = 30 * time.Second
+	projectProbeInterval = 30 * time.Second
 	// reapPollInterval is the longest an instance goes without a reap pass
 	// over abandoned work. Polling can be much less frequent than this in
 	// webhook push mode, so reaping gets its own floor (issue #239).
