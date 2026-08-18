@@ -182,12 +182,6 @@ func (f *fakeRunner) Run(ctx context.Context, i Issue) error {
 	f.mu.Unlock()
 	return nil
 }
-func TestParseIssues(t *testing.T) {
-	got, err := parseIssues([]byte(`[{"number":7,"title":"bug","state":"OPEN"}]`))
-	if err != nil || len(got) != 1 || got[0].Number != 7 {
-		t.Fatalf("%v %#v", err, got)
-	}
-}
 func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 1}, {Number: 2}}, {{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4}}}}

@@ -589,22 +589,6 @@ func TestProjectStatusErrorReportsWriteScope(t *testing.T) {
 	}
 }
 
-func TestIssueListArgsUsesDefaultFilter(t *testing.T) {
-	got := issueListArgs("owner/repo", defaultIssueFilter, false)
-	want := []string{"issue", "list", "--repo", "owner/repo", "--state", "open", "--limit", "1000", "--search", "is:issue state:open author:@me", "--json", "number,title,body,state,createdAt,labels"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
-	}
-}
-
-func TestIssueListArgsPreservesFilterSyntax(t *testing.T) {
-	filter := "label=one status=closed label=two"
-	got := issueListArgs("owner/repo", filter, false)
-	if got[9] != filter {
-		t.Fatalf("search query = %q, want %q", got[9], filter)
-	}
-}
-
 func TestFilterFlagAccumulatesValues(t *testing.T) {
 	got := filterFlag{values: []string{defaultIssueFilter}}
 	if err := got.Set("label:bug"); err != nil {
@@ -642,13 +626,6 @@ func TestAgentFlagRejectsUnknownAgent(t *testing.T) {
 	got := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	if err := got.Set("gemini"); err == nil {
 		t.Fatal("expected error for unknown agent")
-	}
-}
-
-func TestIssueListArgsDisablesFilter(t *testing.T) {
-	got := issueListArgs("owner/repo", "label:agent-ready", true)
-	if slices.Contains(got, "--search") {
-		t.Fatalf("all-issues args unexpectedly contain a filter: %#v", got)
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -348,7 +349,7 @@ func TestListIssuesUsesPublicSearchAPIForPublicRepo(t *testing.T) {
 	}
 }
 
-func TestListIssuesFallsBackToGHOnIncompleteSearchResults(t *testing.T) {
+func TestListIssuesFallsBackToAuthenticatedSearchOnIncompleteResults(t *testing.T) {
 	var calls [][]string
 	gh := GHCLI{
 		publicRepoCache: &sync.Map{},
@@ -363,8 +364,8 @@ func TestListIssuesFallsBackToGHOnIncompleteSearchResults(t *testing.T) {
 		},
 		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
 			calls = append(calls, append([]string(nil), args...))
-			if args[0] == "issue" {
-				return []byte(`[{"number":7,"title":"bug"}]`), nil
+			if len(args) > 1 && args[0] == "api" && args[1] == "search/issues" {
+				return []byte(`{"items":[{"number":7,"title":"bug"}]}`), nil
 			}
 			return []byte(`[]`), nil
 		},
@@ -375,22 +376,18 @@ func TestListIssuesFallsBackToGHOnIncompleteSearchResults(t *testing.T) {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
 	if len(issues) != 1 || issues[0].Number != 7 {
-		t.Fatalf("issues = %#v, want the gh CLI fallback result", issues)
+		t.Fatalf("issues = %#v, want the authenticated REST search fallback result", issues)
 	}
-	want := issueListArgs("owner/repo", defaultIssueFilter, false)
-	found := false
 	for _, call := range calls {
-		if reflect.DeepEqual(call, want) {
-			found = true
-			break
+		for _, arg := range call {
+			if strings.Contains(arg, "graphql") {
+				t.Fatalf("gh calls = %#v, want no graphql call", calls)
+			}
 		}
-	}
-	if !found {
-		t.Fatalf("gh calls = %#v, want one call matching %#v", calls, want)
 	}
 }
 
-func TestListIssuesFallsBackToGHWhenNotPublic(t *testing.T) {
+func TestListIssuesUsesAuthenticatedSearchWhenNotPublic(t *testing.T) {
 	publicAPICalls := 0
 	var calls [][]string
 	gh := GHCLI{
@@ -401,8 +398,8 @@ func TestListIssuesFallsBackToGHWhenNotPublic(t *testing.T) {
 		},
 		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
 			calls = append(calls, append([]string(nil), args...))
-			if args[0] == "issue" {
-				return []byte(`[{"number":7,"title":"bug"}]`), nil
+			if len(args) > 1 && args[0] == "api" && args[1] == "search/issues" {
+				return []byte(`{"items":[{"number":7,"title":"bug"}]}`), nil
 			}
 			return []byte(`[]`), nil
 		},
@@ -415,7 +412,7 @@ func TestListIssuesFallsBackToGHWhenNotPublic(t *testing.T) {
 	if len(issues) != 1 || issues[0].Number != 7 {
 		t.Fatalf("issues = %#v", issues)
 	}
-	want := issueListArgs("owner/repo", defaultIssueFilter, false)
+	want := []string{"api", "search/issues", "-X", "GET", "-f", "q=" + publicIssueSearchQuery("owner/repo", defaultIssueFilter, false, ""), "-f", "per_page=100", "--paginate"}
 	if len(calls) == 0 || !reflect.DeepEqual(calls[0], want) {
 		t.Fatalf("gh calls = %#v, want first call %#v", calls, want)
 	}
@@ -483,6 +480,38 @@ func TestLoadDependenciesUsesPublicAPIForPublicRepo(t *testing.T) {
 	}
 	if ranGH {
 		t.Fatal("loadDependencies() ran the gh CLI for a public repo")
+	}
+}
+
+func TestLoadDependenciesUsesAuthenticatedRESTForPrivateRepo(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		publicAPI: func(context.Context, string) ([]byte, http.Header, int, error) {
+			return []byte(`{"private":true}`), nil, http.StatusOK, nil
+		},
+		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string(nil), args...))
+			switch {
+			case len(args) >= 2 && args[0] == "api" && args[1] == "repos/owner/repo/issues/4":
+				return []byte(`{"state":"open"}`), nil
+			case len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "dependencies/blocked_by"):
+				return []byte(`[]`), nil
+			}
+			return nil, fmt.Errorf("unexpected gh call: %#v", args)
+		},
+	}
+	issue := &Issue{Number: 9, Body: "depends on #4"}
+	if err := gh.loadDependencies(context.Background(), "owner/repo", issue); err != nil {
+		t.Fatalf("loadDependencies() error = %v", err)
+	}
+	if len(issue.DependsOn) != 1 || issue.DependsOn[0].Number != 4 || issue.DependsOn[0].State != "open" {
+		t.Fatalf("DependsOn = %#v", issue.DependsOn)
+	}
+	for _, call := range calls {
+		if len(call) > 0 && call[0] == "issue" {
+			t.Fatalf("gh calls = %#v, want no `gh issue view` (queries GraphQL)", calls)
+		}
 	}
 }
 
