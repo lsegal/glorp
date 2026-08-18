@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix `glorp upgrade` failing on Windows with `Copy-Item : The process cannot access the file '...\glorp.exe' because it is being used by another process`. `install.ps1` now renames the running `glorp.exe` to `glorp.exe.bak` before copying the new binary into place, since Windows allows renaming an in-use file even though it won't allow overwriting one.
 - Take glorp's subprocesses down with it when glorp is killed outright. Owned subprocesses now carry a Linux parent-death signal, belong to a Windows job object that is destroyed with glorp, and on macOS and the BSDs — which have no kernel equivalent — are recorded with a small reaper process that terminates them when its pipe to glorp closes, so `kill -9` of a running `glorp watch` no longer strands the ngrok tunnel or a running agent on any supported platform.
 
 ## v1.2.3 - 2026-08-17
