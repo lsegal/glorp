@@ -679,29 +679,35 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 		}
 		return issues, nil
 	}
-	if !target.isProject && g.isPublicRepo(ctx, target.repo) {
-		if issues, ok := g.listPublicIssues(ctx, target.repo, g.Filter, g.AllIssues); ok {
-			for i := range issues {
-				if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
-					return nil, err
-				}
+	if target.isProject {
+		// A repository-scoped project board (owner/repo/projects/N) leaves
+		// projectOwnerType unset; it still needs the GraphQL-only Projects
+		// v2 API, which has no REST equivalent.
+		issues, err := decodeProjectIssues(g.run(ctx, projectListArgs(target, g.Filter, g.AllIssues)...))
+		if err != nil {
+			return nil, err
+		}
+		for i := range issues {
+			if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+				return nil, err
 			}
-			return issues, nil
+		}
+		return issues, nil
+	}
+
+	var issues []Issue
+	usedPublicAPI := false
+	if g.isPublicRepo(ctx, target.repo) {
+		if got, ok := g.listPublicIssues(ctx, target.repo, g.Filter, g.AllIssues); ok {
+			issues, usedPublicAPI = got, true
 		}
 	}
-	args := issueListArgs(repo, g.Filter, g.AllIssues)
-	if target.isProject {
-		args = projectListArgs(target, g.Filter, g.AllIssues)
-	}
-	output, err := g.run(ctx, args...)
-	var issues []Issue
-	if target.isProject {
-		issues, err = decodeProjectIssues(output, err)
-	} else {
-		issues, err = decodeIssues(output, err)
-	}
-	if err != nil {
-		return nil, err
+	if !usedPublicAPI {
+		got, err := g.listAuthenticatedIssues(ctx, target.repo, g.Filter, g.AllIssues)
+		if err != nil {
+			return nil, err
+		}
+		issues = got
 	}
 	for i := range issues {
 		if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
@@ -784,18 +790,6 @@ func (g GHCLI) ListUnansweredDiscussions(ctx context.Context, repo string) ([]Di
 // accepted, case-insensitively. An empty category matches every thread.
 func matchesDiscussionCategory(want, slug, name string) bool {
 	return want == "" || strings.EqualFold(want, slug) || strings.EqualFold(want, name)
-}
-
-func issueListArgs(repo, filter string, allIssues bool) []string {
-	target, err := parseTarget(repo)
-	if err != nil || target.isProject {
-		return nil
-	}
-	args := []string{"issue", "list", "--repo", target.repo, "--state", "open", "--limit", "1000"}
-	if !allIssues && filter != "" {
-		args = append(args, "--search", filter)
-	}
-	return append(args, "--json", "number,title,body,state,createdAt,labels")
 }
 
 type target struct {
@@ -1068,13 +1062,6 @@ func projectItemListError(output []byte, err error) error {
 		return fmt.Errorf("list project items: %w: %s", err, detail)
 	}
 	return fmt.Errorf("list project items: %w", err)
-}
-
-func decodeIssues(data []byte, err error) ([]Issue, error) {
-	if err != nil {
-		return nil, fmt.Errorf("list issues: %w", err)
-	}
-	return parseIssues(data)
 }
 
 var dependencyPattern = regexp.MustCompile(`(?i)\bdepends\s+on\s+#(\d+)`)

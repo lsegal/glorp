@@ -1,13 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -105,7 +105,8 @@ func (g GHCLI) apiGET(ctx context.Context, public bool, path string, extraGHArgs
 
 // dependencyIssueView returns the `{"state": ...}` JSON for a dependency
 // issue, preferring the unauthenticated public REST API when public is true
-// and falling back to `gh issue view` (matching prior behavior) otherwise.
+// and falling back to the authenticated REST issue endpoint (via `gh api`,
+// never `gh issue view`, which queries GraphQL) otherwise.
 func (g GHCLI) dependencyIssueView(ctx context.Context, public bool, repo string, number int) ([]byte, error) {
 	if public {
 		body, _, status, err := g.publicGET(ctx, "https://api.github.com/repos/"+repo+"/issues/"+strconv.Itoa(number))
@@ -113,8 +114,7 @@ func (g GHCLI) dependencyIssueView(ctx context.Context, public bool, repo string
 			return body, nil
 		}
 	}
-	cmd := exec.CommandContext(ctx, g.Binary, "issue", "view", strconv.Itoa(number), "--repo", repo, "--json", "state")
-	return outputChildProcess(cmd)
+	return g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number))
 }
 
 // apiGETPaginated mirrors `gh api PATH --paginate`: it follows RFC 5988
@@ -205,10 +205,25 @@ type searchIssuesPage struct {
 	IncompleteResults bool                `json:"incomplete_results"`
 }
 
+// issueFromSearchResult converts one Search API result into an Issue. ok is
+// false for a pull request, since the search endpoint returns both.
+func issueFromSearchResult(item searchIssueResult) (issue Issue, ok bool) {
+	if item.PullRequest != nil {
+		return Issue{}, false
+	}
+	return Issue{
+		Number:    item.Number,
+		Title:     item.Title,
+		Body:      item.Body,
+		State:     item.State,
+		CreatedAt: item.CreatedAt,
+		Labels:    item.Labels,
+	}, true
+}
+
 // listPublicIssues lists open issues in repo via the unauthenticated Search
-// API, matching the issues issueListArgs would have gh fetch via `gh issue
-// list`. It returns ok=false whenever the public request didn't succeed, so
-// the caller can fall back to the gh CLI path.
+// API. It returns ok=false whenever the public request didn't succeed, so
+// the caller can fall back to listAuthenticatedIssues.
 func (g GHCLI) listPublicIssues(ctx context.Context, repo, filter string, allIssues bool) (issues []Issue, ok bool) {
 	selfLogin := ""
 	if !allIssues && strings.Contains(filter, "author:@me") {
@@ -236,17 +251,11 @@ func (g GHCLI) listPublicIssues(ctx context.Context, repo, filter string, allIss
 			return nil, false
 		}
 		for _, item := range page.Items {
-			if item.PullRequest != nil {
+			issue, ok := issueFromSearchResult(item)
+			if !ok {
 				continue
 			}
-			issues = append(issues, Issue{
-				Number:    item.Number,
-				Title:     item.Title,
-				Body:      item.Body,
-				State:     item.State,
-				CreatedAt: item.CreatedAt,
-				Labels:    item.Labels,
-			})
+			issues = append(issues, issue)
 			if len(issues) == 1000 {
 				return issues, true
 			}
@@ -254,4 +263,41 @@ func (g GHCLI) listPublicIssues(ctx context.Context, repo, filter string, allIss
 		requestURL = nextPageURL(header.Get("Link"))
 	}
 	return issues, true
+}
+
+// listAuthenticatedIssues lists open issues in repo via the REST Search API,
+// authenticated through `gh api` rather than `gh issue list` (which queries
+// GraphQL). It is the private-repo/public-API-unavailable counterpart to
+// listPublicIssues, and the only path glorp's core polling loop takes for a
+// private repository.
+func (g GHCLI) listAuthenticatedIssues(ctx context.Context, repo, filter string, allIssues bool) ([]Issue, error) {
+	query := publicIssueSearchQuery(repo, filter, allIssues, "")
+	output, err := g.run(ctx, "api", "search/issues", "-X", "GET", "-f", "q="+query, "-f", "per_page=100", "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("list issues: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	var issues []Issue
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	for {
+		var page searchIssuesPage
+		if err := decoder.Decode(&page); err != nil {
+			if err == io.EOF {
+				return issues, nil
+			}
+			return nil, fmt.Errorf("decode issues: %w", err)
+		}
+		if page.IncompleteResults {
+			return nil, fmt.Errorf("list issues: search API returned incomplete results")
+		}
+		for _, item := range page.Items {
+			issue, ok := issueFromSearchResult(item)
+			if !ok {
+				continue
+			}
+			issues = append(issues, issue)
+			if len(issues) == 1000 {
+				return issues, nil
+			}
+		}
+	}
 }
