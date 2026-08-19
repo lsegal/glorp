@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.4 - 2026-08-19
+
 - Stop burning through GitHub's (much smaller) GraphQL rate limit for ordinary issue polling. The main issue-list poll and per-issue dependency lookups now use the REST Search and Issues APIs (`gh api search/issues`, `gh api repos/…/issues/…`) instead of `gh issue list`/`gh issue view`, both of which query GraphQL under the hood despite looking like plain REST commands. GraphQL is now only used for GitHub Projects (v2) boards and Discussions boards, which GitHub exposes exclusively through GraphQL. Also slow the per-issue closure/competing-claim polling loops from every 10 seconds to every 30, matching the default base poll interval rather than tripling its request rate, since every active issue runs two of these loops in parallel and each poll costs several API requests.
 - Have the `gh-fix` skill post a comment on the issue explaining why no fix was implemented when it stops during validation without opening a pull request, instead of only reporting the reason to the caller.
 - Fix `glorp upgrade` failing on Windows with `Copy-Item : The process cannot access the file '...\glorp.exe' because it is being used by another process`. `install.ps1` now renames the running `glorp.exe` to `glorp.exe.bak` before copying the new binary into place, since Windows allows renaming an in-use file even though it won't allow overwriting one.
