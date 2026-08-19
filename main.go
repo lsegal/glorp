@@ -1759,6 +1759,11 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	agent := r.specForSession(session).Name
 	args := commandArgsForSession(r, issue, session)
 	cmd := newAgentCommand(ctx, r.binary(agent), args...)
+	// Before a checkout directory exists, run outside glorp's own working
+	// directory so the agent cannot mistake an ambient git repo (e.g. the repo
+	// glorp itself was launched from) for the one it was asked to work on
+	// (issue #279).
+	cmd.Dir = os.TempDir()
 	if session.CheckoutDirectory != "" {
 		if info, err := os.Stat(session.CheckoutDirectory); err == nil && info.IsDir() {
 			cmd.Dir = session.CheckoutDirectory
