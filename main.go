@@ -751,6 +751,11 @@ const discussionsQuery = `query($owner:String!,$name:String!){
 // received any reply yet. A discussion's own reply count doubles as the
 // record of whether it still needs an answer, so no local state is needed
 // to avoid re-dispatching an already-answered thread.
+//
+// This is one of only three GraphQL calls left in glorp (issue #276); GitHub
+// Discussions has no REST API at all, so it is unavoidable. It only runs for
+// repositories explicitly configured with a `discussions:` target, never as
+// part of ordinary issue-repo polling.
 func (g GHCLI) ListUnansweredDiscussions(ctx context.Context, repo string) ([]Discussion, error) {
 	target, err := parseTarget(repo)
 	if err != nil {
@@ -911,6 +916,11 @@ func parseTarget(value string) (target, error) {
 	return target{}, fmt.Errorf("target must be OWNER/REPO or a GitHub repository/project URL")
 }
 
+// projectListArgs builds a `gh project item-list` invocation. Every `gh
+// project` subcommand queries GraphQL under the hood, unavoidably: GitHub
+// Projects (v2) has no REST API. This only runs for a repository-scoped
+// project board target (owner/repo/projects/N), never for ordinary
+// issue-repo polling.
 func projectListArgs(t target, filter string, allIssues bool) []string {
 	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
 	return append(args, "--query", projectItemQuery(filter, allIssues))
@@ -937,6 +947,9 @@ const (
 	projectItemKeyFields = "number state repository{nameWithOwner}"
 )
 
+// listProjectItemFields queries GraphQL directly (one of only three GraphQL
+// calls left in glorp; see issue #276) because GitHub Projects (v2) has no
+// REST API. It only runs for a user/org-owned project board target.
 func (g GHCLI) listProjectItemFields(ctx context.Context, target target, filter string, allIssues bool, contentFields string) ([]projectItem, error) {
 	ownerField := target.projectOwnerType
 	if ownerField == "users" {
@@ -1181,6 +1194,11 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 	return g.setProjectItemStatus(ctx, parsedTarget, itemID, issue.Number, status)
 }
 
+// repositoryProjectItems queries GraphQL directly (one of only three
+// GraphQL calls left in glorp; see issue #276) to find which project
+// boards an issue belongs to, since GitHub Projects (v2) has no REST API.
+// It only runs when SetIssueStatus is asked to move an issue's status and
+// no project target was given directly.
 func (g GHCLI) repositoryProjectItems(ctx context.Context, repo string, number int) ([]repositoryProjectItem, error) {
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
@@ -1223,6 +1241,10 @@ func (g GHCLI) repositoryProjectItems(ctx context.Context, repo string, number i
 	}
 }
 
+// setProjectItemStatus drives `gh project view`, `field-list`, and
+// `item-edit` -- every `gh project` subcommand queries GraphQL under the
+// hood, unavoidably, since GitHub Projects (v2) has no REST API. It only
+// runs when moving an issue's status on a project board.
 func (g GHCLI) setProjectItemStatus(ctx context.Context, target target, itemID string, issueNumber int, status string) error {
 
 	viewOutput, err := g.run(ctx, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
