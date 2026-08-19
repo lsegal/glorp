@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.5 - 2026-08-19
+
 - Document how `gh-fix` should upload UI screenshots and screen recordings to pull requests, using GitHub's undocumented `uploads.github.com` attachment endpoint with a bearer token instead of giving up for lack of a public API.
 - Fix the coding agent sometimes targeting the wrong repository when `glorp watch` is watching more than one repo. Before an issue's checkout directory exists, the agent process now starts outside glorp's own working directory instead of inheriting it, so it can no longer mistake glorp's launch directory's git remote for the repository it was actually asked to work on.
 
