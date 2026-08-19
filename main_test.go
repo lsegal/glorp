@@ -753,7 +753,13 @@ func runFakeAgent(log string, args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	if _, err := fmt.Fprintf(file, "%s\n<<<END>>>\n", strings.Join(args, " ")); err != nil {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		file.Close()
+		return 1
+	}
+	if _, err := fmt.Fprintf(file, "cwd=%s\n%s\n<<<END>>>\n", cwd, strings.Join(args, " ")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		file.Close()
 		return 1

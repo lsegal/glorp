@@ -1309,6 +1309,31 @@ func TestCommandRunnerRestartsCodexWithoutTheMissingSessionID(t *testing.T) {
 	}
 }
 
+// TestCommandRunnerRunsOutsideAmbientWorkingDirectory guards against issue
+// #279: a fresh (non-resumed) run must not inherit glorp's own working
+// directory, since that directory can belong to an unrelated git repository
+// (e.g. the repo `glorp watch` happened to be launched from) and mislead the
+// agent's own ambient-repo detection into targeting the wrong repository.
+func TestCommandRunnerRunsOutsideAmbientWorkingDirectory(t *testing.T) {
+	binary, log := writeFakeAgent(t, "", 0)
+	runner := CommandRunner{Agent: "codex", CodexBinary: binary, Repo: "o/r"}
+	session := AgentSession{ID: "session-7", Agent: "codex"}
+	if err := runner.RunSession(context.Background(), Issue{Number: 7, Target: "o/r"}, session, func(AgentSession) {}); err != nil {
+		t.Fatalf("RunSession() error = %v", err)
+	}
+	got := fakeAgentInvocations(t, log)
+	if len(got) != 1 {
+		t.Fatalf("agent invocations = %#v, want exactly one", got)
+	}
+	ambientWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(got[0], "cwd="+ambientWD) {
+		t.Fatalf("agent invocation ran in glorp's own working directory: %q", got[0])
+	}
+}
+
 func TestCommandRunnerReportsResumeFailuresThatAreNotMissingSessions(t *testing.T) {
 	binary, log := writeFakeAgent(t, "boom: the agent crashed", 3)
 	runner := CommandRunner{Agent: "claude", ClaudeBinary: binary, Repo: "o/r"}
