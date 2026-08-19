@@ -73,10 +73,22 @@ After implementation is complete, and only then, determine whether any changed f
 2. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture screenshots or a screen recording.
 3. For terminal based interfaces, copy output as text if there is no visual, animation, or state change.
 4. For all other non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to create a screen recording.
-5. Upload each screenshot or screen recording to the pull request, then embed it directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI screenshots or screen recordings to repository assets or commit them to the branch.
+5. Upload each screenshot or screen recording, then embed the returned URL directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI screenshots or screen recordings to repository assets or commit them to the branch.
+
+GitHub has no documented public API for attaching files to issues, pull requests, or comments, but the same endpoint the web UI uses for drag-and-drop accepts a bearer token non-interactively. Upload with it directly:
+
+```sh
+REPO_ID=$(gh api repos/<OWNER>/<REPO> --jq .id)
+curl -sf -X POST "https://uploads.github.com/user-attachments/assets?name=<FILENAME>&content_type=<MIME_TYPE>&repository_id=$REPO_ID" \
+  -H "Authorization: Bearer $(gh auth token)" \
+  -H "Accept: application/json" \
+  --data-binary @<LOCAL_FILE_PATH>
+```
+
+The response is JSON with a `url` field (`https://github.com/user-attachments/assets/<uuid>`); embed that URL in the pull request body. This endpoint is undocumented and unofficial, so treat a failed or unexpected response as one of the capture errors below rather than retrying indefinitely.
 
 Skip this section only when the completed diff does not affect UI code in any way.
-Skip if you run into 2+ errors trying to capture results and mention this in the PR.
+Skip if you run into 2+ errors trying to capture or upload results and mention this in the PR.
 
 ## Commit and push
 
