@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document how `gh-fix` should upload UI screenshots and screen recordings to pull requests, using GitHub's undocumented `uploads.github.com` attachment endpoint with a bearer token instead of giving up for lack of a public API.
+
 ## v1.2.4 - 2026-08-19
 
 - Stop burning through GitHub's (much smaller) GraphQL rate limit for ordinary issue polling. The main issue-list poll and per-issue dependency lookups now use the REST Search and Issues APIs (`gh api search/issues`, `gh api repos/…/issues/…`) instead of `gh issue list`/`gh issue view`, both of which query GraphQL under the hood despite looking like plain REST commands. GraphQL is now only used for GitHub Projects (v2) boards and Discussions boards, which GitHub exposes exclusively through GraphQL. Also slow the per-issue closure/competing-claim polling loops from every 10 seconds to every 30, matching the default base poll interval rather than tripling its request rate, since every active issue runs two of these loops in parallel and each poll costs several API requests.
