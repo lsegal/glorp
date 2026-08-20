@@ -45,6 +45,18 @@ func TestGhFixRoutesFollowUpsForGlorp(t *testing.T) {
 	}
 }
 
+func TestGhFixPrefersSquashMerges(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"prefer them in this order: squash, then merge, then rebase",
+		"use the PR's title and body as the squash commit message rather than overriding it",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not document squash-first merge order %q", required)
+		}
+	}
+}
+
 func TestGhFixTreatsIdentityMentionsAsThreadedInstructions(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{
