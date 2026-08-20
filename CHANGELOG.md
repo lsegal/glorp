@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Have the `gh-fix` skill prefer squash merges when the repository allows more than one merge method, falling back to a normal merge and then rebase, and use the PR's own title and body as the squash commit message instead of overriding it.
 - Let issue comments directly address a running Glorp instance with `@/glorp:ID`, triggering a fresh threaded `gh-fix` pass that receives the instance identity and treats matching mentions as agent instructions. Only the *last* comment on the issue can trigger this, and only when posted by an allowed commenter — the authenticated `gh auth status` user by default, or the logins listed with the new `--allowed-commenters` flag.
 - Immediately sweep issues referenced by a closed issue or pull request, resuming this instance's failed session or using the cooperative handoff before continuing work owned elsewhere.
 - Have the `gh-fix` skill create actionable follow-up issues before stopping failed or stalled runs, associate them with the originating work, and route them to the matching project `Todo` status or the `agent-ready` label for Glorp-managed repositories.
