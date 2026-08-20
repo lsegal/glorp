@@ -1715,7 +1715,7 @@ func TestWebhookEventNeedsRefresh(t *testing.T) {
 		{event: WebhookEvent{Kind: "push", Ref: "refs/heads/main", CommitCount: 3}},
 		{event: WebhookEvent{Kind: "ping"}},
 		{event: WebhookEvent{Kind: "pull_request", Action: "opened"}},
-		{event: WebhookEvent{Kind: "pull_request", Action: "closed"}},
+		{event: WebhookEvent{Kind: "pull_request", Action: "closed"}, want: true},
 		{event: WebhookEvent{Kind: "issue_comment", Action: "created"}},
 		{event: WebhookEvent{Kind: "issues", Action: "edited"}},
 		{event: WebhookEvent{Kind: "issues", Action: "assigned"}},
@@ -1793,6 +1793,118 @@ func TestGlorpSkipsRefreshForIrrelevantWebhookDeliveries(t *testing.T) {
 		t.Fatalf("list calls = %d, want 2 (initial poll plus the relevant delivery)", calls)
 	}
 	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpResumesFailedReferencedWorkWhenPullRequestCloses(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	want := workState{Status: "failed", SessionID: "session-7", Agent: "codex", CheckoutDirectory: dir}
+	if err := saveWorkState(statePath, map[int]workState{7: want}); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{batches: [][]Issue{
+		{{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "open"}}}},
+		{{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "closed"}}}},
+	}}
+	runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 1)}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	for {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events <- WebhookEvent{Kind: "pull_request", Action: "closed", Repository: "o/r", MentionedIssues: []int{7}}
+
+	select {
+	case got := <-runner.sessions:
+		if !got.Resume || got.ID != want.SessionID || got.Agent != want.Agent || got.CheckoutDirectory != want.CheckoutDirectory {
+			t.Fatalf("resumed session = %#v, want persisted %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closed pull request did not immediately resume referenced work")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpNegotiatesReferencedWorkWhenPullRequestCloses(t *testing.T) {
+	dir := t.TempDir()
+	source := &fakeClosureSource{
+		fakeSource: &fakeSource{batches: [][]Issue{
+			{{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "open"}}}},
+			{{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "open"}}}},
+			{{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "closed"}}}},
+		}},
+		state: OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open"}}},
+	}
+	comments := newFakeCommentClient()
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: source, Runner: runner, UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
+		Comments: comments, Identity: "SELF", ownershipWait: func(context.Context) bool { return true },
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	for {
+		source.fakeSource.mu.Lock()
+		calls := source.fakeSource.calls
+		source.fakeSource.mu.Unlock()
+		if calls >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events <- WebhookEvent{Kind: "pull_request", Action: "closed", Repository: "o/r", MentionedIssues: []int{7}}
+
+	select {
+	case got := <-runner.dispatched:
+		if got != 7 {
+			t.Fatalf("dispatched issue #%d, want #7", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closed pull request did not dispatch referenced work after handoff")
+	}
+	posted, err := comments.ListComments(context.Background(), "o/r", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 2 {
+		t.Fatalf("pull request comments = %v, want an ask followed by a continuing claim", posted)
+	}
+	if kind, id, ok := parseClaim(posted[0].Body); !ok || kind != claimAsking || id != "SELF" {
+		t.Fatalf("first comment = %q, want ownership ask", posted[0].Body)
+	}
+	if kind, id, ok := parseClaim(posted[1].Body); !ok || kind != claimContinuing || id != "SELF" {
+		t.Fatalf("second comment = %q, want continuing claim", posted[1].Body)
+	}
+
+	close(runner.release)
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
