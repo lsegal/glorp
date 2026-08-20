@@ -186,6 +186,10 @@ type Glorp struct {
 	// Identity names this instance in cooperative handoff comments. It is
 	// generated once at startup and never persisted.
 	Identity Identity
+	// AllowedCommenters restricts which GitHub logins may trigger a direct
+	// @/glorp:ID mention run (issue #294). An empty list places no
+	// restriction; the CLI defaults it to the authenticated gh user.
+	AllowedCommenters []string
 	// Comments drives the cooperative handoff handshake (issue #214). When
 	// nil, ownership negotiation is skipped and dispatch behaves as before.
 	Comments CommentClient
@@ -1194,7 +1198,22 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logWebhookEvent(event)
 			respondToOwnershipAsk(ctx, event)
 			if event.Kind == "issue_comment" && event.Action == "created" && mentionedIdentity(event.CommentBody, w.Identity) {
-				if key, ok := webhookIssueKey(event); ok {
+				// A mention in the webhook payload alone is not enough to trigger a
+				// run (issue #294): the mentioning comment must also be the current
+				// last comment and come from an allowed commenter, both reverified
+				// against GitHub rather than trusted from the delivery.
+				authorized := commenterAllowed(event.CommentAuthor, w.AllowedCommenters)
+				if authorized && w.Comments != nil {
+					var err error
+					authorized, err = authorizedDirectMention(ctx, w.Comments, event.Repository, event.IssueNumber, w.Identity, w.AllowedCommenters)
+					if err != nil {
+						w.logf("issue #%d failed to verify direct mention of instance %s: %v", event.IssueNumber, w.Identity, err)
+						authorized = false
+					}
+				}
+				if !authorized {
+					w.logf("issue #%d ignoring direct mention of instance %s: not the last comment or not from an allowed commenter", event.IssueNumber, w.Identity)
+				} else if key, ok := webhookIssueKey(event); ok {
 					directMentions[key] = true
 					w.logf("issue #%d directly mentioned instance %s; refreshing for a threaded gh-fix run", event.IssueNumber, w.Identity)
 					if err := poll(nil); err != nil && ctx.Err() == nil {

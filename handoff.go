@@ -27,6 +27,7 @@ func newIdentity() (Identity, error) {
 // cooperative handoff protocol.
 type Comment struct {
 	Body      string
+	Author    string
 	CreatedAt time.Time
 }
 
@@ -94,6 +95,42 @@ func mentionedIdentity(body string, id Identity) bool {
 // handoff comment to a specific glorp instance.
 func signComment(body string, id Identity) string {
 	return fmt.Sprintf("%s /glorp:%s", body, id)
+}
+
+// commenterAllowed reports whether login may trigger a direct-mention gh-fix
+// run. An empty allowed list places no restriction on the author (issue
+// #294 has the CLI default this to the authenticated gh user).
+func commenterAllowed(login string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	if login == "" {
+		return false
+	}
+	for _, candidate := range allowed {
+		if strings.EqualFold(candidate, login) {
+			return true
+		}
+	}
+	return false
+}
+
+// authorizedDirectMention reports whether the most recent comment on
+// repo#number is a safe, actionable direct mention of this glorp instance
+// (issue #294): it must be the very last comment, so a stale mention buried
+// under newer conversation cannot silently retrigger a run; it must contain
+// the @/glorp:ID mention syntax addressed to id; and it must be posted by an
+// allowed commenter.
+func authorizedDirectMention(ctx context.Context, comments CommentLister, repo string, number int, id Identity, allowed []string) (bool, error) {
+	list, err := comments.ListComments(ctx, repo, number)
+	if err != nil {
+		return false, err
+	}
+	if len(list) == 0 {
+		return false, nil
+	}
+	last := list[len(list)-1]
+	return mentionedIdentity(last.Body, id) && commenterAllowed(last.Author, allowed), nil
 }
 
 // parseClaim classifies a comment body as one of the handoff protocol

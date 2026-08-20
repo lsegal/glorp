@@ -55,6 +55,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable)")
 	flags.Bool("all-issues", false, "disable the default issue filter")
+	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
 	return flags
 }
 
@@ -99,6 +100,7 @@ func runWatch(args []string) int {
 	claudeBinary := flagValue[string](flags, "claude-binary")
 	statePath := flagValue[string](flags, "state")
 	allIssues := flagValue[bool](flags, "all-issues")
+	allowedCommenters := splitAllowedCommenters(flagValue[string](flags, "allowed-commenters"))
 	targets := flags.Args()
 	if len(targets) == 0 {
 		if repo, ok := originRemoteTarget(); ok {
@@ -145,6 +147,16 @@ func runWatch(args []string) int {
 	defer reapChildProcesses()
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), allIssues
+	if len(allowedCommenters) == 0 {
+		// Defaults to the authenticated gh user, so a direct @/glorp:ID
+		// mention only fires for someone glorp already trusts (issue #294).
+		login, err := gh.resolveSelfLogin(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "resolve authenticated gh user for --allowed-commenters: %v\n", err)
+			return 1
+		}
+		allowedCommenters = []string{login}
+	}
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
@@ -212,7 +224,7 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !poll {
 		listener, err := listenForWebhooks(listen)
@@ -277,6 +289,19 @@ func runWatch(args []string) int {
 		ui.program.Quit()
 	}
 	return 0
+}
+
+// splitAllowedCommenters parses the comma-separated --allowed-commenters
+// value into a list of GitHub logins, dropping empty entries left by stray
+// commas or surrounding whitespace.
+func splitAllowedCommenters(value string) []string {
+	var logins []string
+	for _, part := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			logins = append(logins, trimmed)
+		}
+	}
+	return logins
 }
 
 // flagValue reads a parsed flag's value from a flag set by name, keeping the
@@ -1140,13 +1165,16 @@ func (g GHCLI) ListComments(ctx context.Context, repo string, number int) ([]Com
 	var raw []struct {
 		Body      string    `json:"body"`
 		CreatedAt time.Time `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	}
 	if err := json.Unmarshal(output, &raw); err != nil {
 		return nil, fmt.Errorf("decode comments on #%d: %w", number, err)
 	}
 	comments := make([]Comment, len(raw))
 	for i, comment := range raw {
-		comments[i] = Comment{Body: comment.Body, CreatedAt: comment.CreatedAt}
+		comments[i] = Comment{Body: comment.Body, Author: comment.User.Login, CreatedAt: comment.CreatedAt}
 	}
 	return comments, nil
 }

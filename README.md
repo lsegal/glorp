@@ -216,6 +216,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | --- | --- | --- |
 | `--agent AGENT[/MODEL][:LEVEL]` | `codex` | Agent to run, with an optional model and reasoning level, such as `claude`, `claude/opus`, or `codex/gpt-5.6:high`. Supported agents are `codex` and `claude`; supported levels are `low`, `medium`, and `high`. Repeatable; when given more than once, new issues are load balanced evenly across the listed agents, each using its own model and level. |
 | `--all-issues` | `false` | Disable the default issue-search filter and consider all open issues. |
+| `--allowed-commenters LOGINS` | the authenticated `gh` user | Comma-separated GitHub logins allowed to trigger a direct `@/glorp:ID` mention run. |
 | `--claude-binary PATH` | `claude` | Claude Code executable name or path. |
 | `--codex-binary PATH` | `codex` | Codex executable name or path. |
 | `--concurrency N` | `0` | Maximum concurrent agents across all targets. `0` is normalized to `3`; negative values are invalid. |

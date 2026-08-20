@@ -436,6 +436,52 @@ func TestNegotiateContestedIssuesLogsStaleAndFreshClaimAges(t *testing.T) {
 	)
 }
 
+func TestCommenterAllowed(t *testing.T) {
+	if !commenterAllowed("anyone", nil) {
+		t.Fatal("an empty allow list should place no restriction on the author")
+	}
+	if commenterAllowed("", []string{"lsegal"}) {
+		t.Fatal("an unknown (empty) login should not be allowed once a list is configured")
+	}
+	if !commenterAllowed("LSegal", []string{"lsegal"}) {
+		t.Fatal("login comparison should be case-insensitive")
+	}
+	if commenterAllowed("someone-else", []string{"lsegal", "other"}) {
+		t.Fatal("a login outside the allow list should not be allowed")
+	}
+}
+
+func TestAuthorizedDirectMentionRequiresLastCommentMentionAndAllowedAuthor(t *testing.T) {
+	ctx := context.Background()
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: "Please retry @/glorp:SELF", Author: "lsegal", CreatedAt: time.Now()})
+
+	authorized, err := authorizedDirectMention(ctx, comments, "o/r", 1, "SELF", nil)
+	if err != nil {
+		t.Fatalf("authorizedDirectMention: %v", err)
+	}
+	if !authorized {
+		t.Fatal("expected the mention to authorize when it is the last comment and no allow list is set")
+	}
+
+	authorized, err = authorizedDirectMention(ctx, comments, "o/r", 1, "SELF", []string{"someone-else"})
+	if err != nil {
+		t.Fatalf("authorizedDirectMention: %v", err)
+	}
+	if authorized {
+		t.Fatal("expected the mention to be rejected: author is not in the allow list")
+	}
+
+	comments.inject("o/r", 1, Comment{Body: "unrelated follow-up", Author: "lsegal", CreatedAt: time.Now()})
+	authorized, err = authorizedDirectMention(ctx, comments, "o/r", 1, "SELF", nil)
+	if err != nil {
+		t.Fatalf("authorizedDirectMention: %v", err)
+	}
+	if authorized {
+		t.Fatal("expected the mention to be rejected: it is no longer the last comment")
+	}
+}
+
 func TestNegotiateContestedIssuesLogsProjectItemReasonAndPullRequestTarget(t *testing.T) {
 	comments := newFakeCommentClient()
 	var logs bytes.Buffer

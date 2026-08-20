@@ -428,6 +428,78 @@ func TestGlorpDispatchesDirectIdentityMention(t *testing.T) {
 	}
 }
 
+func TestGlorpIgnoresDirectMentionFromDisallowedCommenter(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}, {{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF", AllowedCommenters: []string{"trusted"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentBody: "Please revisit this @/glorp:SELF", CommentAuthor: "impersonator"}
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("mention from a disallowed commenter should not redispatch issue, got #%d", n)
+	case <-time.After(300 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpIgnoresDirectMentionThatIsNotTheLastComment(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}, {{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
+	events := make(chan WebhookEvent, 1)
+	comments := newFakeCommentClient()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF", Comments: comments,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+
+	// A follow-up comment posted after the mention (but before glorp reacts to
+	// the webhook delivery) means the mention is no longer the last comment.
+	comments.inject("o/r", 7, Comment{Body: "Please revisit this @/glorp:SELF", Author: "lsegal", CreatedAt: time.Now()})
+	comments.inject("o/r", 7, Comment{Body: "actually never mind", Author: "lsegal", CreatedAt: time.Now().Add(time.Second)})
+
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentBody: "Please revisit this @/glorp:SELF", CommentAuthor: "lsegal"}
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("a stale mention buried under a newer comment should not redispatch issue, got #%d", n)
+	case <-time.After(300 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMentionedIdentityOnlyMatchesAddressedInstance(t *testing.T) {
 	if !mentionedIdentity("Please retry @/glorp:SELF.", "SELF") {
 		t.Fatal("expected direct mention to match")

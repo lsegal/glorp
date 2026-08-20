@@ -25,6 +25,10 @@ type WebhookEvent struct {
 	IssueNumber int
 	IssueTitle  string
 	CommentBody string
+	// CommentAuthor is the GitHub login that posted CommentBody, used to
+	// gate direct-mention triggers to an allowed set of commenters (issue
+	// #294).
+	CommentAuthor string
 	// MentionedIssues names same-repository issues referenced by a closed
 	// issue or pull request. The run loop uses these references to treat the
 	// resulting refresh as a continuation sweep, so unowned work goes through
@@ -104,6 +108,9 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 		} `json:"discussion"`
 		Comment struct {
 			Body string `json:"body"`
+			User struct {
+				Login string `json:"login"`
+			} `json:"user"`
 		} `json:"comment"`
 		Commits []json.RawMessage `json:"commits"`
 	}
@@ -117,6 +124,7 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 		event.IssueNumber = payload.Issue.Number
 		event.IssueTitle = payload.Issue.Title
 		event.CommentBody = payload.Comment.Body
+		event.CommentAuthor = payload.Comment.User.Login
 		body := payload.Issue.Body
 		if kind == "pull_request" {
 			body = payload.PullRequest.Body

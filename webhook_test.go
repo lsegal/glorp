@@ -137,8 +137,8 @@ func TestDecodeWebhookEventIncludesPullRequestMentions(t *testing.T) {
 }
 
 func TestDecodeWebhookEventIncludesCommentDetails(t *testing.T) {
-	event := decodeWebhookEvent("issue_comment", []byte(`{"action":"created","repository":{"full_name":"o/r"},"issue":{"number":54},"comment":{"body":"Does anyone have this? /glorp:ABC"}}`))
-	if event.Kind != "issue_comment" || event.Action != "created" || event.Repository != "o/r" || event.IssueNumber != 54 || event.CommentBody != "Does anyone have this? /glorp:ABC" {
+	event := decodeWebhookEvent("issue_comment", []byte(`{"action":"created","repository":{"full_name":"o/r"},"issue":{"number":54},"comment":{"body":"Does anyone have this? /glorp:ABC","user":{"login":"lsegal"}}}`))
+	if event.Kind != "issue_comment" || event.Action != "created" || event.Repository != "o/r" || event.IssueNumber != 54 || event.CommentBody != "Does anyone have this? /glorp:ABC" || event.CommentAuthor != "lsegal" {
 		t.Fatalf("event = %#v", event)
 	}
 }

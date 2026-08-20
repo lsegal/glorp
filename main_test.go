@@ -609,6 +609,17 @@ func TestFilterFlagDefaultsToMyOpenIssues(t *testing.T) {
 	}
 }
 
+func TestSplitAllowedCommenters(t *testing.T) {
+	if got := splitAllowedCommenters(""); got != nil {
+		t.Fatalf("splitAllowedCommenters(%q) = %#v, want nil", "", got)
+	}
+	got := splitAllowedCommenters(" lsegal, other , ,third")
+	want := []string{"lsegal", "other", "third"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("splitAllowedCommenters = %#v, want %#v", got, want)
+	}
+}
+
 func TestAgentFlagAccumulatesValues(t *testing.T) {
 	got := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	if err := got.Set("claude"); err != nil {
