@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Have the `gh-fix` skill post a comment on the issue whenever it gives up before opening a pull request for any reason — not just when it stops during initial validation — so the reason is always visible on GitHub instead of only in the final report to the caller.
+
 ## v1.2.5 - 2026-08-19
 
 - Document how `gh-fix` should upload UI screenshots and screen recordings to pull requests, using GitHub's undocumented `uploads.github.com` attachment endpoint with a bearer token instead of giving up for lack of a public API.

@@ -11,9 +11,11 @@ Treat `/gh-fix ISSUENUMBER` as authorization to implement, publish, continuously
 
 1. Require exactly one positive integer issue number; accept an optional leading `#`.
 2. Identify the GitHub repository from the user's explicit repository or the current checkout's GitHub remote.
-3. Require `git`, `gh`, and an authenticated `gh` session with repository and workflow access.
-4. Read the issue title, body, labels, comments, state, and linked context. If it does not exist, stop; there is nothing to comment on. If it is not actionable, or is already closed, stop without opening a pull request or otherwise mutating the repository — but post a single comment on the issue explaining why no fix was implemented, unless the user explicitly requested follow-up work instead. This keeps the reason visible on GitHub instead of only in the final report to the caller.
+3. Require `git`, `gh`, and an authenticated `gh` session with repository and workflow access. If the issue exists but this or any other environment requirement cannot be satisfied, stop without opening a pull request or otherwise mutating the repository — but post a single comment on the issue explaining why no fix was implemented, following the rule below.
+4. Read the issue title, body, labels, comments, state, and linked context. If it does not exist, stop; there is nothing to comment on. If it is not actionable, or is already closed, stop without opening a pull request or otherwise mutating the repository — but post a single comment on the issue explaining why no fix was implemented, following the rule below.
 5. Read repository instructions, including applicable `AGENTS.md`, contribution guidance, branch/PR rules, CI configuration, and changelog conventions.
+
+**Always comment before giving up.** Whenever this skill stops for any reason before a pull request has been created for the issue — an invalid or non-actionable issue, a missing environment requirement, an unresolvable ambiguity, a repeated tooling failure, or any other blocker encountered anywhere earlier in this workflow — post exactly one comment on the issue explaining what was attempted and why no fix was implemented before ending the run, unless the user explicitly requested follow-up work instead. Do this even if a draft pull request was never opened. Once a pull request exists, later blockers are reported on the pull request per "Drive CI to completion" instead of as a new issue comment. This keeps the reason visible on GitHub instead of only in the final report to the caller.
 
 ## Resume existing work (re-entrant mode)
 
