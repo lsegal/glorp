@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.8 - 2026-08-20
+
 - `install.sh` and `install.ps1` now print the version that was installed instead of just the install path.
 
 ## v1.2.7 - 2026-08-20
