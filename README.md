@@ -162,7 +162,7 @@ glorp watch --concurrency 3 owner/first owner/second https://github.com/orgs/exa
 
 The concurrency limit is shared across all targets. GitHub webhook deliveries cause an immediate refresh, while `--interval` controls the periodic synchronization cadence.
 
-Only deliveries that can change which issues are dispatchable cause a refresh. Push, pull request, ping, and ordinary comment deliveries are logged and ignored, as are `issues` actions that leave labels, state, and dependencies untouched (`edited`, `assigned`, `locked`, and similar). In push mode, `--interval` therefore controls only the immediate follow-up refreshes that outlast GitHub's issue index lag; the periodic reconciliation that recovers missed deliveries runs every 15 minutes.
+Only deliveries that can change which issues are dispatchable cause a refresh. Closing an issue or pull request triggers an immediate continuation sweep for same-repository issues mentioned as `#123`: work from this instance resumes through the existing agent session, while unowned work uses the cooperative handoff before it continues. Pushes, other pull request activity, pings, and ordinary comments are logged and ignored, as are `issues` actions that leave labels, state, and dependencies untouched (`edited`, `assigned`, `locked`, and similar). In push mode, `--interval` therefore controls only the immediate follow-up refreshes that outlast GitHub's issue index lag; the periodic reconciliation that recovers missed deliveries runs every 15 minutes.
 
 ## How it works
 
