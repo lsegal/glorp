@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Have the `gh-fix` skill create actionable follow-up issues before stopping failed or stalled runs, associate them with the originating work, and route them to the matching project `Todo` status or the `agent-ready` label for Glorp-managed repositories.
+
 ## v1.2.8 - 2026-08-20
 
 - `install.sh` and `install.ps1` now print the version that was installed instead of just the install path.
