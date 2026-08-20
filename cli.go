@@ -178,7 +178,9 @@ func runUpgradeCommand(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	repo := upgradeRepo(os.Getenv)
-	if err := runUpgrade(ctx, os.Stdout, func(ctx context.Context) *exec.Cmd {
+	if err := runUpgrade(ctx, os.Stdout, version, func(ctx context.Context) (string, error) {
+		return latestReleaseTag(ctx, doPublicGitHubRequest, repo)
+	}, func(ctx context.Context) *exec.Cmd {
 		return upgradeCommand(ctx, runtime.GOOS, repo)
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)

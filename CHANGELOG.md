@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `glorp upgrade` now checks the latest published release before downloading anything. If the running binary already matches it, upgrade noops and prints the current version instead of re-running the installer.
+
 ## v1.2.9 - 2026-08-20
 
 - Have the `gh-fix` skill prefer squash merges when the repository allows more than one merge method, falling back to a normal merge and then rebase, and use the PR's own title and body as the squash commit message instead of overriding it.
