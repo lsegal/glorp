@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the `gh-fix` skill sometimes asking the user which repository to work in even though glorp always tells it, via a `Repository: OWNER/REPO` line in the dispatched prompt. The skill now uses that line directly instead of trying to infer the repository from `git remote -v`, which can fail or point elsewhere before the isolated clone exists.
+
 ## v1.2.5 - 2026-08-19
 
 - Document how `gh-fix` should upload UI screenshots and screen recordings to pull requests, using GitHub's undocumented `uploads.github.com` attachment endpoint with a bearer token instead of giving up for lack of a public API.

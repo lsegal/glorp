@@ -10,7 +10,7 @@ Treat `/gh-fix ISSUENUMBER` as authorization to implement, publish, continuously
 ## Validate the request
 
 1. Require exactly one positive integer issue number; accept an optional leading `#`.
-2. Identify the GitHub repository from the user's explicit repository or the current checkout's GitHub remote.
+2. Identify the GitHub repository strictly from the arguments passed to this skill, never from git remote detection. If the invocation includes a `Repository: OWNER/REPO` line (as glorp always supplies when dispatching this skill) or the user otherwise states `OWNER/REPO` explicitly, use that value directly and skip straight to the next step — do not run `git remote -v`, `gh repo view`, or any other repository-detection command. Only when no repository was given in the invocation at all, fall back to the current checkout's GitHub remote to infer `OWNER/REPO`, and only ask the user if that also fails to identify a repository.
 3. Require `git`, `gh`, and an authenticated `gh` session with repository and workflow access.
 4. Read the issue title, body, labels, comments, state, and linked context. If it does not exist, stop; there is nothing to comment on. If it is not actionable, or is already closed, stop without opening a pull request or otherwise mutating the repository — but post a single comment on the issue explaining why no fix was implemented, unless the user explicitly requested follow-up work instead. This keeps the reason visible on GitHub instead of only in the final report to the caller.
 5. Read repository instructions, including applicable `AGENTS.md`, contribution guidance, branch/PR rules, CI configuration, and changelog conventions.
