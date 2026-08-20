@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 )
+
+var issueReferencePattern = regexp.MustCompile(`(?:^|[\s([{,:;])#([1-9][0-9]*)\b`)
 
 type WebhookEvent struct {
 	Kind        string
@@ -21,6 +25,11 @@ type WebhookEvent struct {
 	IssueNumber int
 	IssueTitle  string
 	CommentBody string
+	// MentionedIssues names same-repository issues referenced by a closed
+	// issue or pull request. The run loop uses these references to treat the
+	// resulting refresh as a continuation sweep, so unowned work goes through
+	// the cooperative handoff instead of looking like a brand-new pickup.
+	MentionedIssues []int
 	// DiscussionNumber and DiscussionTitle carry the thread a `discussion`
 	// delivery names. They are kept separate from the issue fields because a
 	// discussion and an issue can share a number, and the issue fields key
@@ -84,7 +93,11 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 		Issue struct {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
+			Body   string `json:"body"`
 		} `json:"issue"`
+		PullRequest struct {
+			Body string `json:"body"`
+		} `json:"pull_request"`
 		Discussion struct {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
@@ -104,10 +117,33 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 		event.IssueNumber = payload.Issue.Number
 		event.IssueTitle = payload.Issue.Title
 		event.CommentBody = payload.Comment.Body
+		body := payload.Issue.Body
+		if kind == "pull_request" {
+			body = payload.PullRequest.Body
+		}
+		event.MentionedIssues = mentionedIssueNumbers(body)
 		event.DiscussionNumber = payload.Discussion.Number
 		event.DiscussionTitle = payload.Discussion.Title
 	}
 	return event
+}
+
+// mentionedIssueNumbers extracts same-repository #123 references in first
+// appearance order. Qualified owner/repo#123 references are deliberately not
+// matched because they can name work outside the delivery's repository.
+func mentionedIssueNumbers(body string) []int {
+	matches := issueReferencePattern.FindAllStringSubmatch(body, -1)
+	numbers := make([]int, 0, len(matches))
+	seen := make(map[int]bool, len(matches))
+	for _, match := range matches {
+		number, err := strconv.Atoi(match[1])
+		if err != nil || number <= 0 || seen[number] {
+			continue
+		}
+		seen[number] = true
+		numbers = append(numbers, number)
+	}
+	return numbers
 }
 
 func validWebhookSignature(secret string, body []byte, header string) bool {

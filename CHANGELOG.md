@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Let issue comments directly address a running Glorp instance with `@/glorp:ID`, triggering a fresh threaded `gh-fix` pass that receives the instance identity and treats matching mentions as agent instructions.
+- Immediately sweep issues referenced by a closed issue or pull request, resuming this instance's failed session or using the cooperative handoff before continuing work owned elsewhere.
 - Have the `gh-fix` skill create actionable follow-up issues before stopping failed or stalled runs, associate them with the originating work, and route them to the matching project `Todo` status or the `agent-ready` label for Glorp-managed repositories.
 
 ## v1.2.8 - 2026-08-20

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -119,9 +120,19 @@ func TestDecodeWebhookEventIncludesPushDetails(t *testing.T) {
 }
 
 func TestDecodeWebhookEventIncludesIssueDetails(t *testing.T) {
-	event := decodeWebhookEvent("issues", []byte(`{"action":"opened","repository":{"full_name":"o/r"},"issue":{"number":54,"title":"new bug"}}`))
+	event := decodeWebhookEvent("issues", []byte(`{"action":"opened","repository":{"full_name":"o/r"},"issue":{"number":54,"title":"new bug","body":"Continues #7 and #7 after #12, not other/repo#99."}}`))
 	if event.Kind != "issues" || event.Action != "opened" || event.Repository != "o/r" || event.IssueNumber != 54 || event.IssueTitle != "new bug" {
 		t.Fatalf("event = %#v", event)
+	}
+	if !reflect.DeepEqual(event.MentionedIssues, []int{7, 12}) {
+		t.Fatalf("mentioned issues = %v, want [7 12]", event.MentionedIssues)
+	}
+}
+
+func TestDecodeWebhookEventIncludesPullRequestMentions(t *testing.T) {
+	event := decodeWebhookEvent("pull_request", []byte(`{"action":"closed","repository":{"full_name":"o/r"},"pull_request":{"body":"Unblocks #7."}}`))
+	if !reflect.DeepEqual(event.MentionedIssues, []int{7}) {
+		t.Fatalf("mentioned issues = %v, want [7]", event.MentionedIssues)
 	}
 }
 

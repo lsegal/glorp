@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -711,7 +712,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// remaining refreshes have nothing left to catch. Only the run loop's own
 	// goroutine reads or writes it.
 	var observed map[string]bool
-	poll := func() error {
+	poll := func(sweep map[string]bool) error {
 		pollNumber++
 		n := pollNumber
 		running, queued, completed, failed := tasks.snapshot()
@@ -754,6 +755,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			key := issueKey(issue)
 			mentionKey := issue.Repository + "#" + strconv.Itoa(issue.Number)
 			directMention := directMentions[mentionKey]
+			swept := sweep[key] || sweep[mentionKey]
 			workMu.Lock()
 			state := work[key]
 			// hadLocalRecord captures, before any reset below, whether this
@@ -777,7 +779,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			wasFailed := work[key].Status == "failed"
 			wasCompleted := work[key].Status == "completed"
 			workMu.Unlock()
-			if issue.Number > 0 && !isActive && (directMention || wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState)) {
+			if issue.Number > 0 && (wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) || (swept && !isActive && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || (directMention && !isActive)) {
 				seen[key] = true
 				delete(restored, key)
 				delete(directMentions, mentionKey)
@@ -788,7 +790,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// sitting at "In Progress" that this instance has no record of
 				// is another instance's apparent work (typically stranded by
 				// one that died mid-run), so it must be negotiated too.
-				contested := (hadLocalRecord && !wasFailed && !wasActive) || (!hadLocalRecord && projectItemInProgress(issue.Target, issue))
+				contested := (hadLocalRecord && !wasFailed && !wasActive) || (!hadLocalRecord && (projectItemInProgress(issue.Target, issue) || swept))
 				session := AgentSession{
 					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
 					// Persisted work is not an active worker after a daemon restart or
@@ -1076,7 +1078,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("issue #%d failed to respond to ownership ask: %v", event.IssueNumber, err)
 		}
 	}
-	if err := poll(); err != nil {
+	if err := poll(nil); err != nil {
 		if ctx.Err() != nil {
 			wg.Wait()
 			w.logf("stopped during initial poll")
@@ -1119,6 +1121,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// pendingWebhookIssue names the issue whose delivery scheduled the current
 	// follow-up chain, so the chain can stop early once a refresh sees it.
 	pendingWebhookIssue := ""
+	// pendingWebhookSweep preserves referenced continuation work across the
+	// follow-up chain, including while GitHub's issue/dependency indexes lag.
+	var pendingWebhookSweep map[string]bool
 	var stateReloadTimer *time.Timer
 	var stateReload <-chan time.Time
 	defer func() {
@@ -1164,7 +1169,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if w.Webhooks != nil {
 				w.Webhooks(ctx)
 			}
-			if err := poll(); err != nil {
+			if err := poll(nil); err != nil {
 				if ctx.Err() != nil {
 					w.logf("shutdown requested during poll; waiting for running tasks to finish")
 					wg.Wait()
@@ -1177,12 +1182,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if !probeBoards(ctx) {
 				continue
 			}
-			if err := poll(); err != nil && ctx.Err() == nil {
+			if err := poll(nil); err != nil && ctx.Err() == nil {
 				w.logf("project board poll #%d error: %v", pollNumber, err)
 			}
 		case <-reap:
 			w.logf("periodic reap started")
-			if err := poll(); err != nil && ctx.Err() == nil {
+			if err := poll(nil); err != nil && ctx.Err() == nil {
 				w.logf("reap poll #%d error: %v", pollNumber, err)
 			}
 		case event := <-w.Events:
@@ -1192,7 +1197,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if key, ok := webhookIssueKey(event); ok {
 					directMentions[key] = true
 					w.logf("issue #%d directly mentioned instance %s; refreshing for a threaded gh-fix run", event.IssueNumber, w.Identity)
-					if err := poll(); err != nil && ctx.Err() == nil {
+					if err := poll(nil); err != nil && ctx.Err() == nil {
 						w.logf("direct-mention poll #%d error: %v", pollNumber, err)
 					}
 					continue
@@ -1205,7 +1210,19 @@ func (w *Glorp) Run(ctx context.Context) error {
 				w.logf("webhook %s delivery cannot change issue state; skipping refresh", webhookEventLabel(event))
 				continue
 			}
-			if err := poll(); err != nil {
+			sweep := webhookContinuationSweep(event)
+			if len(sweep) > 0 {
+				keys := slices.Collect(maps.Keys(sweep))
+				slices.Sort(keys)
+				w.logf("webhook %s delivery sweeping referenced work: %s", webhookEventLabel(event), strings.Join(keys, ", "))
+				if pendingWebhookSweep == nil {
+					pendingWebhookSweep = make(map[string]bool, len(sweep))
+				}
+				for key := range sweep {
+					pendingWebhookSweep[key] = true
+				}
+			}
+			if err := poll(sweep); err != nil {
 				if ctx.Err() != nil {
 					wg.Wait()
 					return nil
@@ -1220,6 +1237,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if key, ok := webhookIssueKey(event); ok && observed[key] {
 					// The refresh above already saw the delivered issue, so
 					// there is no index lag left for follow-ups to outlast.
+					pendingWebhookSweep = nil
 					continue
 				}
 				pendingWebhookIssue, _ = webhookIssueKey(event)
@@ -1230,7 +1248,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		case <-retry:
 			retryTimer = nil
 			w.logf("webhook follow-up refresh started")
-			if err := poll(); err != nil && ctx.Err() == nil {
+			if err := poll(pendingWebhookSweep); err != nil && ctx.Err() == nil {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
 			}
 			retriesRemaining--
@@ -1243,11 +1261,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 				retry = retryTimer.C
 			} else {
 				pendingWebhookIssue = ""
+				pendingWebhookSweep = nil
 				retry = nil
 			}
 		case <-workFinished:
 			if len(directMentions) > 0 {
-				if err := poll(); err != nil && ctx.Err() == nil {
+				if err := poll(nil); err != nil && ctx.Err() == nil {
 					w.logf("queued direct-mention poll #%d error: %v", pollNumber, err)
 				}
 			}
@@ -1286,7 +1305,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			workMu.Unlock()
 			w.logf("state reloaded; scheduling resync")
-			if err := poll(); err != nil && ctx.Err() == nil {
+			if err := poll(nil); err != nil && ctx.Err() == nil {
 				w.logf("state reload poll #%d error: %v", pollNumber, err)
 			}
 		}
@@ -1331,15 +1350,17 @@ func stateFileFingerprint(path string) string {
 }
 
 // webhookEventNeedsRefresh reports whether a delivery could have changed which
-// issues are dispatchable, using only the payload glorp already decoded. Push,
-// pull request, ping, and comment deliveries never do: closing an issue from a
-// merged pull request arrives separately as an `issues` closed event, and the
-// handoff handshake answers comments directly without a refresh. Unrecognized
-// event kinds refresh so a newly subscribed event is never silently dropped.
+// issues are dispatchable, using only the payload glorp already decoded. A
+// closed pull request can unblock referenced work even when it does not close
+// an issue, so it refreshes immediately. Push, ping, other pull request
+// activity, and comments do not. Unrecognized event kinds refresh so a newly
+// subscribed event is never silently dropped.
 func webhookEventNeedsRefresh(event WebhookEvent) bool {
 	switch event.Kind {
-	case "push", "ping", "pull_request", "issue_comment":
+	case "push", "ping", "issue_comment":
 		return false
+	case "pull_request":
+		return event.Action == "closed"
 	case "issues":
 		switch event.Action {
 		case "opened", "reopened", "closed", "deleted", "transferred", "labeled", "unlabeled":
@@ -1366,6 +1387,22 @@ func webhookEventNeedsRefresh(event WebhookEvent) bool {
 	default:
 		return true
 	}
+}
+
+// webhookContinuationSweep identifies referenced issues that should be
+// reconsidered as continuation work when an issue or pull request closes.
+func webhookContinuationSweep(event WebhookEvent) map[string]bool {
+	if event.Repository == "" || event.Action != "closed" || (event.Kind != "issues" && event.Kind != "pull_request") {
+		return nil
+	}
+	sweep := make(map[string]bool, len(event.MentionedIssues))
+	for _, number := range event.MentionedIssues {
+		if number <= 0 || (event.Kind == "issues" && number == event.IssueNumber) {
+			continue
+		}
+		sweep[event.Repository+"#"+strconv.Itoa(number)] = true
+	}
+	return sweep
 }
 
 // webhookIssueKey returns the "repo#number" key the delivery refers to, when it
