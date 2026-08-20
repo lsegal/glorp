@@ -1329,13 +1329,16 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 	}
 	prompt := "continue"
 	if !session.Resume {
+		repo := issueRepository(target, issue)
 		if isDiscussionTarget(target) {
 			prompt = fmt.Sprintf("/gh-discuss %d", issue.Number)
+			if repo != "" {
+				prompt += "\n\nRepository: " + repo
+			}
+		} else if repo != "" {
+			prompt = fmt.Sprintf("/gh-fix %s#%d", repo, issue.Number)
 		} else {
 			prompt = fmt.Sprintf("/gh-fix %d", issue.Number)
-		}
-		if repo := issueRepository(target, issue); repo != "" {
-			prompt += "\n\nRepository: " + repo
 		}
 		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	} else {

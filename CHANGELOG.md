@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix `gh-fix` still losing track of its target repository even after v1.2.6: the repo was appended as a free-text `Repository: OWNER/REPO` line after the command, which a bare `/gh-fix N` dispatch could omit entirely (e.g. before an issue's checkout directory exists, the agent now runs outside glorp's own working directory per v1.2.5, so there was no git remote to fall back on either). `glorp` now passes the repository as part of the command itself, `/gh-fix OWNER/REPO#N`, so it can no longer be dropped.
+
 ## v1.2.6 - 2026-08-20
 
 - Fix the `gh-fix` skill sometimes asking the user which repository to work in even though glorp always tells it, via a `Repository: OWNER/REPO` line in the dispatched prompt. The skill now uses that line directly instead of trying to infer the repository from `git remote -v`, which can fail or point elsewhere before the isolated clone exists.

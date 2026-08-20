@@ -1108,7 +1108,7 @@ func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 }
 
 func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
-	prompt := "/gh-fix 12\n\nRepository: owner/repo\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	prompt := "/gh-fix owner/repo#12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Repository: "owner/repo", Target: "https://github.com/users/owner/projects/3"}
 	got := commandArgs(CommandRunner{Agent: "codex", Repo: "wrong/repo"}, issue)
 	want := []string{"exec", prompt}
@@ -1283,7 +1283,7 @@ func TestCommandRunnerRestartsClaudeWhenResumedSessionIsMissing(t *testing.T) {
 	if !strings.Contains(got[0], "--resume session-7") {
 		t.Fatalf("first invocation = %q, want a resume", got[0])
 	}
-	if strings.Contains(got[1], "--resume") || !strings.Contains(got[1], "/gh-fix 7") {
+	if strings.Contains(got[1], "--resume") || !strings.Contains(got[1], "/gh-fix o/r#7") {
 		t.Fatalf("second invocation = %q, want a fresh run", got[1])
 	}
 	// Claude accepts the caller's session ID, so the restarted run keeps the
@@ -1304,7 +1304,7 @@ func TestCommandRunnerRestartsCodexWithoutTheMissingSessionID(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("agent invocations = %#v, want a resume followed by a fresh run", got)
 	}
-	if strings.Contains(got[1], "session-7") || !strings.Contains(got[1], "/gh-fix 7") {
+	if strings.Contains(got[1], "session-7") || !strings.Contains(got[1], "/gh-fix o/r#7") {
 		t.Fatalf("second invocation = %q, want a fresh run without the dead session ID", got[1])
 	}
 }
