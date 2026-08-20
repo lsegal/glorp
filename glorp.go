@@ -674,6 +674,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 	var tasks taskState
 	var workMu sync.Mutex
 	active := make(map[string]string)
+	directMentions := make(map[string]bool)
+	workFinished := make(chan struct{}, 1)
 	jobs := make(map[string]JobSnapshot)
 	issueCounts := make(map[string]int)
 	var jobMu sync.Mutex
@@ -750,6 +752,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 				continue
 			}
 			key := issueKey(issue)
+			mentionKey := issue.Repository + "#" + strconv.Itoa(issue.Number)
+			directMention := directMentions[mentionKey]
 			workMu.Lock()
 			state := work[key]
 			// hadLocalRecord captures, before any reset below, whether this
@@ -773,9 +777,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 			wasFailed := work[key].Status == "failed"
 			wasCompleted := work[key].Status == "completed"
 			workMu.Unlock()
-			if issue.Number > 0 && (wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState)) {
+			if issue.Number > 0 && !isActive && (directMention || wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState)) {
 				seen[key] = true
 				delete(restored, key)
+				delete(directMentions, mentionKey)
 				// A known local failure or an active resume is unambiguously
 				// this instance's own work; anything else reappearing after
 				// having a local record is a reclaim that must be negotiated
@@ -784,13 +789,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// is another instance's apparent work (typically stranded by
 				// one that died mid-run), so it must be negotiated too.
 				contested := (hadLocalRecord && !wasFailed && !wasActive) || (!hadLocalRecord && projectItemInProgress(issue.Target, issue))
-				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: AgentSession{
+				session := AgentSession{
 					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
 					// Persisted work is not an active worker after a daemon restart or
 					// a prior failure. If it has a complete session identity, resume it
 					// so the agent can recover the existing draft PR and worktree.
 					Resume: state.SessionID != "" && state.Agent != "",
-				}})
+				}
+				if directMention {
+					// A direct mention is a new threaded instruction. Start a fresh
+					// gh-fix invocation so it receives the identity argument and
+					// rereads the issue and PR conversation from GitHub.
+					session = AgentSession{}
+					contested = false
+				}
+				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session})
 			}
 		}
 		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen, n == 1)
@@ -888,6 +901,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			go func(i Issue, agentSession AgentSession, running, queued int) {
 				defer wg.Done()
 				defer func() { <-sem }()
+				defer func() {
+					select {
+					case workFinished <- struct{}{}:
+					default:
+					}
+				}()
 				runCtx, cancelRun := context.WithCancelCause(ctx)
 				defer cancelRun(nil)
 				var closureReady <-chan struct{}
@@ -1169,6 +1188,16 @@ func (w *Glorp) Run(ctx context.Context) error {
 		case event := <-w.Events:
 			w.logWebhookEvent(event)
 			respondToOwnershipAsk(ctx, event)
+			if event.Kind == "issue_comment" && event.Action == "created" && mentionedIdentity(event.CommentBody, w.Identity) {
+				if key, ok := webhookIssueKey(event); ok {
+					directMentions[key] = true
+					w.logf("issue #%d directly mentioned instance %s; refreshing for a threaded gh-fix run", event.IssueNumber, w.Identity)
+					if err := poll(); err != nil && ctx.Err() == nil {
+						w.logf("direct-mention poll #%d error: %v", pollNumber, err)
+					}
+					continue
+				}
+			}
 			// The payload alone decides whether this delivery could have
 			// changed dispatchable work. Pushes, pull request activity, and
 			// ordinary comments never do, so they no longer cost a refresh.
@@ -1215,6 +1244,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			} else {
 				pendingWebhookIssue = ""
 				retry = nil
+			}
+		case <-workFinished:
+			if len(directMentions) > 0 {
+				if err := poll(); err != nil && ctx.Err() == nil {
+					w.logf("queued direct-mention poll #%d error: %v", pollNumber, err)
+				}
 			}
 		case <-stateChanges:
 			if stateReloadTimer == nil {

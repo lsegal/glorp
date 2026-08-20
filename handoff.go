@@ -79,6 +79,17 @@ const (
 // handoff comment must carry.
 var identityPattern = regexp.MustCompile(`/glorp:(\S+)\s*$`)
 
+// mentionedIdentity reports whether a comment directly addresses this glorp
+// instance using the public @/glorp:ID meta-mention syntax. Delimiters prevent
+// one instance ID from matching a longer ID that merely shares its prefix.
+func mentionedIdentity(body string, id Identity) bool {
+	if id == "" {
+		return false
+	}
+	pattern := `(^|\s)@/glorp:` + regexp.QuoteMeta(string(id)) + `($|\s|[.,!?;:])`
+	return regexp.MustCompile(pattern).MatchString(body)
+}
+
 // signComment appends the instance identity signature used to attribute a
 // handoff comment to a specific glorp instance.
 func signComment(body string, id Identity) string {
