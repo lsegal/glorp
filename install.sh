@@ -24,4 +24,4 @@ tar -xzf "$tmp/$archive" -C "$tmp"
 install "$tmp/glorp" "$bin_dir/glorp"
 npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y
 npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code -y
-echo "Installed glorp to $bin_dir/glorp and gh-fix/gh-discuss globally."
+echo "Installed glorp $version to $bin_dir/glorp and gh-fix/gh-discuss globally."

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `install.sh` and `install.ps1` now print the version that was installed instead of just the install path.
+
 ## v1.2.7 - 2026-08-20
 
 - Fix `gh-fix` still losing track of its target repository even after v1.2.6: the repo was appended as a free-text `Repository: OWNER/REPO` line after the command, which a bare `/gh-fix N` dispatch could omit entirely (e.g. before an issue's checkout directory exists, the agent now runs outside glorp's own working directory per v1.2.5, so there was no git remote to fall back on either). `glorp` now passes the repository as part of the command itself, `/gh-fix OWNER/REPO#N`, so it can no longer be dropped.
