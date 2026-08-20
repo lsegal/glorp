@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the default `--filter` for repository targets no longer restricting dispatch to issues carrying the `agent-ready` label, so `glorp watch` on a repository once again only picks up labeled issues instead of every open issue authored by the current user.
+
 ## v1.2.9 - 2026-08-20
 
 - Have the `gh-fix` skill prefer squash merges when the repository allows more than one merge method, falling back to a normal merge and then rebase, and use the PR's own title and body as the squash commit message instead of overriding it.

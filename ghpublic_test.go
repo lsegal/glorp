@@ -242,7 +242,7 @@ func TestPublicIssueSearchQuery(t *testing.T) {
 		selfLogin string
 		want      string
 	}{
-		{name: "default filter substitutes self login", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open is:issue state:open author:lsegal"},
+		{name: "default filter substitutes self login", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open is:issue state:open author:lsegal label:agent-ready"},
 		{name: "all issues ignores filter", repo: "owner/repo", filter: defaultIssueFilter, allIssues: true, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open"},
 		{name: "custom filter without author", repo: "owner/repo", filter: "label:bug", want: "repo:owner/repo is:issue state:open label:bug"},
 	} {
