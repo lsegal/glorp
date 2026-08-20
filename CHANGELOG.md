@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fix the `gh-fix` skill sometimes asking the user which repository to work in even though glorp always tells it, via a `Repository: OWNER/REPO` line in the dispatched prompt. The skill now uses that line directly instead of trying to infer the repository from `git remote -v`, which can fail or point elsewhere before the isolated clone exists.
+- Have the `gh-fix` skill post a comment on the issue whenever it gives up before opening a pull request for any reason — not just when it stops during initial validation — so the reason is always visible on GitHub instead of only in the final report to the caller.
 
 ## v1.2.5 - 2026-08-19
 
