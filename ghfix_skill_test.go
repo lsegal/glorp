@@ -44,3 +44,18 @@ func TestGhFixRoutesFollowUpsForGlorp(t *testing.T) {
 		}
 	}
 }
+
+func TestGhFixTreatsIdentityMentionsAsThreadedInstructions(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"identity:/glorp:<ID>",
+		"threaded conversation",
+		"chronological order",
+		"direct instructions",
+		"must not be ignored",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not document identity mention behavior %q", required)
+		}
+	}
+}

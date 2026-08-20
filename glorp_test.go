@@ -392,6 +392,53 @@ func TestGlorpRespondsImmediatelyToOwnershipAskWebhook(t *testing.T) {
 	}
 }
 
+func TestGlorpDispatchesDirectIdentityMention(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}, {{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentBody: "Please revisit this @/glorp:SELF"}
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("direct mention dispatched issue #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("direct identity mention did not redispatch issue")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMentionedIdentityOnlyMatchesAddressedInstance(t *testing.T) {
+	if !mentionedIdentity("Please retry @/glorp:SELF.", "SELF") {
+		t.Fatal("expected direct mention to match")
+	}
+	for _, body := range []string{"Please retry @/glorp:OTHER", "Please retry @/glorp:SELFISH", "handoff /glorp:SELF"} {
+		if mentionedIdentity(body, "SELF") {
+			t.Fatalf("unexpected identity match for %q", body)
+		}
+	}
+}
+
 func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
@@ -1108,9 +1155,9 @@ func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 }
 
 func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
-	prompt := "/gh-fix owner/repo#12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	prompt := "/gh-fix owner/repo#12 identity:/glorp:ABC\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Repository: "owner/repo", Target: "https://github.com/users/owner/projects/3"}
-	got := commandArgs(CommandRunner{Agent: "codex", Repo: "wrong/repo"}, issue)
+	got := commandArgs(CommandRunner{Agent: "codex", Repo: "wrong/repo", Identity: "ABC"}, issue)
 	want := []string{"exec", prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)

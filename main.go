@@ -212,7 +212,7 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	var server *http.Server
 	if !poll {
 		listener, err := listenForWebhooks(listen)
@@ -1310,6 +1310,7 @@ type CommandRunner struct {
 	// round robin.
 	Agents      []string
 	Agent, Repo string
+	Identity    Identity
 	Output      io.Writer
 	Yolo        bool
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
@@ -1339,6 +1340,9 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 			prompt = fmt.Sprintf("/gh-fix %s#%d", repo, issue.Number)
 		} else {
 			prompt = fmt.Sprintf("/gh-fix %d", issue.Number)
+		}
+		if !isDiscussionTarget(target) && r.Identity != "" {
+			prompt += " identity:/glorp:" + string(r.Identity)
 		}
 		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	} else {
