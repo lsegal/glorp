@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the `gh-fix` documentation guide's screenshot-proof image on the GitHub Pages site.
+
 ## v1.2.11 - 2026-08-21
 
 - Replace the `gh-fix` guide's CSS-only screenshot-proof example with a representative dashboard image, so the proof section demonstrates the artifact it describes.
