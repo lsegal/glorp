@@ -16,10 +16,22 @@
         <img src="{{ "assets/glorp-logo.svg" | relURL }}" alt="">
         <span>glorp</span>
       </a>
-      <a class="repo-link" href="https://github.com/lsegal/glorp">View on GitHub</a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="{{ "skills/gh-fix/" | relURL }}">gh-fix</a>
+        <a href="{{ "skills/gh-discuss/" | relURL }}">gh-discuss</a>
+        <a class="repo-link" href="https://github.com/lsegal/glorp">View on GitHub</a>
+      </nav>
     </header>
     <main class="readme">
       {{- $readme | markdownify -}}
+      <section class="skill-index" aria-labelledby="skill-guides">
+        <p class="eyebrow">Two focused skills</p>
+        <h2 id="skill-guides">Hand work to the right robot.</h2>
+        <div class="skill-index-grid">
+          <a class="skill-index-card fix" href="{{ "skills/gh-fix/" | relURL }}"><span class="skill-command">/gh-fix</span><strong>Issue to merged fix</strong><span>Investigate, ship, prove, and close the loop.</span></a>
+          <a class="skill-index-card discuss" href="{{ "skills/gh-discuss/" | relURL }}"><span class="skill-command">/gh-discuss</span><strong>One useful answer</strong><span>Read the thread, research the repo, reply only when certain.</span></a>
+        </div>
+      </section>
     </main>
     <footer>
       Generated from <a href="https://github.com/lsegal/glorp/blob/main/README.md">README.md</a> with Hugo.

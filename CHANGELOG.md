@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add linked GitHub Pages guides for the `gh-fix` and `gh-discuss` skills, with their installation commands, workflow diagrams, and GitHub-style visual walkthroughs.
+
 ## v1.2.10 - 2026-08-21
 
 - Add Retry and Stop controls to each browser-dashboard job viewport, keeping unavailable actions visible but disabled, logging both intents, rerunning failed `gh-fix` work immediately, and cancelling active work on request.
