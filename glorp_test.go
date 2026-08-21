@@ -593,6 +593,63 @@ func TestGlorpDoesNotCancelRunWithoutCompetingClaim(t *testing.T) {
 	}
 }
 
+func TestGlorpWebUIStopsAndRetriesFailedWork(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, Title: "Retry me"}}}}
+	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 2), reported: AgentSession{ID: "session-7"}}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &logs,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	<-runner.sessions
+	if err := w.handleJobAction(ctx, jobAction{Action: "stop", Target: "o/r", Number: 7}); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("stopped work did not fail, state=%v err=%v", state, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := w.handleJobAction(ctx, jobAction{Action: "retry", Target: "o/r", Number: 7}); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	select {
+	case session := <-runner.sessions:
+		if !session.Resume {
+			t.Fatal("retry did not rerun the existing gh-fix session")
+		}
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("retry did not rerun gh-fix")
+	}
+	if !strings.Contains(logs.String(), "stop requested from web UI") || !strings.Contains(logs.String(), "retry requested from web UI; rerunning gh-fix") {
+		t.Fatalf("action intent was not logged:\n%s", logs.String())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGlorpCancelsRunAndRemovesCheckoutWhenAnotherInstanceClaimsIssue(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
