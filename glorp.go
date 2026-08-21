@@ -1311,12 +1311,16 @@ func (w *Glorp) Run(ctx context.Context) error {
 					// normal webhook retry chain stops as soon as an issue is merely
 					// observed, which is insufficient here because local completed or
 					// active state can still defer the fresh threaded run.
-					if directMentions[key] && retryTimer == nil {
+					if directMentions[key] {
 						pendingWebhookIssue = key
-						retryTimer = time.NewTimer(w.Interval)
-						retry = retryTimer.C
 						retriesRemaining = webhookRetryLimit
-						w.logf("issue #%d direct mention is still pending; scheduling follow-up refresh", event.IssueNumber)
+						if retryTimer == nil {
+							retryTimer = time.NewTimer(w.Interval)
+							retry = retryTimer.C
+							w.logf("issue #%d direct mention is still pending; scheduling follow-up refresh", event.IssueNumber)
+						} else {
+							w.logf("issue #%d direct mention is still pending; using the scheduled follow-up refresh", event.IssueNumber)
+						}
 					}
 					continue
 				}
