@@ -2530,6 +2530,50 @@ func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
 	}
 }
 
+func TestGlorpDoesNotDispatchBlockedIssue(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{
+		{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "open"}}},
+	}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, Out: &logs,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	select {
+	case got := <-runner.dispatched:
+		cancel()
+		<-done
+		t.Fatalf("dispatched blocked issue #%d", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "issue #7 not picked up: depends on #12 (open)") {
+		t.Fatalf("blocked issue was not logged:\n%s", logs.String())
+	}
+}
+
 // fakeProjectState serves board fingerprints for the push-mode project probe.
 type fakeProjectState struct {
 	mu     sync.Mutex
