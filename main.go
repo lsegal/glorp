@@ -453,7 +453,7 @@ func closesIssue(body, repo string, number int) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
-const defaultIssueFilter = "is:issue state:open author:@me"
+const defaultIssueFilter = "is:issue state:open author:@me label:agent-ready"
 
 type filterFlag struct {
 	values []string

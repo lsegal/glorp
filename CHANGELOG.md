@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add Retry and Stop controls to each browser-dashboard job viewport, keeping unavailable actions visible but disabled, logging both intents, rerunning failed `gh-fix` work immediately, and cancelling active work on request.
+- Fix the default `--filter` for repository targets no longer restricting dispatch to issues carrying the `agent-ready` label, so `glorp watch` on a repository once again only picks up labeled issues instead of every open issue authored by the current user.
 
 - `glorp upgrade` now checks the latest published release before downloading anything. If the running binary already matches it, upgrade noops and prints the current version instead of re-running the installer.
 
