@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Improve the public `gh-fix` guide with a stable two-line hero, a draft-PR checkpoint walkthrough, and an example of attached screenshot proof.
 - Add linked GitHub Pages guides for the `gh-fix` and `gh-discuss` skills, with their installation commands, workflow diagrams, and GitHub-style visual walkthroughs.
 
 ## v1.2.10 - 2026-08-21
