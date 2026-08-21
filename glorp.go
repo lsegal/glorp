@@ -1206,6 +1206,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		reap = reapTicker.C
 		w.logf("reaping abandoned work every %s", reapTick)
 	}
+	retryAfterStop := make(map[string]bool)
 	for {
 		select {
 		case request := <-w.jobActionRequests():
@@ -1240,12 +1241,39 @@ func (w *Glorp) Run(ctx context.Context) error {
 				cancel(errWorkStoppedFromWebUI)
 				request.done <- nil
 			case "retry":
-				if job.Status != "failed" {
+				switch job.Status {
+				case "active":
+					workMu.Lock()
+					cancel := cancellations[key]
+					workMu.Unlock()
+					if cancel == nil {
+						request.done <- fmt.Errorf("job is not running")
+						continue
+					}
+					w.logf("issue #%d retry requested from web UI; stopping and rerunning gh-fix", action.Number)
+					retryAfterStop[key] = true
+					jobMu.Lock()
+					job.Status = "stopping"
+					jobs[key] = job
+					jobMu.Unlock()
+					publish()
+					cancel(errWorkStoppedFromWebUI)
+					request.done <- nil
+				case "failed", "complete":
+					w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
+					workMu.Lock()
+					state := work[key]
+					state.Status = "failed"
+					work[key] = state
+					workMu.Unlock()
+					jobMu.Lock()
+					job.Status = "failed"
+					jobs[key] = job
+					jobMu.Unlock()
+					request.done <- poll(nil)
+				default:
 					request.done <- fmt.Errorf("job cannot be retried while %s", job.Status)
-					continue
 				}
-				w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
-				request.done <- poll(nil)
 			default:
 				request.done <- fmt.Errorf("unknown job action %q", action.Action)
 			}
@@ -1305,6 +1333,23 @@ func (w *Glorp) Run(ctx context.Context) error {
 					if err := poll(nil); err != nil && ctx.Err() == nil {
 						w.logf("direct-mention poll #%d error: %v", pollNumber, err)
 					}
+					// A direct mention is intentionally not an ordinary comment refresh:
+					// it must survive a lagging issue search (or a transient list
+					// failure) until the mentioned issue is actually dispatched. The
+					// normal webhook retry chain stops as soon as an issue is merely
+					// observed, which is insufficient here because local completed or
+					// active state can still defer the fresh threaded run.
+					if directMentions[key] {
+						pendingWebhookIssue = key
+						retriesRemaining = webhookRetryLimit
+						if retryTimer == nil {
+							retryTimer = time.NewTimer(w.Interval)
+							retry = retryTimer.C
+							w.logf("issue #%d direct mention is still pending; scheduling follow-up refresh", event.IssueNumber)
+						} else {
+							w.logf("issue #%d direct mention is still pending; using the scheduled follow-up refresh", event.IssueNumber)
+						}
+					}
 					continue
 				}
 			}
@@ -1357,7 +1402,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
 			}
 			retriesRemaining--
-			if pendingWebhookIssue != "" && observed[pendingWebhookIssue] {
+			if pendingWebhookIssue != "" && !directMentions[pendingWebhookIssue] && observed[pendingWebhookIssue] {
 				w.logf("webhook follow-up refreshes complete; issue %s observed", pendingWebhookIssue)
 				retriesRemaining = 0
 			}
@@ -1370,6 +1415,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 				retry = nil
 			}
 		case <-workFinished:
+			for key := range retryAfterStop {
+				jobMu.Lock()
+				status := jobs[key].Status
+				jobMu.Unlock()
+				if status == "failed" {
+					delete(retryAfterStop, key)
+					if err := poll(nil); err != nil && ctx.Err() == nil {
+						w.logf("retry poll #%d error: %v", pollNumber, err)
+					}
+				}
+			}
 			if len(directMentions) > 0 {
 				if err := poll(nil); err != nil && ctx.Err() == nil {
 					w.logf("queued direct-mention poll #%d error: %v", pollNumber, err)

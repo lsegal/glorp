@@ -3,6 +3,10 @@
 ## Unreleased
 
 - Replace the `gh-fix` guide's CSS-only screenshot-proof example with a representative dashboard image, so the proof section demonstrates the artifact it describes.
+- Correct the GitHub CLI installation commands in the public skill guides to use `gh skill install`.
+- Allow browser-dashboard jobs to be retried after completion or while active; active retries stop the current agent run before starting a fresh `gh-fix` pass.
+- Retry a direct `@/glorp:ID` mention when GitHub's issue listing temporarily omits the mentioned issue, so its fresh threaded `gh-fix` run is not lost.
+- Make the Pages skill-installation instructions agent-agnostic.
 - Improve the public `gh-fix` guide with a stable two-line hero, a draft-PR checkpoint walkthrough, and an example of attached screenshot proof.
 - Add linked GitHub Pages guides for the `gh-fix` and `gh-discuss` skills, with their installation commands, workflow diagrams, and GitHub-style visual walkthroughs.
 
