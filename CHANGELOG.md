@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.13 - 2026-08-21
+
 - Have `gh-fix` attach a follow-up that addresses an unresolved dependency as a sub-issue of its related blocking issue.
 
 ## v1.2.12 - 2026-08-21
