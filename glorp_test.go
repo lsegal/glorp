@@ -641,7 +641,7 @@ func TestGlorpDoesNotCancelRunWithoutCompetingClaim(t *testing.T) {
 	}
 }
 
-func TestGlorpWebUIStopsAndRetriesFailedWork(t *testing.T) {
+func TestGlorpWebUIRetriesActiveWork(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	src := &fakeSource{batches: [][]Issue{{{Number: 7, Title: "Retry me"}}}}
@@ -656,24 +656,6 @@ func TestGlorpWebUIStopsAndRetriesFailedWork(t *testing.T) {
 	go func() { done <- w.Run(ctx) }()
 
 	<-runner.sessions
-	if err := w.handleJobAction(ctx, jobAction{Action: "stop", Target: "o/r", Number: 7}); err != nil {
-		cancel()
-		<-done
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		state, err := loadWorkState(statePath)
-		if err == nil && state[7].Status == "failed" {
-			break
-		}
-		if time.Now().After(deadline) {
-			cancel()
-			<-done
-			t.Fatalf("stopped work did not fail, state=%v err=%v", state, err)
-		}
-		time.Sleep(time.Millisecond)
-	}
 	if err := w.handleJobAction(ctx, jobAction{Action: "retry", Target: "o/r", Number: 7}); err != nil {
 		cancel()
 		<-done
@@ -689,7 +671,7 @@ func TestGlorpWebUIStopsAndRetriesFailedWork(t *testing.T) {
 		<-done
 		t.Fatal("retry did not rerun gh-fix")
 	}
-	if !strings.Contains(logs.String(), "stop requested from web UI") || !strings.Contains(logs.String(), "retry requested from web UI; rerunning gh-fix") {
+	if !strings.Contains(logs.String(), "retry requested from web UI; stopping and rerunning gh-fix") {
 		t.Fatalf("action intent was not logged:\n%s", logs.String())
 	}
 	cancel()
