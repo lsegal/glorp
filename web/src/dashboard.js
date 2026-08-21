@@ -8,7 +8,7 @@ export function deliveryLabel(snapshot) {
 
 export function jobActionAvailability(status) {
 	return {
-		retry: status === "failed",
+		retry: status === "active" || status === "failed" || status === "complete",
 		stop: status === "active",
 	};
 }

@@ -20,26 +20,20 @@ describe("deliveryLabel", () => {
 });
 
 describe("jobActionAvailability", () => {
-	it("only enables retry for failed jobs", () => {
+	it("enables retry for active, failed, and completed jobs", () => {
+		expect(jobActionAvailability("active")).toEqual({
+			retry: true,
+			stop: true,
+		});
 		expect(jobActionAvailability("failed")).toEqual({
 			retry: true,
 			stop: false,
 		});
-	});
-
-	it("only enables stop for active jobs", () => {
-		expect(jobActionAvailability("active")).toEqual({
-			retry: false,
-			stop: true,
-		});
-		expect(jobActionAvailability("queued")).toEqual({
-			retry: false,
+		expect(jobActionAvailability("complete")).toEqual({
+			retry: true,
 			stop: false,
 		});
-	});
-
-	it("keeps both actions disabled for completed jobs", () => {
-		expect(jobActionAvailability("complete")).toEqual({
+		expect(jobActionAvailability("queued")).toEqual({
 			retry: false,
 			stop: false,
 		});

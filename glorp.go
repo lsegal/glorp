@@ -1206,6 +1206,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		reap = reapTicker.C
 		w.logf("reaping abandoned work every %s", reapTick)
 	}
+	retryAfterStop := make(map[string]bool)
 	for {
 		select {
 		case request := <-w.jobActionRequests():
@@ -1240,12 +1241,39 @@ func (w *Glorp) Run(ctx context.Context) error {
 				cancel(errWorkStoppedFromWebUI)
 				request.done <- nil
 			case "retry":
-				if job.Status != "failed" {
+				switch job.Status {
+				case "active":
+					workMu.Lock()
+					cancel := cancellations[key]
+					workMu.Unlock()
+					if cancel == nil {
+						request.done <- fmt.Errorf("job is not running")
+						continue
+					}
+					w.logf("issue #%d retry requested from web UI; stopping and rerunning gh-fix", action.Number)
+					retryAfterStop[key] = true
+					jobMu.Lock()
+					job.Status = "stopping"
+					jobs[key] = job
+					jobMu.Unlock()
+					publish()
+					cancel(errWorkStoppedFromWebUI)
+					request.done <- nil
+				case "failed", "complete":
+					w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
+					workMu.Lock()
+					state := work[key]
+					state.Status = "failed"
+					work[key] = state
+					workMu.Unlock()
+					jobMu.Lock()
+					job.Status = "failed"
+					jobs[key] = job
+					jobMu.Unlock()
+					request.done <- poll(nil)
+				default:
 					request.done <- fmt.Errorf("job cannot be retried while %s", job.Status)
-					continue
 				}
-				w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
-				request.done <- poll(nil)
 			default:
 				request.done <- fmt.Errorf("unknown job action %q", action.Action)
 			}
@@ -1387,6 +1415,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 				retry = nil
 			}
 		case <-workFinished:
+			for key := range retryAfterStop {
+				jobMu.Lock()
+				status := jobs[key].Status
+				jobMu.Unlock()
+				if status == "failed" {
+					delete(retryAfterStop, key)
+					if err := poll(nil); err != nil && ctx.Err() == nil {
+						w.logf("retry poll #%d error: %v", pollNumber, err)
+					}
+				}
+			}
 			if len(directMentions) > 0 {
 				if err := poll(nil); err != nil && ctx.Err() == nil {
 					w.logf("queued direct-mention poll #%d error: %v", pollNumber, err)
