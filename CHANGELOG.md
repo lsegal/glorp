@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Correct the GitHub CLI installation commands in the public skill guides to use `gh skill install`.
 - Allow browser-dashboard jobs to be retried after completion or while active; active retries stop the current agent run before starting a fresh `gh-fix` pass.
 - Retry a direct `@/glorp:ID` mention when GitHub's issue listing temporarily omits the mentioned issue, so its fresh threaded `gh-fix` run is not lost.
 - Make the Pages skill-installation instructions agent-agnostic.
