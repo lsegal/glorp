@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replace the `gh-fix` guide's CSS-only screenshot-proof example with a representative dashboard image, so the proof section demonstrates the artifact it describes.
 - Improve the public `gh-fix` guide with a stable two-line hero, a draft-PR checkpoint walkthrough, and an example of attached screenshot proof.
 - Add linked GitHub Pages guides for the `gh-fix` and `gh-discuss` skills, with their installation commands, workflow diagrams, and GitHub-style visual walkthroughs.
 
