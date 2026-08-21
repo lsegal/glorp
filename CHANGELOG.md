@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.12 - 2026-08-21
+
 - Fix the `gh-fix` documentation guide's screenshot-proof image on the GitHub Pages site.
 
 ## v1.2.11 - 2026-08-21
