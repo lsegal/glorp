@@ -226,23 +226,20 @@ func TestGlorpDispatchesUnansweredDiscussions(t *testing.T) {
 	target := "https://github.com/o/r/discussions"
 	ds := &fakeDiscussionSource{batches: [][]Discussion{{{Number: 9, Title: "Q"}}}}
 	src := &fakeSource{batches: [][]Issue{{}}}
-	r := &fakeRunner{release: make(chan struct{})}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
 	var logs bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Glorp{Repo: target, Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Discussions: ds, Runner: r, Out: &logs}
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		r.mu.Lock()
-		dispatched := len(r.got)
-		r.mu.Unlock()
-		if dispatched == 1 {
-			break
+	select {
+	case number := <-r.dispatched:
+		if number != 9 {
+			t.Fatalf("dispatched discussion #%d, want #9", number)
 		}
-		time.Sleep(time.Millisecond)
+	case <-time.After(time.Second):
+		t.Fatal("discussion was not dispatched")
 	}
-	close(r.release)
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
