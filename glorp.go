@@ -37,6 +37,19 @@ const (
 
 var errWorkClosedByUser = errors.New("work closed by user")
 
+var errWorkStoppedFromWebUI = errors.New("work stopped from web UI")
+
+type jobAction struct {
+	Action string `json:"action"`
+	Target string `json:"target"`
+	Number int    `json:"number"`
+}
+
+type jobActionRequest struct {
+	action jobAction
+	done   chan error
+}
+
 // errWorkClaimedByOther signals that another glorp instance posted a newer
 // starting/continuing claim while this instance was actively working the
 // same issue. Per the handoff protocol (issue #214), the most recent claim
@@ -204,8 +217,30 @@ type Glorp struct {
 	reapInterval time.Duration
 	// staleClaim overrides the age at which another instance's claim is
 	// considered abandoned in tests.
-	staleClaim time.Duration
-	logMu      sync.Mutex
+	staleClaim    time.Duration
+	logMu         sync.Mutex
+	jobActionOnce sync.Once
+	jobActions    chan jobActionRequest
+}
+
+func (w *Glorp) jobActionRequests() chan jobActionRequest {
+	w.jobActionOnce.Do(func() { w.jobActions = make(chan jobActionRequest) })
+	return w.jobActions
+}
+
+func (w *Glorp) handleJobAction(ctx context.Context, action jobAction) error {
+	request := jobActionRequest{action: action, done: make(chan error, 1)}
+	select {
+	case w.jobActionRequests() <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-request.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (w *Glorp) periodicPollInterval() time.Duration {
@@ -679,6 +714,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 	var tasks taskState
 	var workMu sync.Mutex
 	active := make(map[string]string)
+	cancellations := make(map[string]context.CancelCauseFunc)
 	directMentions := make(map[string]bool)
 	workFinished := make(chan struct{}, 1)
 	jobs := make(map[string]JobSnapshot)
@@ -867,7 +903,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			key := issueKey(issue)
 			active[key] = session.ID
 			jobMu.Lock()
-			jobs[key] = JobSnapshot{Number: issue.Number, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Started: time.Now()}
+			jobs[key] = JobSnapshot{Number: issue.Number, Target: issue.Target, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Started: time.Now()}
 			jobMu.Unlock()
 			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory, Owner: string(w.Identity)}
 			err = saveScopedWorkState(w.StatePath, work, targets)
@@ -915,6 +951,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}()
 				runCtx, cancelRun := context.WithCancelCause(ctx)
 				defer cancelRun(nil)
+				key := issueKey(i)
+				workMu.Lock()
+				cancellations[key] = cancelRun
+				workMu.Unlock()
+				defer func() {
+					workMu.Lock()
+					delete(cancellations, key)
+					workMu.Unlock()
+				}()
 				var closureReady <-chan struct{}
 				if closureChecker != nil {
 					ready := make(chan struct{})
@@ -973,7 +1018,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					publish()
 				}
 				var runErr error
-				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) {
+				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) {
 					runErr = cause
 				} else if w.UI != nil {
 					if runner, ok := w.Runner.(SessionAgentOutputRunner); ok {
@@ -988,7 +1033,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				} else {
 					runErr = w.Runner.Run(runCtx, i)
 				}
-				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) {
+				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) {
 					runErr = cause
 				}
 				if runErr != nil {
@@ -1163,6 +1208,47 @@ func (w *Glorp) Run(ctx context.Context) error {
 	}
 	for {
 		select {
+		case request := <-w.jobActionRequests():
+			action := request.action
+			key := action.Target + "#" + strconv.Itoa(action.Number)
+			jobMu.Lock()
+			job, exists := jobs[key]
+			jobMu.Unlock()
+			if !exists {
+				request.done <- fmt.Errorf("job not found")
+				continue
+			}
+			switch action.Action {
+			case "stop":
+				if job.Status != "active" {
+					request.done <- fmt.Errorf("job cannot be stopped while %s", job.Status)
+					continue
+				}
+				workMu.Lock()
+				cancel := cancellations[key]
+				workMu.Unlock()
+				if cancel == nil {
+					request.done <- fmt.Errorf("job is not running")
+					continue
+				}
+				w.logf("issue #%d stop requested from web UI", action.Number)
+				jobMu.Lock()
+				job.Status = "stopping"
+				jobs[key] = job
+				jobMu.Unlock()
+				publish()
+				cancel(errWorkStoppedFromWebUI)
+				request.done <- nil
+			case "retry":
+				if job.Status != "failed" {
+					request.done <- fmt.Errorf("job cannot be retried while %s", job.Status)
+					continue
+				}
+				w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
+				request.done <- poll(nil)
+			default:
+				request.done <- fmt.Errorf("unknown job action %q", action.Action)
+			}
 		case <-ctx.Done():
 			w.logf("shutdown requested; waiting for running tasks to finish")
 			wg.Wait()

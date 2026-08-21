@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -24,10 +25,17 @@ type WebUI struct {
 	snapshot GlorpSnapshot
 	logs     []string
 	assets   http.Handler
+	action   func(context.Context, jobAction) error
 }
 
 func NewWebUI() (*WebUI, error) {
 	return &WebUI{assets: newWebUIAssets()}, nil
+}
+
+func (ui *WebUI) SetJobActionHandler(handler func(context.Context, jobAction) error) {
+	ui.mu.Lock()
+	ui.action = handler
+	ui.mu.Unlock()
 }
 
 func (ui *WebUI) Snapshot(snapshot GlorpSnapshot) {
@@ -50,12 +58,42 @@ func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ui.serveState(w, r)
 		return
 	}
+	if r.URL.Path == "/api/jobs/action" {
+		ui.serveJobAction(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	ui.assets.ServeHTTP(w, r)
+}
+
+func (ui *WebUI) serveJobAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var action jobAction
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&action); err != nil || action.Number <= 0 || action.Target == "" || (action.Action != "retry" && action.Action != "stop") {
+		http.Error(w, "invalid job action", http.StatusBadRequest)
+		return
+	}
+	ui.mu.RLock()
+	handler := ui.action
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "job actions unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := handler(r.Context(), action); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (ui *WebUI) serveState(w http.ResponseWriter, r *http.Request) {

@@ -1,3 +1,4 @@
+import { ArrowPathIcon, StopIcon } from "@heroicons/react/24/outline";
 import {
 	Activity,
 	Check,
@@ -9,7 +10,11 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { deliveryLabel } from "./dashboard";
+import {
+	deliveryLabel,
+	jobActionAvailability,
+	submitJobAction,
+} from "./dashboard";
 import "./index.css";
 
 const emptyState = {
@@ -89,12 +94,26 @@ function JobIcon({ status }) {
 		return <Check className="status-icon complete" aria-label="complete" />;
 	if (status === "failed")
 		return <X className="status-icon failed" aria-label="failed" />;
-	if (status === "active")
+	if (status === "active" || status === "stopping")
 		return <Activity className="status-icon active" aria-label="active" />;
 	return <Circle className="status-icon queued" aria-label="queued" />;
 }
 
 function JobCard({ job }) {
+	const [pendingAction, setPendingAction] = useState("");
+	const [actionError, setActionError] = useState("");
+	const available = jobActionAvailability(job.Status);
+	const runAction = async (action) => {
+		setPendingAction(action);
+		setActionError("");
+		try {
+			await submitJobAction(job, action);
+		} catch (error) {
+			setActionError(error.message);
+		} finally {
+			setPendingAction("");
+		}
+	};
 	return (
 		<article className="card">
 			<header className="card-header">
@@ -109,10 +128,30 @@ function JobCard({ job }) {
 			<div className="meta" title={job.SessionID}>
 				<Terminal /> session: {job.SessionID || "pending"}
 			</div>
-			<ScrollViewport
-				value={job.Log}
-				status={`clone: ${job.CheckoutDirectory || "pending"}`}
-			/>
+			<div className="job-viewport">
+				<div className="viewport-actions">
+					<button
+						type="button"
+						disabled={!available.retry || pendingAction !== ""}
+						onClick={() => runAction("retry")}
+						title={actionError || "Retry gh-fix"}
+					>
+						<ArrowPathIcon /> Retry
+					</button>
+					<button
+						type="button"
+						disabled={!available.stop || pendingAction !== ""}
+						onClick={() => runAction("stop")}
+						title={actionError || "Stop gh-fix"}
+					>
+						<StopIcon /> Stop
+					</button>
+				</div>
+				<ScrollViewport
+					value={job.Log}
+					status={`clone: ${job.CheckoutDirectory || "pending"}`}
+				/>
+			</div>
 		</article>
 	);
 }
@@ -177,7 +216,9 @@ function App() {
 			<StatusBar snapshot={snapshot} connected={connected} />
 			<section className="job-grid" aria-label="Agent jobs">
 				{(snapshot.Jobs || []).length ? (
-					snapshot.Jobs.map((job) => <JobCard key={job.Number} job={job} />)
+					snapshot.Jobs.map((job) => (
+						<JobCard key={`${job.Target}#${job.Number}`} job={job} />
+					))
 				) : (
 					<div className="empty-jobs">
 						<Activity />

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add Retry and Stop controls to each browser-dashboard job viewport, keeping unavailable actions visible but disabled, logging both intents, rerunning failed `gh-fix` work immediately, and cancelling active work on request.
+
 - `glorp upgrade` now checks the latest published release before downloading anything. If the running binary already matches it, upgrade noops and prints the current version instead of re-running the installer.
 
 ## v1.2.9 - 2026-08-20

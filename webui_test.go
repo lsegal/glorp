@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -68,6 +70,40 @@ func TestWebUIRejectsUnsupportedMethods(t *testing.T) {
 	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", nil))
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST / = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestWebUIHandlesJobActions(t *testing.T) {
+	ui, err := NewWebUI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got jobAction
+	ui.SetJobActionHandler(func(_ context.Context, action jobAction) error {
+		got = action
+		return nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/jobs/action", bytes.NewBufferString(`{"action":"retry","target":"o/r","number":7}`))
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("POST action = %d, body = %q", response.Code, response.Body.String())
+	}
+	if got != (jobAction{Action: "retry", Target: "o/r", Number: 7}) {
+		t.Fatalf("action = %#v", got)
+	}
+}
+
+func TestWebUIRejectsUnavailableJobActions(t *testing.T) {
+	ui, err := NewWebUI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/jobs/action", bytes.NewBufferString(`{"action":"stop","target":"o/r","number":7}`))
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST action = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }
 

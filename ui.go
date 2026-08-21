@@ -22,6 +22,7 @@ const dashboardGap = 1
 
 type JobSnapshot struct {
 	Number            int
+	Target            string
 	Title             string
 	Status            string
 	CheckoutDirectory string

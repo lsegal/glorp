@@ -164,6 +164,45 @@ h1 span {
 	display: flex;
 	flex-direction: column;
 }
+.job-viewport {
+	position: relative;
+	min-height: 0;
+	display: flex;
+}
+.job-viewport .viewport-wrap {
+	flex: 1;
+}
+.viewport-actions {
+	position: absolute;
+	top: 4px;
+	right: 6px;
+	z-index: 1;
+	display: flex;
+	gap: 4px;
+}
+.viewport-actions button {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	border: 1px solid #52525b;
+	border-radius: 4px;
+	background: #27272a;
+	color: #e4e4e7;
+	padding: 2px 6px;
+	font-size: 10px;
+	cursor: pointer;
+}
+.viewport-actions button:hover:not(:disabled) {
+	background: #3f3f46;
+}
+.viewport-actions button:disabled {
+	opacity: 0.38;
+	cursor: not-allowed;
+}
+.viewport-actions svg {
+	width: 12px;
+	height: 12px;
+}
 .viewport-status {
 	flex: 0 0 auto;
 	padding: 4px 12px;
@@ -179,6 +218,9 @@ h1 span {
 		Menlo,
 		Consolas,
 		monospace;
+}
+.job-viewport .viewport-status {
+	padding-right: 116px;
 }
 .viewport {
 	width: 100%;
