@@ -428,6 +428,54 @@ func TestGlorpDispatchesDirectIdentityMention(t *testing.T) {
 	}
 }
 
+func TestGlorpRetriesPendingDirectMentionAfterIssueListLag(t *testing.T) {
+	dir := t.TempDir()
+	// The immediate direct-mention refresh can race GitHub's issue search
+	// index. It must retry until it sees and dispatches the mentioned issue,
+	// rather than treating an empty list as a completed retry.
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}, {}, {{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
+	events := make(chan WebhookEvent, 1)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		state, err := loadWorkState(w.StatePath)
+		if err == nil && state[7].Status == "completed" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentBody: "Please revisit this @/glorp:SELF"}
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("direct mention dispatched issue #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending direct mention was not retried after an empty issue list")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGlorpIgnoresDirectMentionFromDisallowedCommenter(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}, {{Number: 7}}}}
