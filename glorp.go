@@ -1305,6 +1305,19 @@ func (w *Glorp) Run(ctx context.Context) error {
 					if err := poll(nil); err != nil && ctx.Err() == nil {
 						w.logf("direct-mention poll #%d error: %v", pollNumber, err)
 					}
+					// A direct mention is intentionally not an ordinary comment refresh:
+					// it must survive a lagging issue search (or a transient list
+					// failure) until the mentioned issue is actually dispatched. The
+					// normal webhook retry chain stops as soon as an issue is merely
+					// observed, which is insufficient here because local completed or
+					// active state can still defer the fresh threaded run.
+					if directMentions[key] && retryTimer == nil {
+						pendingWebhookIssue = key
+						retryTimer = time.NewTimer(w.Interval)
+						retry = retryTimer.C
+						retriesRemaining = webhookRetryLimit
+						w.logf("issue #%d direct mention is still pending; scheduling follow-up refresh", event.IssueNumber)
+					}
 					continue
 				}
 			}
@@ -1357,7 +1370,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
 			}
 			retriesRemaining--
-			if pendingWebhookIssue != "" && observed[pendingWebhookIssue] {
+			if pendingWebhookIssue != "" && !directMentions[pendingWebhookIssue] && observed[pendingWebhookIssue] {
 				w.logf("webhook follow-up refreshes complete; issue %s observed", pendingWebhookIssue)
 				retriesRemaining = 0
 			}
