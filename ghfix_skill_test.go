@@ -45,6 +45,21 @@ func TestGhFixRoutesFollowUpsForGlorp(t *testing.T) {
 	}
 }
 
+func TestGhFixMakesDependentFollowUpsSubIssues(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"unresolved issue dependency",
+		"make the follow-up a sub-issue of that related blocking issue",
+		"GitHub's sub-issue API",
+		"specific blocker it addresses",
+		"rather than guessing when the relationship is ambiguous",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require dependent follow-up sub-issue routing %q", required)
+		}
+	}
+}
+
 func TestGhFixPrefersSquashMerges(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{
