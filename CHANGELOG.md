@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.11 - 2026-08-21
+
 - Replace the `gh-fix` guide's CSS-only screenshot-proof example with a representative dashboard image, so the proof section demonstrates the artifact it describes.
 - Correct the GitHub CLI installation commands in the public skill guides to use `gh skill install`.
 - Allow browser-dashboard jobs to be retried after completion or while active; active retries stop the current agent run before starting a fresh `gh-fix` pass.
