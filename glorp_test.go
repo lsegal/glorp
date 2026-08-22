@@ -2530,6 +2530,13 @@ func TestIssueBlockedUntilDependenciesClose(t *testing.T) {
 	}
 }
 
+func TestIssueBlockedWhenItHasSubIssues(t *testing.T) {
+	blocked, reason := issueBlocked(Issue{HasSubIssues: true})
+	if !blocked || reason != "has sub-issues" {
+		t.Fatalf("blocked=%v reason=%q", blocked, reason)
+	}
+}
+
 func TestGlorpDoesNotDispatchBlockedIssue(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{
@@ -2571,6 +2578,40 @@ func TestGlorpDoesNotDispatchBlockedIssue(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "issue #7 not picked up: depends on #12 (open)") {
 		t.Fatalf("blocked issue was not logged:\n%s", logs.String())
+	}
+}
+
+func TestGlorpDoesNotDispatchIssueWithSubIssues(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{
+		{Number: 7, Repository: "o/r", HasSubIssues: true},
+	}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, Out: &logs,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case got := <-runner.dispatched:
+		cancel()
+		<-done
+		t.Fatalf("dispatched issue with sub-issues #%d", got)
+	default:
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "issue #7 not picked up: has sub-issues") {
+		t.Fatalf("issue with sub-issues was not logged:\n%s", logs.String())
 	}
 }
 

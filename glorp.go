@@ -72,6 +72,7 @@ type Issue struct {
 	CreatedAt     time.Time         `json:"createdAt,omitempty"`
 	Labels        []IssueLabel      `json:"labels,omitempty"`
 	DependsOn     []IssueDependency `json:"dependsOn,omitempty"`
+	HasSubIssues  bool              `json:"hasSubIssues,omitempty"`
 	ProjectStatus string            `json:"projectStatus,omitempty"`
 	ProjectItemID string            `json:"-"`
 	Target        string            `json:"-"`
@@ -1635,6 +1636,9 @@ func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState) 
 }
 
 func issueBlocked(issue Issue) (bool, string) {
+	if issue.HasSubIssues {
+		return true, "has sub-issues"
+	}
 	blocked := make([]string, 0)
 	for _, dependency := range issue.DependsOn {
 		if !strings.EqualFold(dependency.State, "closed") {

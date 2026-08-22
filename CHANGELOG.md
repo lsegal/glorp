@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Keep the browser dashboard's Retry control enabled for queued jobs as well as active, failed, and completed work.
+- Skip dispatching issues that contain sub-issues.
 
 ## v1.2.13 - 2026-08-21
 
