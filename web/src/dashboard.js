@@ -8,7 +8,9 @@ export function deliveryLabel(snapshot) {
 
 export function jobActionAvailability(status) {
 	return {
-		retry: status === "active" || status === "failed" || status === "complete",
+		// A queued job is already on its way to a fresh gh-fix run, so retry is
+		// available for every state shown in the dashboard.
+		retry: true,
 		stop: status === "active",
 	};
 }

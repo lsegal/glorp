@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the browser dashboard's Retry control enabled for queued jobs as well as active, failed, and completed work.
+
 ## v1.2.13 - 2026-08-21
 
 - Have `gh-fix` attach a follow-up that addresses an unresolved dependency as a sub-issue of its related blocking issue.

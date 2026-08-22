@@ -20,7 +20,7 @@ describe("deliveryLabel", () => {
 });
 
 describe("jobActionAvailability", () => {
-	it("enables retry for active, failed, and completed jobs", () => {
+	it("enables retry for every dashboard job state", () => {
 		expect(jobActionAvailability("active")).toEqual({
 			retry: true,
 			stop: true,
@@ -34,7 +34,11 @@ describe("jobActionAvailability", () => {
 			stop: false,
 		});
 		expect(jobActionAvailability("queued")).toEqual({
-			retry: false,
+			retry: true,
+			stop: false,
+		});
+		expect(jobActionAvailability("stopping")).toEqual({
+			retry: true,
 			stop: false,
 		});
 	});
