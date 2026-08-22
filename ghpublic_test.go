@@ -335,6 +335,8 @@ func TestListIssuesUsesPublicSearchAPIForPublicRepo(t *testing.T) {
 				return []byte(`{"private":false}`), nil, http.StatusOK, nil
 			case "https://api.github.com/repos/owner/repo/issues/7/dependencies/blocked_by":
 				return []byte(`[]`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/7/sub_issues":
+				return []byte(`[]`), nil, http.StatusOK, nil
 			}
 			return []byte(`{"items":[{"number":7,"title":"bug","state":"open","created_at":"2026-07-20T17:38:43Z"}]}`), nil, http.StatusOK, nil
 		},
@@ -358,6 +360,8 @@ func TestListIssuesFallsBackToAuthenticatedSearchOnIncompleteResults(t *testing.
 			case "https://api.github.com/repos/owner/repo":
 				return []byte(`{"private":false}`), nil, http.StatusOK, nil
 			case "https://api.github.com/repos/owner/repo/issues/7/dependencies/blocked_by":
+				return []byte(`[]`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/7/sub_issues":
 				return []byte(`[]`), nil, http.StatusOK, nil
 			}
 			return []byte(`{"items":[],"incomplete_results":true}`), nil, http.StatusOK, nil
@@ -466,6 +470,8 @@ func TestLoadDependenciesUsesPublicAPIForPublicRepo(t *testing.T) {
 				return []byte(`{"state":"open"}`), nil, http.StatusOK, nil
 			case "https://api.github.com/repos/owner/repo/issues/9/dependencies/blocked_by":
 				return []byte(`[]`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/9/sub_issues":
+				return []byte(`[{"number":10}]`), nil, http.StatusOK, nil
 			}
 			t.Fatalf("unexpected request URL: %s", requestURL)
 			return nil, nil, 0, nil
@@ -477,6 +483,9 @@ func TestLoadDependenciesUsesPublicAPIForPublicRepo(t *testing.T) {
 	}
 	if len(issue.DependsOn) != 1 || issue.DependsOn[0].Number != 4 || issue.DependsOn[0].State != "open" {
 		t.Fatalf("DependsOn = %#v", issue.DependsOn)
+	}
+	if !issue.HasSubIssues {
+		t.Fatal("HasSubIssues = false, want true")
 	}
 	if ranGH {
 		t.Fatal("loadDependencies() ran the gh CLI for a public repo")
@@ -497,6 +506,8 @@ func TestLoadDependenciesUsesAuthenticatedRESTForPrivateRepo(t *testing.T) {
 				return []byte(`{"state":"open"}`), nil
 			case len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "dependencies/blocked_by"):
 				return []byte(`[]`), nil
+			case len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "sub_issues"):
+				return []byte(`[]`), nil
 			}
 			return nil, fmt.Errorf("unexpected gh call: %#v", args)
 		},
@@ -507,6 +518,9 @@ func TestLoadDependenciesUsesAuthenticatedRESTForPrivateRepo(t *testing.T) {
 	}
 	if len(issue.DependsOn) != 1 || issue.DependsOn[0].Number != 4 || issue.DependsOn[0].State != "open" {
 		t.Fatalf("DependsOn = %#v", issue.DependsOn)
+	}
+	if issue.HasSubIssues {
+		t.Fatal("HasSubIssues = true, want false")
 	}
 	for _, call := range calls {
 		if len(call) > 0 && call[0] == "issue" {

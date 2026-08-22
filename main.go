@@ -1142,6 +1142,15 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 		for _, dependency := range related {
 			dependencies[dependency.Number] = dependency
 		}
+		subIssues, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/sub_issues", "--header", "X-GitHub-Api-Version: 2022-11-28")
+		if err != nil {
+			return fmt.Errorf("list sub-issues for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(subIssues)))
+		}
+		var relatedSubIssues []json.RawMessage
+		if err := json.Unmarshal(subIssues, &relatedSubIssues); err != nil {
+			return fmt.Errorf("decode sub-issues for issue #%d: %w", issue.Number, err)
+		}
+		issue.HasSubIssues = len(relatedSubIssues) > 0
 	}
 	issue.DependsOn = issue.DependsOn[:0]
 	for _, dependency := range dependencies {
