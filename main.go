@@ -1806,6 +1806,14 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	agent := r.specForSession(session).Name
 	args := commandArgsForSession(r, issue, session)
 	cmd := newAgentCommand(ctx, r.binary(agent), args...)
+	if agent == "claude" {
+		// Claude Code's headless print mode (-p) caps how long it waits for
+		// in-flight background shell tasks before terminating them (10
+		// minutes by default). glorp dispatches claude for long-lived
+		// autonomous work, so disable the ceiling to prevent it from killing
+		// legitimate background tasks mid-run (issue #330).
+		cmd.Env = append(os.Environ(), "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0")
+	}
 	// Before a checkout directory exists, run outside glorp's own working
 	// directory so the agent cannot mistake an ambient git repo (e.g. the repo
 	// glorp itself was launched from) for the one it was asked to work on

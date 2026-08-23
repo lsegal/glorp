@@ -1537,6 +1537,40 @@ func TestCommandRunnerRunsOutsideAmbientWorkingDirectory(t *testing.T) {
 	}
 }
 
+// TestCommandRunnerDisablesClaudeBackgroundWaitCeiling guards against issue
+// #330: Claude Code's headless print mode terminates in-flight background
+// shell tasks after a 10 minute ceiling, making long-lived autonomous runs
+// appear to give up mid-task. glorp must disable that ceiling for claude.
+func TestCommandRunnerDisablesClaudeBackgroundWaitCeiling(t *testing.T) {
+	binary, log := writeFakeAgent(t, "", 0)
+	runner := CommandRunner{Agent: "claude", ClaudeBinary: binary, Repo: "o/r"}
+	session := AgentSession{ID: "session-7", Agent: "claude"}
+	if err := runner.RunSession(context.Background(), Issue{Number: 7}, session, func(AgentSession) {}); err != nil {
+		t.Fatalf("RunSession() error = %v", err)
+	}
+	got := fakeAgentInvocations(t, log)
+	if len(got) != 1 || !strings.Contains(got[0], "bg_wait_ceiling_set=true bg_wait_ceiling=0") {
+		t.Fatalf("agent invocations = %#v, want CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0", got)
+	}
+}
+
+func TestCommandRunnerLeavesCodexBackgroundWaitCeilingUnset(t *testing.T) {
+	if previous, ok := os.LookupEnv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"); ok {
+		os.Unsetenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS")
+		t.Cleanup(func() { os.Setenv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", previous) })
+	}
+	binary, log := writeFakeAgent(t, "", 0)
+	runner := CommandRunner{Agent: "codex", CodexBinary: binary, Repo: "o/r"}
+	session := AgentSession{ID: "session-7", Agent: "codex"}
+	if err := runner.RunSession(context.Background(), Issue{Number: 7}, session, func(AgentSession) {}); err != nil {
+		t.Fatalf("RunSession() error = %v", err)
+	}
+	got := fakeAgentInvocations(t, log)
+	if len(got) != 1 || !strings.Contains(got[0], "bg_wait_ceiling_set=false") {
+		t.Fatalf("agent invocations = %#v, want the ceiling env var left unset for codex", got)
+	}
+}
+
 func TestCommandRunnerReportsResumeFailuresThatAreNotMissingSessions(t *testing.T) {
 	binary, log := writeFakeAgent(t, "boom: the agent crashed", 3)
 	runner := CommandRunner{Agent: "claude", ClaudeBinary: binary, Repo: "o/r"}
