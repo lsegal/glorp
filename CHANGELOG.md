@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a settings icon to the browser dashboard that opens a modal for changing concurrency, ready-state label, allowed commenters, and the dispatched agent on a running instance without a restart.
+
 ## v1.2.17 - 2026-08-23
 
 - Show the dispatched agent, model, and effort level in each job's TUI and web dashboard viewport.

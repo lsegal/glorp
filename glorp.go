@@ -233,6 +233,25 @@ type Glorp struct {
 	agentOverride atomic.Pointer[string]
 }
 
+// acquireSlot blocks until sem has a free slot. Unlike sem.acquire, it also
+// services live settings updates (issue #341) while waiting, since it runs
+// on the same goroutine as the Run loop's settingsRequestsChan case: raising
+// --concurrency is most useful exactly when every slot is taken, and a plain
+// sem.acquire here would block that goroutine and deadlock the very request
+// meant to free it.
+func (w *Glorp) acquireSlot(ctx context.Context, sem *concurrencySemaphore) error {
+	for {
+		select {
+		case <-sem.tokens:
+			return nil
+		case request := <-w.settingsRequestsChan():
+			request.done <- w.applySettingsRequest(request.update, sem)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 func (w *Glorp) jobActionRequests() chan jobActionRequest {
 	w.jobActionOnce.Do(func() { w.jobActions = make(chan jobActionRequest) })
 	return w.jobActions
@@ -486,7 +505,7 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 				continue
 			}
 			issue := Issue{Number: discussion.Number, Title: discussion.Title, Body: discussion.Body, CreatedAt: discussion.CreatedAt, Target: target, Repository: issueRepository(target, Issue{})}
-			if err := sem.acquire(ctx); err != nil {
+			if err := w.acquireSlot(ctx, sem); err != nil {
 				workMu.Lock()
 				delete(active, key)
 				workMu.Unlock()
@@ -927,7 +946,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			tasks.mu.Unlock()
 			w.logf("issue #%d queued (tasks: %d running, %d queued)", issue.Number, running, queued)
 			publish()
-			if err := sem.acquire(ctx); err != nil {
+			if err := w.acquireSlot(ctx, sem); err != nil {
 				tasks.mu.Lock()
 				tasks.queued--
 				tasks.mu.Unlock()

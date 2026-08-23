@@ -1,4 +1,9 @@
-import { ArrowPathIcon, StopIcon } from "@heroicons/react/24/outline";
+import {
+	ArrowPathIcon,
+	Cog6ToothIcon,
+	StopIcon,
+	XMarkIcon,
+} from "@heroicons/react/24/outline";
 import {
 	Activity,
 	Check,
@@ -12,10 +17,13 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+	buildSettingsUpdate,
 	deliveryLabel,
+	fetchSettings,
 	jobActionAvailability,
 	jobAgentSummary,
 	submitJobAction,
+	submitSettings,
 } from "./dashboard";
 import "./index.css";
 
@@ -202,8 +210,138 @@ function StatusBar({ snapshot, connected }) {
 	);
 }
 
+function SettingsModal({ onClose }) {
+	const [form, setForm] = useState(null);
+	const [agents, setAgents] = useState([]);
+	const [error, setError] = useState("");
+	const [saving, setSaving] = useState(false);
+	useEffect(() => {
+		let cancelled = false;
+		fetchSettings()
+			.then((snapshot) => {
+				if (cancelled) return;
+				setAgents(snapshot.agents || []);
+				setForm({
+					concurrency: String(snapshot.concurrency ?? ""),
+					readyState: snapshot.readyState ?? "",
+					allowedCommenters: (snapshot.allowedCommenters || []).join(", "),
+					agent: snapshot.agent ?? "",
+				});
+			})
+			.catch((err) => !cancelled && setError(err.message));
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	const update = (field) => (event) =>
+		setForm({ ...form, [field]: event.target.value });
+	const submit = async (event) => {
+		event.preventDefault();
+		setSaving(true);
+		setError("");
+		try {
+			await submitSettings(buildSettingsUpdate(form));
+			onClose();
+		} catch (err) {
+			setError(err.message);
+			setSaving(false);
+		}
+	};
+	return (
+		<div className="modal-overlay">
+			<button
+				type="button"
+				className="modal-overlay-dismiss"
+				onClick={onClose}
+				aria-label="Close settings"
+			/>
+			<div className="modal" role="dialog" aria-label="Settings">
+				<header className="modal-header">
+					<h2>Settings</h2>
+					<button
+						type="button"
+						className="modal-close"
+						onClick={onClose}
+						aria-label="Close settings"
+					>
+						<XMarkIcon />
+					</button>
+				</header>
+				{!form ? (
+					<p className="modal-loading">{error || "loading settings..."}</p>
+				) : (
+					<form onSubmit={submit} className="modal-body">
+						<label htmlFor="settings-concurrency">
+							Concurrency
+							<input
+								id="settings-concurrency"
+								type="number"
+								min="1"
+								max="256"
+								value={form.concurrency}
+								onChange={update("concurrency")}
+							/>
+						</label>
+						<label htmlFor="settings-agent">
+							Agent
+							{agents.length > 0 ? (
+								<select
+									id="settings-agent"
+									value={form.agent}
+									onChange={update("agent")}
+								>
+									{agents.map((agent) => (
+										<option key={agent} value={agent}>
+											{agent}
+										</option>
+									))}
+								</select>
+							) : (
+								<input
+									id="settings-agent"
+									type="text"
+									value={form.agent}
+									onChange={update("agent")}
+								/>
+							)}
+						</label>
+						<label htmlFor="settings-ready-state">
+							Ready state label
+							<input
+								id="settings-ready-state"
+								type="text"
+								value={form.readyState}
+								onChange={update("readyState")}
+							/>
+						</label>
+						<label htmlFor="settings-allowed-commenters">
+							Allowed commenters (comma separated)
+							<input
+								id="settings-allowed-commenters"
+								type="text"
+								value={form.allowedCommenters}
+								onChange={update("allowedCommenters")}
+							/>
+						</label>
+						{error && <p className="modal-error">{error}</p>}
+						<div className="modal-actions">
+							<button type="button" onClick={onClose} disabled={saving}>
+								Cancel
+							</button>
+							<button type="submit" disabled={saving}>
+								{saving ? "Saving…" : "Save"}
+							</button>
+						</div>
+					</form>
+				)}
+			</div>
+		</div>
+	);
+}
+
 function App() {
 	const [state, connected] = useDashboardState();
+	const [settingsOpen, setSettingsOpen] = useState(false);
 	const snapshot = state.snapshot || emptyState.snapshot;
 	return (
 		<main>
@@ -215,11 +353,23 @@ function App() {
 						{state.version && <span className="version">{state.version}</span>}
 					</h1>
 				</div>
-				<div className={`connection ${connected ? "online" : "offline"}`}>
-					<i />
-					{connected ? "live" : "reconnecting"}
+				<div className="masthead-actions">
+					<button
+						type="button"
+						className="settings-button"
+						onClick={() => setSettingsOpen(true)}
+						aria-label="Open settings"
+						title="Settings"
+					>
+						<Cog6ToothIcon />
+					</button>
+					<div className={`connection ${connected ? "online" : "offline"}`}>
+						<i />
+						{connected ? "live" : "reconnecting"}
+					</div>
 				</div>
 			</div>
+			{settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 			<StatusBar snapshot={snapshot} connected={connected} />
 			<section className="job-grid" aria-label="Agent jobs">
 				{(snapshot.Jobs || []).length ? (
