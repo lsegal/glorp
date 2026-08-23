@@ -471,7 +471,7 @@ func TestLoadDependenciesUsesPublicAPIForPublicRepo(t *testing.T) {
 			case "https://api.github.com/repos/owner/repo/issues/9/dependencies/blocked_by":
 				return []byte(`[]`), nil, http.StatusOK, nil
 			case "https://api.github.com/repos/owner/repo/issues/9/sub_issues":
-				return []byte(`[{"number":10}]`), nil, http.StatusOK, nil
+				return []byte(`[{"number":10,"state":"open"}]`), nil, http.StatusOK, nil
 			}
 			t.Fatalf("unexpected request URL: %s", requestURL)
 			return nil, nil, 0, nil
@@ -489,6 +489,34 @@ func TestLoadDependenciesUsesPublicAPIForPublicRepo(t *testing.T) {
 	}
 	if ranGH {
 		t.Fatal("loadDependencies() ran the gh CLI for a public repo")
+	}
+}
+
+func TestLoadDependenciesIgnoresClosedSubIssues(t *testing.T) {
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		runCommand: func(context.Context, ...string) ([]byte, error) {
+			return nil, errors.New("should not run gh")
+		},
+		publicAPI: func(_ context.Context, requestURL string) ([]byte, http.Header, int, error) {
+			switch requestURL {
+			case "https://api.github.com/repos/owner/repo":
+				return []byte(`{"private":false}`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/9/dependencies/blocked_by":
+				return []byte(`[]`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/9/sub_issues":
+				return []byte(`[{"number":10,"state":"closed"},{"number":11,"state":"MERGED"}]`), nil, http.StatusOK, nil
+			}
+			t.Fatalf("unexpected request URL: %s", requestURL)
+			return nil, nil, 0, nil
+		},
+	}
+	issue := &Issue{Number: 9}
+	if err := gh.loadDependencies(context.Background(), "owner/repo", issue); err != nil {
+		t.Fatalf("loadDependencies() error = %v", err)
+	}
+	if issue.HasSubIssues {
+		t.Fatal("HasSubIssues = true, want false for only closed/merged sub-issues")
 	}
 }
 
