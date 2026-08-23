@@ -1146,11 +1146,19 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 		if err != nil {
 			return fmt.Errorf("list sub-issues for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(subIssues)))
 		}
-		var relatedSubIssues []json.RawMessage
+		var relatedSubIssues []struct {
+			State string `json:"state"`
+		}
 		if err := json.Unmarshal(subIssues, &relatedSubIssues); err != nil {
 			return fmt.Errorf("decode sub-issues for issue #%d: %w", issue.Number, err)
 		}
-		issue.HasSubIssues = len(relatedSubIssues) > 0
+		issue.HasSubIssues = false
+		for _, subIssue := range relatedSubIssues {
+			if strings.EqualFold(subIssue.State, "open") {
+				issue.HasSubIssues = true
+				break
+			}
+		}
 	}
 	issue.DependsOn = issue.DependsOn[:0]
 	for _, dependency := range dependencies {
