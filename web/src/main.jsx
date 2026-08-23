@@ -18,6 +18,7 @@ import {
 import "./index.css";
 
 const emptyState = {
+	version: "",
 	snapshot: { Jobs: [], Targets: [], IssueCounts: {} },
 	logs: [],
 };
@@ -206,6 +207,7 @@ function App() {
 					<p className="eyebrow">Git Loop fOr Robot Patchers</p>
 					<h1>
 						glorp <span>dashboard</span>
+						{state.version && <span className="version">{state.version}</span>}
 					</h1>
 				</div>
 				<div className={`connection ${connected ? "online" : "offline"}`}>
