@@ -17,7 +17,7 @@ import (
 
 const maxVisibleJobs = 6
 const jobGridColumns = 2
-const jobCardHeight = 12
+const jobCardHeight = 13
 const dashboardGap = 1
 
 type JobSnapshot struct {
@@ -27,6 +27,9 @@ type JobSnapshot struct {
 	Status            string
 	CheckoutDirectory string
 	SessionID         string
+	Agent             string
+	Model             string
+	Effort            string
 	Started           time.Time
 	Log               string
 }
@@ -126,7 +129,7 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		for number, jobViewport := range m.jobs {
 			jobViewport.Width = max(1, msg.Width/jobGridColumns-7)
-			jobViewport.Height = max(1, jobCardHeight-4)
+			jobViewport.Height = max(1, jobCardHeight-5)
 			if followJobs[number] {
 				jobViewport.GotoBottom()
 			}
@@ -144,7 +147,7 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, job := range m.snapshot.Jobs {
 			jobViewport, ok := m.jobs[job.Number]
 			if !ok {
-				jobViewport = viewport.New(max(1, m.width/jobGridColumns-7), max(1, jobCardHeight-4))
+				jobViewport = viewport.New(max(1, m.width/jobGridColumns-7), max(1, jobCardHeight-5))
 			}
 			followOutput := !ok || jobViewport.AtBottom()
 			jobViewport.SetContent(job.Log)
@@ -281,7 +284,7 @@ func (m dashboard) viewportRegions() []viewportRegion {
 			continue
 		}
 		x := (i%jobGridColumns)*(cardRenderWidth+dashboardGap) + 1
-		y := (i/jobGridColumns)*(jobCardHeight+dashboardGap) + 3
+		y := (i/jobGridColumns)*(jobCardHeight+dashboardGap) + 4
 		regions = append(regions, viewportRegion{
 			target: viewportTarget{jobNumber: job.Number}, x: x, y: y,
 			width: view.Width + 1, height: view.Height, contentEnd: x + view.Width,
@@ -324,8 +327,9 @@ func (m dashboard) View() string {
 		metadataWidth := max(1, cardWidth-2)
 		checkout := muted.Render(truncate("checkout: "+job.CheckoutDirectory, metadataWidth))
 		session := muted.Render(truncate("session: "+job.SessionID, metadataWidth))
+		agent := muted.Render(truncate("agent: "+jobAgentSummary(job), metadataWidth))
 		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s\n%s\n%s\n%s", title, checkout, session, progress)))
+			fmt.Sprintf("%s\n%s\n%s\n%s\n%s", title, checkout, session, agent, progress)))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {
@@ -487,6 +491,23 @@ func (ui *TerminalUI) Snapshot(snapshot GlorpSnapshot) {
 	ui.program.Send(snapshotMsg(snapshot))
 }
 func (ui *TerminalUI) Log(line string) { ui.program.Send(logMsg(line)) }
+
+func jobAgentSummary(job JobSnapshot) string {
+	if job.Agent == "" {
+		return "pending"
+	}
+	summary := job.Agent
+	if job.Model != "" {
+		summary += " (" + job.Model
+		if job.Effort != "" {
+			summary += ", " + job.Effort
+		}
+		summary += ")"
+	} else if job.Effort != "" {
+		summary += " (" + job.Effort + ")"
+	}
+	return summary
+}
 
 func truncate(s string, width int) string {
 	if width < 1 {

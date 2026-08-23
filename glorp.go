@@ -903,8 +903,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 			workMu.Lock()
 			key := issueKey(issue)
 			active[key] = session.ID
+			spec, _ := parseAgentSpec(session.Agent)
 			jobMu.Lock()
-			jobs[key] = JobSnapshot{Number: issue.Number, Target: issue.Target, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Started: time.Now()}
+			jobs[key] = JobSnapshot{Number: issue.Number, Target: issue.Target, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Agent: spec.Name, Model: spec.Model, Effort: spec.Level, Started: time.Now()}
 			jobMu.Unlock()
 			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory, Owner: string(w.Identity)}
 			err = saveScopedWorkState(w.StatePath, work, targets)

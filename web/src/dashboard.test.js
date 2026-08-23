@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	deliveryLabel,
 	jobActionAvailability,
+	jobAgentSummary,
 	submitJobAction,
 } from "./dashboard";
 
@@ -41,6 +42,34 @@ describe("jobActionAvailability", () => {
 			retry: true,
 			stop: false,
 		});
+	});
+});
+
+describe("jobAgentSummary", () => {
+	it("reports pending when no agent has been assigned yet", () => {
+		expect(jobAgentSummary({})).toBe("pending");
+	});
+
+	it("includes the model and effort when available", () => {
+		expect(
+			jobAgentSummary({ Agent: "claude", Model: "opus", Effort: "low" }),
+		).toBe("claude (opus, low)");
+	});
+
+	it("includes only the model when effort is missing", () => {
+		expect(jobAgentSummary({ Agent: "claude", Model: "opus" })).toBe(
+			"claude (opus)",
+		);
+	});
+
+	it("includes only the effort when the model is missing", () => {
+		expect(jobAgentSummary({ Agent: "codex", Effort: "high" })).toBe(
+			"codex (high)",
+		);
+	});
+
+	it("shows only the agent name when model and effort are missing", () => {
+		expect(jobAgentSummary({ Agent: "codex" })).toBe("codex");
 	});
 });
 

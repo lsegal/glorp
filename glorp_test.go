@@ -927,6 +927,38 @@ func TestGlorpPreservesAgentMetadataAfterCompletion(t *testing.T) {
 	}
 	t.Fatalf("completed job snapshot was not published: %+v", reporter.snapshots)
 }
+func TestGlorpIncludesAgentSpecInJobSnapshot(t *testing.T) {
+	reporter := &snapshotReporter{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 1, Title: "bug"}}}},
+		Runner: &fakeSessionRunner{agent: "claude/opus:low", sessions: make(chan AgentSession, 1)}, UI: reporter,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	for _, snapshot := range reporter.snapshots {
+		for _, job := range snapshot.Jobs {
+			if job.Number == 1 && job.Agent != "" {
+				if job.Agent != "claude" || job.Model != "opus" || job.Effort != "low" {
+					t.Fatalf("job agent spec was not parsed into the snapshot: %+v", job)
+				}
+				return
+			}
+		}
+	}
+	t.Fatalf("agent spec was not included in any job snapshot: %+v", reporter.snapshots)
+}
+
 func TestGlorpTreatsPreexistingUnseenIssuesAsNew(t *testing.T) {
 	dir := t.TempDir()
 	old := time.Now().Add(-time.Hour)
