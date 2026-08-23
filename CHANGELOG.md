@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.15 - 2026-08-23
+
 - Disable Claude Code's headless background-task wait ceiling for dispatched `claude` runs, so long-lived autonomous work is no longer terminated mid-task after 10 minutes.
 
 ## v1.2.14 - 2026-08-22
