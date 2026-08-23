@@ -213,6 +213,7 @@ function StatusBar({ snapshot, connected }) {
 function SettingsModal({ onClose }) {
 	const [form, setForm] = useState(null);
 	const [agents, setAgents] = useState([]);
+	const [readyStateDefault, setReadyStateDefault] = useState("");
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
 	useEffect(() => {
@@ -221,6 +222,7 @@ function SettingsModal({ onClose }) {
 			.then((snapshot) => {
 				if (cancelled) return;
 				setAgents(snapshot.agents || []);
+				setReadyStateDefault(snapshot.readyStateDefault ?? "");
 				setForm({
 					concurrency: String(snapshot.concurrency ?? ""),
 					readyState: snapshot.readyState ?? "",
@@ -284,25 +286,20 @@ function SettingsModal({ onClose }) {
 						</label>
 						<label htmlFor="settings-agent">
 							Agent
-							{agents.length > 0 ? (
-								<select
-									id="settings-agent"
-									value={form.agent}
-									onChange={update("agent")}
-								>
+							<input
+								id="settings-agent"
+								type="text"
+								value={form.agent}
+								onChange={update("agent")}
+								list={agents.length > 0 ? "settings-agent-options" : undefined}
+								placeholder="codex, claude, claude/opus:high, ..."
+							/>
+							{agents.length > 0 && (
+								<datalist id="settings-agent-options">
 									{agents.map((agent) => (
-										<option key={agent} value={agent}>
-											{agent}
-										</option>
+										<option key={agent} value={agent} />
 									))}
-								</select>
-							) : (
-								<input
-									id="settings-agent"
-									type="text"
-									value={form.agent}
-									onChange={update("agent")}
-								/>
+								</datalist>
 							)}
 						</label>
 						<label htmlFor="settings-ready-state">
@@ -312,6 +309,7 @@ function SettingsModal({ onClose }) {
 								type="text"
 								value={form.readyState}
 								onChange={update("readyState")}
+								placeholder={readyStateDefault || undefined}
 							/>
 						</label>
 						<label htmlFor="settings-allowed-commenters">

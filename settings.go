@@ -91,6 +91,7 @@ type SettingsUpdate struct {
 type SettingsSnapshot struct {
 	Concurrency       int      `json:"concurrency"`
 	ReadyState        string   `json:"readyState"`
+	ReadyStateDefault string   `json:"readyStateDefault"`
 	AllowedCommenters []string `json:"allowedCommenters"`
 	Agent             string   `json:"agent"`
 	Agents            []string `json:"agents"`
@@ -189,8 +190,12 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		agent = *override
 	}
 	return SettingsSnapshot{
-		Concurrency:       w.Concurrency,
-		ReadyState:        w.ReadyState,
+		Concurrency: w.Concurrency,
+		ReadyState:  w.ReadyState,
+		// ReadyStateDefault surfaces the value projectReadyState falls back to
+		// when ReadyState is unset (issue #344), so the settings UI can show
+		// what's actually in effect instead of leaving the field blank.
+		ReadyStateDefault: projectReadyState(w.ReadyState, ""),
 		AllowedCommenters: append([]string(nil), w.AllowedCommenters...),
 		Agent:             agent,
 		Agents:            agents,
