@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a settings icon to the browser dashboard that opens a modal for changing concurrency, ready-state label, allowed commenters, and the dispatched agent on a running instance without a restart.
 - Have `gh-fix` crop native (non-browser) screenshots and recordings to the captured window's bounds instead of the full screen, unless the app itself is full screen.
 
 ## v1.2.17 - 2026-08-23

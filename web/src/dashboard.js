@@ -36,3 +36,45 @@ export async function submitJobAction(job, action) {
 		throw new Error((await response.text()) || `HTTP ${response.status}`);
 	}
 }
+
+export function parseAllowedCommenters(text) {
+	return text
+		.split(",")
+		.map((name) => name.trim())
+		.filter(Boolean);
+}
+
+// buildSettingsUpdate turns the settings modal's form state into the partial
+// update the /api/settings endpoint expects. agent is omitted when blank so
+// an instance with no configured runner doesn't fail validation just for
+// reporting its other settings back unchanged.
+export function buildSettingsUpdate(form) {
+	const update = {
+		concurrency: Number(form.concurrency),
+		readyState: form.readyState,
+		allowedCommenters: parseAllowedCommenters(form.allowedCommenters),
+	};
+	const agent = form.agent.trim();
+	if (agent) update.agent = agent;
+	return update;
+}
+
+export async function fetchSettings() {
+	const response = await fetch("/api/settings", { cache: "no-store" });
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+	return response.json();
+}
+
+export async function submitSettings(update) {
+	const response = await fetch("/api/settings", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(update),
+	});
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+	return response.json();
+}

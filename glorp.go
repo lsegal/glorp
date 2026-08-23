@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -222,6 +223,33 @@ type Glorp struct {
 	logMu         sync.Mutex
 	jobActionOnce sync.Once
 	jobActions    chan jobActionRequest
+	// settingsOnce/settingsRequests carry live settings updates (issue #341)
+	// into the Run loop, mirroring the jobActionOnce/jobActions pattern above.
+	settingsOnce     sync.Once
+	settingsRequests chan settingsRequest
+	// agentOverride holds a live-updated primary agent spec (issue #341). It
+	// is read from goroutines the Run loop spawns, so it is a pointer stored
+	// atomically rather than a plain field owned by the loop's goroutine.
+	agentOverride atomic.Pointer[string]
+}
+
+// acquireSlot blocks until sem has a free slot. Unlike sem.acquire, it also
+// services live settings updates (issue #341) while waiting, since it runs
+// on the same goroutine as the Run loop's settingsRequestsChan case: raising
+// --concurrency is most useful exactly when every slot is taken, and a plain
+// sem.acquire here would block that goroutine and deadlock the very request
+// meant to free it.
+func (w *Glorp) acquireSlot(ctx context.Context, sem *concurrencySemaphore) error {
+	for {
+		select {
+		case <-sem.tokens:
+			return nil
+		case request := <-w.settingsRequestsChan():
+			request.done <- w.applySettingsRequest(request.update, sem)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func (w *Glorp) jobActionRequests() chan jobActionRequest {
@@ -452,7 +480,7 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 // tells the next poll whether it still needs an answer. active only guards
 // against dispatching the same discussion twice while an agent run for it
 // is still in flight.
-func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, sem chan struct{}, wg *sync.WaitGroup, workMu *sync.Mutex, active map[string]string) {
+func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, sem *concurrencySemaphore, wg *sync.WaitGroup, workMu *sync.Mutex, active map[string]string) {
 	if w.Discussions == nil {
 		return
 	}
@@ -477,9 +505,7 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 				continue
 			}
 			issue := Issue{Number: discussion.Number, Title: discussion.Title, Body: discussion.Body, CreatedAt: discussion.CreatedAt, Target: target, Repository: issueRepository(target, Issue{})}
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
+			if err := w.acquireSlot(ctx, sem); err != nil {
 				workMu.Lock()
 				delete(active, key)
 				workMu.Unlock()
@@ -489,14 +515,14 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 			wg.Add(1)
 			go func(i Issue, key string) {
 				defer wg.Done()
-				defer func() { <-sem }()
+				defer sem.release()
 				defer func() {
 					workMu.Lock()
 					delete(active, key)
 					workMu.Unlock()
 				}()
 				w.logf("discussion #%d started", i.Number)
-				if err := w.Runner.Run(ctx, i); err != nil {
+				if err := w.runner().Run(ctx, i); err != nil {
 					w.logf("discussion #%d failed: %v", i.Number, err)
 					return
 				}
@@ -710,7 +736,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		restored[key] = true
 	}
 	w.logf("watching %s (instance %s, %s, concurrency %d; %d handled issue(s) loaded)", strings.Join(targets, ", "), w.Identity, w.watchDescription(), w.Concurrency, len(seen))
-	sem := make(chan struct{}, w.Concurrency)
+	sem := newConcurrencySemaphore(w.Concurrency)
 	var wg sync.WaitGroup
 	var tasks taskState
 	var workMu sync.Mutex
@@ -871,7 +897,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			session := pending.session
 			if !session.Resume {
 				session.Agent = ""
-				if identified, ok := w.Runner.(AgentIdentifier); ok {
+				if identified, ok := w.runner().(AgentIdentifier); ok {
 					session.Agent = identified.AgentName()
 				}
 				// Claude accepts a caller-provided session ID. Other runners retain
@@ -920,31 +946,29 @@ func (w *Glorp) Run(ctx context.Context) error {
 			tasks.mu.Unlock()
 			w.logf("issue #%d queued (tasks: %d running, %d queued)", issue.Number, running, queued)
 			publish()
-			select {
-			case sem <- struct{}{}:
-				tasks.mu.Lock()
-				tasks.queued--
-				tasks.running++
-				queued = tasks.queued
-				running = tasks.running
-				tasks.mu.Unlock()
-				jobMu.Lock()
-				job := jobs[issueKey(issue)]
-				job.Status = "active"
-				jobs[issueKey(issue)] = job
-				jobMu.Unlock()
-				publish()
-			case <-ctx.Done():
+			if err := w.acquireSlot(ctx, sem); err != nil {
 				tasks.mu.Lock()
 				tasks.queued--
 				tasks.mu.Unlock()
 				return ctx.Err()
 			}
+			tasks.mu.Lock()
+			tasks.queued--
+			tasks.running++
+			queued = tasks.queued
+			running = tasks.running
+			tasks.mu.Unlock()
+			jobMu.Lock()
+			job := jobs[issueKey(issue)]
+			job.Status = "active"
+			jobs[issueKey(issue)] = job
+			jobMu.Unlock()
+			publish()
 			startedRunning, startedQueued := running, queued
 			wg.Add(1)
 			go func(i Issue, agentSession AgentSession, running, queued int) {
 				defer wg.Done()
-				defer func() { <-sem }()
+				defer sem.release()
 				defer func() {
 					select {
 					case workFinished <- struct{}{}:
@@ -1020,20 +1044,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 					publish()
 				}
 				var runErr error
+				activeRunner := w.runner()
 				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) {
 					runErr = cause
 				} else if w.UI != nil {
-					if runner, ok := w.Runner.(SessionAgentOutputRunner); ok {
+					if runner, ok := activeRunner.(SessionAgentOutputRunner); ok {
 						runErr = runner.RunSessionWithOutput(runCtx, i, agentSession, updateSession, jobOutput)
-					} else if runner, ok := w.Runner.(AgentOutputRunner); ok {
+					} else if runner, ok := activeRunner.(AgentOutputRunner); ok {
 						runErr = runner.RunWithOutput(runCtx, i, jobOutput)
 					} else {
-						runErr = w.Runner.Run(runCtx, i)
+						runErr = activeRunner.Run(runCtx, i)
 					}
-				} else if runner, ok := w.Runner.(SessionAgentRunner); ok {
+				} else if runner, ok := activeRunner.(SessionAgentRunner); ok {
 					runErr = runner.RunSession(runCtx, i, agentSession, updateSession)
 				} else {
-					runErr = w.Runner.Run(runCtx, i)
+					runErr = activeRunner.Run(runCtx, i)
 				}
 				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) {
 					runErr = cause
@@ -1211,6 +1236,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 	retryAfterStop := make(map[string]bool)
 	for {
 		select {
+		case request := <-w.settingsRequestsChan():
+			request.done <- w.applySettingsRequest(request.update, sem)
 		case request := <-w.jobActionRequests():
 			action := request.action
 			key := action.Target + "#" + strconv.Itoa(action.Number)

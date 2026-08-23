@@ -28,6 +28,7 @@ type WebUI struct {
 	logs     []string
 	assets   http.Handler
 	action   func(context.Context, jobAction) error
+	settings func(context.Context, SettingsUpdate) (SettingsSnapshot, error)
 }
 
 func NewWebUI(version string) (*WebUI, error) {
@@ -37,6 +38,14 @@ func NewWebUI(version string) (*WebUI, error) {
 func (ui *WebUI) SetJobActionHandler(handler func(context.Context, jobAction) error) {
 	ui.mu.Lock()
 	ui.action = handler
+	ui.mu.Unlock()
+}
+
+// SetSettingsHandler wires the modal dialog (issue #341) to a function that
+// reads or applies live-editable runtime settings.
+func (ui *WebUI) SetSettingsHandler(handler func(context.Context, SettingsUpdate) (SettingsSnapshot, error)) {
+	ui.mu.Lock()
+	ui.settings = handler
 	ui.mu.Unlock()
 }
 
@@ -62,6 +71,10 @@ func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/jobs/action" {
 		ui.serveJobAction(w, r)
+		return
+	}
+	if r.URL.Path == "/api/settings" {
+		ui.serveSettings(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -96,6 +109,40 @@ func (ui *WebUI) serveJobAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// serveSettings backs the settings modal (issue #341). GET reports the
+// current live-editable settings; POST applies a partial update and reports
+// the resulting settings.
+func (ui *WebUI) serveSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var update SettingsUpdate
+	if r.Method == http.MethodPost {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&update); err != nil {
+			http.Error(w, "invalid settings update", http.StatusBadRequest)
+			return
+		}
+	}
+	ui.mu.RLock()
+	handler := ui.settings
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "settings unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	snapshot, err := handler(r.Context(), update)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(snapshot)
 }
 
 func (ui *WebUI) serveState(w http.ResponseWriter, r *http.Request) {

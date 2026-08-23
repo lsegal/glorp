@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	buildSettingsUpdate,
 	deliveryLabel,
+	fetchSettings,
 	jobActionAvailability,
 	jobAgentSummary,
+	parseAllowedCommenters,
 	submitJobAction,
+	submitSettings,
 } from "./dashboard";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -86,6 +90,91 @@ describe("submitJobAction", () => {
 				target: "lsegal/glorp",
 				number: 302,
 			}),
+		});
+	});
+});
+
+describe("parseAllowedCommenters", () => {
+	it("splits, trims, and drops empty names", () => {
+		expect(parseAllowedCommenters("alice, bob ,, carol")).toEqual([
+			"alice",
+			"bob",
+			"carol",
+		]);
+	});
+
+	it("returns an empty array for blank input", () => {
+		expect(parseAllowedCommenters("  ")).toEqual([]);
+	});
+});
+
+describe("buildSettingsUpdate", () => {
+	it("builds a full update including a trimmed agent", () => {
+		expect(
+			buildSettingsUpdate({
+				concurrency: "3",
+				readyState: "Agent Ready",
+				allowedCommenters: "alice, bob",
+				agent: " codex ",
+			}),
+		).toEqual({
+			concurrency: 3,
+			readyState: "Agent Ready",
+			allowedCommenters: ["alice", "bob"],
+			agent: "codex",
+		});
+	});
+
+	it("omits the agent field when blank", () => {
+		expect(
+			buildSettingsUpdate({
+				concurrency: "1",
+				readyState: "",
+				allowedCommenters: "",
+				agent: "   ",
+			}),
+		).toEqual({
+			concurrency: 1,
+			readyState: "",
+			allowedCommenters: [],
+		});
+	});
+});
+
+describe("fetchSettings", () => {
+	it("returns the parsed settings snapshot", async () => {
+		const snapshot = { concurrency: 2, readyState: "Ready" };
+		const fetch = vi
+			.fn()
+			.mockResolvedValue({ ok: true, json: () => Promise.resolve(snapshot) });
+		vi.stubGlobal("fetch", fetch);
+		await expect(fetchSettings()).resolves.toEqual(snapshot);
+		expect(fetch).toHaveBeenCalledWith("/api/settings", { cache: "no-store" });
+	});
+
+	it("throws with the response body on failure", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 503,
+			text: () => Promise.resolve("settings unavailable"),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(fetchSettings()).rejects.toThrow("settings unavailable");
+	});
+});
+
+describe("submitSettings", () => {
+	it("posts the update and returns the resulting snapshot", async () => {
+		const snapshot = { concurrency: 4 };
+		const fetch = vi
+			.fn()
+			.mockResolvedValue({ ok: true, json: () => Promise.resolve(snapshot) });
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitSettings({ concurrency: 4 })).resolves.toEqual(snapshot);
+		expect(fetch).toHaveBeenCalledWith("/api/settings", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ concurrency: 4 }),
 		});
 	});
 });
