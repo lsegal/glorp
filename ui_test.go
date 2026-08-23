@@ -442,8 +442,41 @@ func TestDashboardTrimsOldestJobs(t *testing.T) {
 }
 
 func TestDashboardUsesTwoByThreeAgentGrid(t *testing.T) {
-	if maxVisibleJobs != 6 || jobGridColumns != 2 || jobCardHeight != 12 {
-		t.Fatalf("agent grid = %d jobs, %d columns, card height %d; want 6, 2, 12", maxVisibleJobs, jobGridColumns, jobCardHeight)
+	if maxVisibleJobs != 6 || jobGridColumns != 2 || jobCardHeight != 13 {
+		t.Fatalf("agent grid = %d jobs, %d columns, card height %d; want 6, 2, 13", maxVisibleJobs, jobGridColumns, jobCardHeight)
+	}
+}
+
+func TestJobAgentSummary(t *testing.T) {
+	cases := []struct {
+		name string
+		job  JobSnapshot
+		want string
+	}{
+		{"pending", JobSnapshot{}, "pending"},
+		{"agent only", JobSnapshot{Agent: "codex"}, "codex"},
+		{"agent and model", JobSnapshot{Agent: "claude", Model: "opus"}, "claude (opus)"},
+		{"agent and effort", JobSnapshot{Agent: "codex", Effort: "high"}, "codex (high)"},
+		{"agent, model, and effort", JobSnapshot{Agent: "claude", Model: "opus", Effort: "low"}, "claude (opus, low)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := jobAgentSummary(c.job); got != c.want {
+				t.Errorf("jobAgentSummary(%+v) = %q, want %q", c.job, got, c.want)
+			}
+		})
+	}
+}
+
+func TestDashboardShowsAgentModelAndEffort(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "UI", Status: "active", Agent: "claude", Model: "opus", Effort: "low",
+	}}}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "agent: claude (opus, low)") {
+		t.Errorf("dashboard missing agent summary in %q", view)
 	}
 }
 

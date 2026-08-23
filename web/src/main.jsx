@@ -3,6 +3,7 @@ import {
 	Activity,
 	Check,
 	Circle,
+	Cpu,
 	FolderGit2,
 	Radio,
 	Terminal,
@@ -13,6 +14,7 @@ import { createRoot } from "react-dom/client";
 import {
 	deliveryLabel,
 	jobActionAvailability,
+	jobAgentSummary,
 	submitJobAction,
 } from "./dashboard";
 import "./index.css";
@@ -128,6 +130,9 @@ function JobCard({ job }) {
 			</div>
 			<div className="meta" title={job.SessionID}>
 				<Terminal /> session: {job.SessionID || "pending"}
+			</div>
+			<div className="meta" title={jobAgentSummary(job)}>
+				<Cpu /> agent: {jobAgentSummary(job)}
 			</div>
 			<div className="job-viewport">
 				<div className="viewport-actions">

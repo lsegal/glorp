@@ -6,6 +6,17 @@ export function deliveryLabel(snapshot) {
 	return `polling every ${interval}`;
 }
 
+export function jobAgentSummary(job) {
+	if (!job.Agent) return "pending";
+	let summary = job.Agent;
+	if (job.Model) {
+		summary += ` (${job.Model}${job.Effort ? `, ${job.Effort}` : ""})`;
+	} else if (job.Effort) {
+		summary += ` (${job.Effort})`;
+	}
+	return summary;
+}
+
 export function jobActionAvailability(status) {
 	return {
 		// A queued job is already on its way to a fresh gh-fix run, so retry is

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show the dispatched agent, model, and effort level in each job's TUI and web dashboard viewport.
+
 ## v1.2.16 - 2026-08-23
 
 - Show the running glorp version in the browser dashboard's masthead.
