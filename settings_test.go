@@ -155,6 +155,40 @@ func TestGlorpApplySettingsReadyStateAndAllowedCommenters(t *testing.T) {
 	<-done
 }
 
+func TestGlorpApplySettingsReadyStateDefaultReflectsUnsetFallback(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	defer close(r.release)
+	var logs bytes.Buffer
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: &logs}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	snapshot, err := w.CurrentSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ReadyState != "" {
+		t.Fatalf("readyState = %q, want unset", snapshot.ReadyState)
+	}
+	if snapshot.ReadyStateDefault != "Todo" {
+		t.Fatalf("readyStateDefault = %q, want %q", snapshot.ReadyStateDefault, "Todo")
+	}
+
+	snapshot, err = w.ApplySettings(ctx, SettingsUpdate{ReadyState: strPtr("Agent Ready")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ReadyStateDefault != "Agent Ready" {
+		t.Fatalf("readyStateDefault after configuring = %q, want %q", snapshot.ReadyStateDefault, "Agent Ready")
+	}
+
+	cancel()
+	<-done
+}
+
 func TestGlorpRunnerAppliesLiveAgentOverride(t *testing.T) {
 	w := &Glorp{Runner: CommandRunner{Agent: "codex", Agents: []string{"codex"}}}
 	if got := w.runner().(CommandRunner).AgentName(); got != "codex" {
