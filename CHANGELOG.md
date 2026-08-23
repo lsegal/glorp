@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.17 - 2026-08-23
+
 - Show the dispatched agent, model, and effort level in each job's TUI and web dashboard viewport.
 
 ## v1.2.16 - 2026-08-23
