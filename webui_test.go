@@ -37,7 +37,7 @@ func TestListenForWebUIRejectsInvalidPort(t *testing.T) {
 }
 
 func TestWebUIStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
-	ui, err := NewWebUI()
+	ui, err := NewWebUI("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,10 +59,13 @@ func TestWebUIStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
 	if state.Logs[0] != "line 5" || state.Logs[199] != "line 204" {
 		t.Fatalf("bounded logs = %q ... %q", state.Logs[0], state.Logs[199])
 	}
+	if state.Version != "v1.2.3" {
+		t.Fatalf("state.Version = %q, want %q", state.Version, "v1.2.3")
+	}
 }
 
 func TestWebUIRejectsUnsupportedMethods(t *testing.T) {
-	ui, err := NewWebUI()
+	ui, err := NewWebUI("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +77,7 @@ func TestWebUIRejectsUnsupportedMethods(t *testing.T) {
 }
 
 func TestWebUIHandlesJobActions(t *testing.T) {
-	ui, err := NewWebUI()
+	ui, err := NewWebUI("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +98,7 @@ func TestWebUIHandlesJobActions(t *testing.T) {
 }
 
 func TestWebUIRejectsUnavailableJobActions(t *testing.T) {
-	ui, err := NewWebUI()
+	ui, err := NewWebUI("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}

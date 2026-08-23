@@ -15,6 +15,7 @@ import (
 const defaultWebUIPort = 8765
 
 type webUIState struct {
+	Version  string        `json:"version"`
 	Snapshot GlorpSnapshot `json:"snapshot"`
 	Logs     []string      `json:"logs"`
 }
@@ -22,14 +23,15 @@ type webUIState struct {
 // WebUI keeps the browser dashboard's state and serves its frontend.
 type WebUI struct {
 	mu       sync.RWMutex
+	version  string
 	snapshot GlorpSnapshot
 	logs     []string
 	assets   http.Handler
 	action   func(context.Context, jobAction) error
 }
 
-func NewWebUI() (*WebUI, error) {
-	return &WebUI{assets: newWebUIAssets()}, nil
+func NewWebUI(version string) (*WebUI, error) {
+	return &WebUI{version: version, assets: newWebUIAssets()}, nil
 }
 
 func (ui *WebUI) SetJobActionHandler(handler func(context.Context, jobAction) error) {
@@ -102,7 +104,7 @@ func (ui *WebUI) serveState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ui.mu.RLock()
-	state := webUIState{Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...)}
+	state := webUIState{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...)}
 	ui.mu.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

@@ -56,6 +56,11 @@ h1 span {
 	color: var(--muted);
 	font-weight: 400;
 }
+h1 .version {
+	margin-left: 8px;
+	font-size: 12px;
+	font-family: ui-monospace, monospace;
+}
 .connection {
 	border: 1px solid var(--border);
 	background: #18181bcc;

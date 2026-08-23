@@ -169,7 +169,7 @@ func runWatch(args []string) int {
 	var webServer *http.Server
 	if mode == "web" {
 		var err error
-		webUI, err = NewWebUI()
+		webUI, err = NewWebUI(version)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
