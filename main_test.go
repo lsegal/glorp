@@ -770,7 +770,8 @@ func runFakeAgent(log string, args []string) int {
 		file.Close()
 		return 1
 	}
-	if _, err := fmt.Fprintf(file, "cwd=%s\n%s\n<<<END>>>\n", cwd, strings.Join(args, " ")); err != nil {
+	ceiling, ceilingSet := os.LookupEnv("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS")
+	if _, err := fmt.Fprintf(file, "cwd=%s\nbg_wait_ceiling_set=%t bg_wait_ceiling=%s\n%s\n<<<END>>>\n", cwd, ceilingSet, ceiling, strings.Join(args, " ")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		file.Close()
 		return 1
