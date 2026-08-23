@@ -76,7 +76,8 @@ After implementation is complete, and only then, determine whether any changed f
 2. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture screenshots or a screen recording.
 3. For terminal based interfaces, copy output as text if there is no visual, animation, or state change.
 4. For all other non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to create a screen recording.
-5. Upload each screenshot or screen recording, then embed the returned URL directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI screenshots or screen recordings to repository assets or commit them to the branch.
+5. When capturing a native window (any capture outside a browser, such as a desktop app or platform capture tool), crop the screenshot or recording to the bounds of the relevant window. Never keep a full-screen or full-display-resolution capture unless the app itself is genuinely full screen at capture time.
+6. Upload each screenshot or screen recording, then embed the returned URL directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI screenshots or screen recordings to repository assets or commit them to the branch.
 
 GitHub has no documented public API for attaching files to issues, pull requests, or comments, but the same endpoint the web UI uses for drag-and-drop accepts a bearer token non-interactively. Upload with it directly:
 
