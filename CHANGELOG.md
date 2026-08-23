@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.16 - 2026-08-23
+
 - Show the running glorp version in the browser dashboard's masthead.
 - Skip the CI workflow's build-and-test jobs for pushes that only change Markdown files.
 - Only skip dispatching an issue for having sub-issues when at least one sub-issue is still open, not merged or closed.
