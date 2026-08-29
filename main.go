@@ -1877,6 +1877,11 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		detector = &missingSessionDetector{output: agentOutput}
 		agentOutput = detector
 	}
+	// Retain the trailing output so a failure reports what the agent actually
+	// printed instead of just the exit status, both in glorp's own logs and in
+	// the bug report it files (issue #355).
+	outputTail := &agentOutputTailWriter{output: agentOutput, limit: agentOutputTailLimit}
+	agentOutput = outputTail
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := runChildProcess(cmd)
 	if claudeOutput != nil {
@@ -1892,20 +1897,63 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 			fmt.Fprintf(agentOutput, "Session %s no longer exists; restarting the work from scratch.\n", session.ID)
 			return runErr, true
 		}
+		tail := outputTail.Tail()
 		repo := r.Repo
 		if issue.Target != "" {
 			repo = issueRepository(issue.Target, issue)
 		}
-		report, reportErr := bugReportURL(repo, issue, args)
+		report, reportErr := bugReportURL(repo, issue, args, tail)
 		if reportErr != nil {
 			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", runErr, reportErr), false
 		}
-		return fmt.Errorf("agent failed: %w; bug report: %s", runErr, report), false
+		if tail == "" {
+			return fmt.Errorf("agent failed: %w; bug report: %s", runErr, report), false
+		}
+		return fmt.Errorf("agent failed: %w; bug report: %s\n\nAgent output:\n%s", runErr, report, tail), false
 	}
 	return nil, false
 }
 
-func bugReportURL(repo string, issue Issue, args []string) (string, error) {
+// agentOutputTailLimit bounds how much of a failing agent's output is
+// retained for logging and its bug report. GitHub rejects overly long
+// issue-creation URLs, so the tail has to stay small enough to survive
+// percent-encoding.
+const agentOutputTailLimit = 4000
+
+// agentOutputTailWriter passes output straight through while keeping the last
+// agentOutputTailLimit bytes, so a failed run can report what the agent
+// actually printed before it died.
+type agentOutputTailWriter struct {
+	mu     sync.Mutex
+	output io.Writer
+	limit  int
+	buffer []byte
+}
+
+func (w *agentOutputTailWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.buffer = append(w.buffer, p...)
+	if limit := w.limit; limit > 0 && len(w.buffer) > limit {
+		w.buffer = append(w.buffer[:0], w.buffer[len(w.buffer)-limit:]...)
+	}
+	w.mu.Unlock()
+	return w.output.Write(p)
+}
+
+// Tail returns the retained output with terminal control sequences removed so
+// it reads cleanly in logs and inside a Markdown code block.
+func (w *agentOutputTailWriter) Tail() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return strings.TrimSpace(ansiEscapePattern.ReplaceAllString(string(w.buffer), ""))
+}
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|\r`)
+
+func bugReportURL(repo string, issue Issue, args []string, output string) (string, error) {
 	target, err := parseTarget(repo)
 	if err != nil || target.isProject || target.repo == "" {
 		if err == nil {
@@ -1916,8 +1964,22 @@ func bugReportURL(repo string, issue Issue, args []string) (string, error) {
 	values := url.Values{}
 	values.Set("template", "bug_report.md")
 	values.Set("title", fmt.Sprintf("Agent failed while handling issue #%d", issue.Number))
-	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n[robot output omitted]\n", target.repo, issue.Number, strings.Join(args, " ")))
+	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n%s\n", target.repo, issue.Number, strings.Join(args, " "), bugReportOutputSection(output)))
 	return "https://github.com/" + target.repo + "/issues/new?" + values.Encode(), nil
+}
+
+// bugReportOutputSection renders the captured agent output as a fenced block,
+// noting when only the tail of a longer run survived.
+func bugReportOutputSection(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return "[no agent output was captured]"
+	}
+	prefix := ""
+	if len(output) >= agentOutputTailLimit {
+		prefix = fmt.Sprintf("Last %d characters of the agent's output:\n\n", len(output))
+	}
+	return prefix + "```\n" + output + "\n```"
 }
 func validRepo(repo string) bool {
 	parts := strings.Split(repo, "/")

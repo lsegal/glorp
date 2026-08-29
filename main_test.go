@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -657,7 +658,7 @@ func TestAgentFlagRejectsUnknownAgent(t *testing.T) {
 }
 
 func TestBugReportURL(t *testing.T) {
-	got, err := bugReportURL("owner/repo", Issue{Number: 12}, []string{"agent", "--flag"})
+	got, err := bugReportURL("owner/repo", Issue{Number: 12}, []string{"agent", "--flag"}, "panic: boom\nexit status 2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,8 +666,68 @@ func TestBugReportURL(t *testing.T) {
 	if err != nil || u.Path != "/owner/repo/issues/new" {
 		t.Fatalf("URL = %q, %v", got, err)
 	}
-	if strings.Contains(got, "private source code") || strings.Contains(got, "secret") || !strings.Contains(got, "bug_report.md") || !strings.Contains(got, "robot+output+omitted") {
-		t.Fatalf("URL contains agent output or is missing the redacted placeholder: %s", got)
+	if !strings.Contains(got, "bug_report.md") {
+		t.Fatalf("URL is missing the bug report template: %s", got)
+	}
+	body := u.Query().Get("body")
+	if !strings.Contains(body, "panic: boom\nexit status 2") {
+		t.Fatalf("body omits the agent output: %q", body)
+	}
+	if strings.Contains(body, "robot output omitted") {
+		t.Fatalf("body still uses the placeholder: %q", body)
+	}
+}
+
+func TestBugReportURLWithoutOutput(t *testing.T) {
+	got, err := bugReportURL("owner/repo", Issue{Number: 12}, []string{"agent"}, "   \n  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := u.Query().Get("body")
+	if !strings.Contains(body, "[no agent output was captured]") {
+		t.Fatalf("body missing the no-output note: %q", body)
+	}
+}
+
+func TestBugReportOutputSectionNotesTruncation(t *testing.T) {
+	full := strings.Repeat("x", agentOutputTailLimit)
+	got := bugReportOutputSection(full)
+	if !strings.HasPrefix(got, "Last ") {
+		t.Fatalf("expected truncation note for output at the tail limit, got: %q", got[:min(50, len(got))])
+	}
+
+	short := "just a bit of output"
+	got = bugReportOutputSection(short)
+	if strings.HasPrefix(got, "Last ") {
+		t.Fatalf("did not expect a truncation note for short output, got: %q", got)
+	}
+}
+
+func TestAgentOutputTailWriterKeepsTailAndPassesThrough(t *testing.T) {
+	var passthrough bytes.Buffer
+	w := &agentOutputTailWriter{output: &passthrough, limit: 10}
+	if _, err := w.Write([]byte("hello world")); err != nil {
+		t.Fatal(err)
+	}
+	if passthrough.String() != "hello world" {
+		t.Fatalf("expected full write to pass through, got %q", passthrough.String())
+	}
+	if got := w.Tail(); got != "ello world" {
+		t.Fatalf("Tail() = %q, want %q", got, "ello world")
+	}
+}
+
+func TestAgentOutputTailWriterStripsControlSequences(t *testing.T) {
+	w := &agentOutputTailWriter{output: io.Discard, limit: agentOutputTailLimit}
+	if _, err := w.Write([]byte("\x1b[31mred\x1b[0m\r\ntext")); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Tail(); got != "red\ntext" {
+		t.Fatalf("Tail() = %q, want %q", got, "red\ntext")
 	}
 }
 
