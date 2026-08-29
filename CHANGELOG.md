@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Log the failing agent's actual output (not just the exit status) when a dispatched run fails, and include that output in the bug report link glorp generates, instead of a `[robot output omitted]` placeholder.
+- Ignore `.glorp.json` state entries for repositories that are no longer being watched, so stale scoped keys from previous runs do not stop polling.
 - Fix the webhook daemon starting an ngrok tunnel to its listener's wildcard address (`[::]`/`0.0.0.0`), which macOS refuses to connect to; ngrok now targets `127.0.0.1` on the bound port instead.
 
 ## v1.2.19 - 2026-08-29
