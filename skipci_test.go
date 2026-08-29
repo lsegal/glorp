@@ -34,11 +34,7 @@ func TestGhFixInitialCommitSkipsCI(t *testing.T) {
 // commits that explicitly opt out.
 func TestPushWorkflowsHonorSkipCI(t *testing.T) {
 	for _, name := range []string{"ci.yml", "pages.yml"} {
-		data, err := os.ReadFile(filepath.Join(".github", "workflows", name))
-		if err != nil {
-			t.Fatalf("read workflow %s: %v", name, err)
-		}
-		body := string(data)
+		body := readWorkflow(t, name)
 		if !strings.Contains(body, "on:\n  push:") && !strings.Contains(body, "\n  push:\n") {
 			continue
 		}
@@ -53,11 +49,7 @@ func TestPushWorkflowsHonorSkipCI(t *testing.T) {
 // request's head SHA carries no verdict at all. The pull_request trigger closes
 // that hole, and it must not be narrowed by a path filter of its own.
 func TestCIRunsOnPullRequestsWithoutPathFilter(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(".github", "workflows", "ci.yml"))
-	if err != nil {
-		t.Fatalf("read ci workflow: %v", err)
-	}
-	body := string(data)
+	body := readWorkflow(t, "ci.yml")
 
 	pr := triggerBlock(t, body, "pull_request")
 	if pr == "" {
@@ -76,16 +68,24 @@ func TestCIRunsOnPullRequestsWithoutPathFilter(t *testing.T) {
 // Draft pull requests are where the gh-fix workflow parks its empty [skip ci]
 // commit, so they must not trigger a build.
 func TestCISkipsDraftPullRequests(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(".github", "workflows", "ci.yml"))
-	if err != nil {
-		t.Fatalf("read ci workflow: %v", err)
-	}
-	body := string(data)
+	body := readWorkflow(t, "ci.yml")
 	guard := "github.event_name != 'pull_request' || github.event.pull_request.draft == false"
 	jobs := strings.Count(body, "\n    runs-on:")
 	if got := strings.Count(body, guard); got != jobs {
 		t.Errorf("every one of the %d jobs must skip draft pull requests, found %d guards", jobs, got)
 	}
+}
+
+// readWorkflow reads a workflow file with its line endings normalized, since a
+// Windows checkout rewrites them to CRLF and would break the layout matching
+// these tests rely on.
+func readWorkflow(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(".github", "workflows", name))
+	if err != nil {
+		t.Fatalf("read workflow %s: %v", name, err)
+	}
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
 // triggerBlock returns the indented body of the named `on:` trigger.
