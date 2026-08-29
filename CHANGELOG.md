@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix `glorp upgrade` still re-running the installer for release builds whose embedded version omits the leading `v` from the latest GitHub release tag.
+
 ## v1.2.18 - 2026-08-24
 
 - Add a settings icon to the browser dashboard that opens a modal for changing concurrency, ready-state label, allowed commenters, and the dispatched agent on a running instance without a restart.
