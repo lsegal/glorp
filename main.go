@@ -245,8 +245,9 @@ func runWatch(args []string) int {
 		defer server.Close()
 		listenAddr := listener.Addr().String()
 		fmt.Fprintf(output, "webhook server listening on %s%s\n", listenAddr, webhookPath)
-		fmt.Fprintf(output, "starting ngrok tunnel for %s\n", listenAddr)
-		tunnel, err := startNgrok(ctx, ngrokBinary, listenAddr, ngrokAPI, output)
+		ngrokAddr := ngrokTargetAddr(listenAddr)
+		fmt.Fprintf(output, "starting ngrok tunnel for %s\n", ngrokAddr)
+		tunnel, err := startNgrok(ctx, ngrokBinary, ngrokAddr, ngrokAPI, output)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -334,6 +335,24 @@ func listenForWebhooks(address string) (net.Listener, error) {
 		return nil, fmt.Errorf("listen for webhooks on %s: %w", address, err)
 	}
 	return listener, nil
+}
+
+// ngrokTargetAddr rewrites a listener's bound address into one ngrok can
+// connect to. A wildcard host (from binding "" or "0.0.0.0" or "::", as the
+// default ":0" listen address does) has no meaning as a connection target:
+// Linux silently treats it as loopback, but macOS refuses the connection,
+// which is what made ngrok report the host port as not listening (issue
+// #348). Loopback is always where the webhook server actually listens, so
+// substituting it here works on every platform.
+func ngrokTargetAddr(address string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func isTerminal(file *os.File) bool {

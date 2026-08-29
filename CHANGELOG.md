@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Include the failing agent's output in the bug report link glorp generates when a dispatched run exits with an error, instead of a `[robot output omitted]` placeholder.
+- Fix the webhook daemon starting an ngrok tunnel to its listener's wildcard address (`[::]`/`0.0.0.0`), which macOS refuses to connect to; ngrok now targets `127.0.0.1` on the bound port instead.
 
 ## v1.2.19 - 2026-08-29
 
