@@ -1976,6 +1976,31 @@ func TestScopedWorkStateKeepsTargetsSeparate(t *testing.T) {
 	}
 }
 
+func TestScopedWorkStateIgnoresUnwatchedTargets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	state := map[string]workState{
+		"o/current#7": {Status: "completed", SessionID: "current"},
+		"o/old#9":     {Status: "failed", SessionID: "old"},
+	}
+	if err := saveScopedWorkState(path, state, []string{"o/current", "o/old"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadScopedWorkState(path, []string{"o/current"})
+	want := map[string]workState{
+		"o/current#7": {Status: "completed", SessionID: "current"},
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("scoped state error=%v value=%v, want %v", err, got, want)
+	}
+	if err := saveScopedWorkState(path, got, []string{"o/current"}); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := loadWorkState(path)
+	if err != nil || legacy[7].SessionID != "current" || len(legacy) != 1 {
+		t.Fatalf("legacy state error=%v value=%v", err, legacy)
+	}
+}
+
 func TestWebhookEventNeedsRefresh(t *testing.T) {
 	tests := []struct {
 		event WebhookEvent
