@@ -1987,6 +1987,10 @@ func loadScopedWorkState(path string, targets []string) (map[string]workState, e
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("decode state: %w", err)
 	}
+	watched := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		watched[target] = true
+	}
 	for key, value := range raw {
 		var state workState
 		if json.Unmarshal(value, &state) != nil {
@@ -2005,6 +2009,10 @@ func loadScopedWorkState(path string, targets []string) (map[string]workState, e
 				result[targets[0]+"#"+key] = state
 			}
 		} else {
+			separator := strings.LastIndexByte(key, '#')
+			if len(watched) > 0 && (separator <= 0 || !watched[key[:separator]]) {
+				continue
+			}
 			result[key] = state
 		}
 	}
@@ -2026,8 +2034,8 @@ func saveScopedWorkState(path string, state map[string]workState, targets []stri
 					legacy[number] = work
 					continue
 				}
+				return fmt.Errorf("invalid scoped state key %q", key)
 			}
-			return fmt.Errorf("invalid scoped state key %q", key)
 		}
 		value = legacy
 	}
