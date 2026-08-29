@@ -264,3 +264,36 @@ func TestWebUIRejectsInvalidSettingsUpdate(t *testing.T) {
 
 func intPtr(v int) *int       { return &v }
 func strPtr(v string) *string { return &v }
+
+func TestGlorpAgentStillConfigured(t *testing.T) {
+	commandRunner := CommandRunner{Agent: "codex", Agents: []string{"codex", "claude/opus:high"}}
+	single := CommandRunner{Agent: "claude"}
+	cases := []struct {
+		name     string
+		glorp    *Glorp
+		override string
+		agent    string
+		want     bool
+	}{
+		{name: "listed", glorp: &Glorp{Runner: commandRunner}, agent: "codex", want: true},
+		{name: "listed with spec", glorp: &Glorp{Runner: commandRunner}, agent: "claude/opus:high", want: true},
+		{name: "retired", glorp: &Glorp{Runner: commandRunner}, agent: "claude", want: false},
+		{name: "empty", glorp: &Glorp{Runner: commandRunner}, agent: "", want: false},
+		{name: "single agent", glorp: &Glorp{Runner: single}, agent: "claude", want: true},
+		{name: "single agent mismatch", glorp: &Glorp{Runner: single}, agent: "codex", want: false},
+		{name: "override wins", glorp: &Glorp{Runner: commandRunner}, override: "claude", agent: "codex", want: false},
+		{name: "override matches", glorp: &Glorp{Runner: commandRunner}, override: "claude", agent: "claude", want: true},
+		{name: "unconfigured runner", glorp: &Glorp{Runner: &fakeSessionRunner{agent: "claude"}}, agent: "codex", want: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if test.override != "" {
+				override := test.override
+				test.glorp.agentOverride.Store(&override)
+			}
+			if got := test.glorp.agentStillConfigured(test.agent); got != test.want {
+				t.Fatalf("agentStillConfigured(%q) = %t, want %t", test.agent, got, test.want)
+			}
+		})
+	}
+}

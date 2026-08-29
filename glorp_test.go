@@ -2937,3 +2937,79 @@ func TestGlorpReapsOnItsOwnTickerWhenPollingIsSlow(t *testing.T) {
 	}
 	t.Fatal("reap ticker did not run additional polls while the poll interval was an hour away")
 }
+
+// runGlorpUntilAgentInvoked runs w until the fake agent stub records its first
+// invocation, then stops the loop and returns that invocation.
+func runGlorpUntilAgentInvoked(t *testing.T, w *Glorp, log string) string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	invoked := waitFor(t, 5*time.Second, func() bool {
+		data, err := os.ReadFile(log)
+		return err == nil && strings.Contains(string(data), "<<<END>>>")
+	})
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if !invoked {
+		t.Fatal("agent was never invoked")
+	}
+	invocations := fakeAgentInvocations(t, log)
+	if len(invocations) != 1 {
+		t.Fatalf("agent invocations = %#v, want exactly one", invocations)
+	}
+	return invocations[0]
+}
+
+func TestGlorpDiscardsPersistedAgentThatIsNoLongerConfigured(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	stale := workState{Status: "active", SessionID: "session-7", Agent: "codex", CheckoutDirectory: dir}
+	if err := saveWorkState(statePath, map[int]workState{7: stale}); err != nil {
+		t.Fatal(err)
+	}
+	binary, log := writeFakeAgent(t, "", 0)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}},
+		Runner: CommandRunner{Agent: "claude", Agents: []string{"claude"}, ClaudeBinary: binary, CodexBinary: binary, Repo: "o/r"},
+	}
+	invocation := runGlorpUntilAgentInvoked(t, w, log)
+	if strings.Contains(invocation, "--resume") || strings.Contains(invocation, "session-7") {
+		t.Fatalf("invocation resumed the retired agent's session: %q", invocation)
+	}
+	if !strings.Contains(invocation, "--session-id") {
+		t.Fatalf("invocation = %q, want a fresh claude session", invocation)
+	}
+	state, err := loadWorkState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state[7].Agent != "claude" {
+		t.Fatalf("persisted agent = %q, want the currently configured claude", state[7].Agent)
+	}
+	if state[7].SessionID == "" || state[7].SessionID == stale.SessionID {
+		t.Fatalf("persisted session ID = %q, want a new one", state[7].SessionID)
+	}
+}
+
+func TestGlorpResumesPersistedAgentThatIsStillConfigured(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	want := workState{Status: "active", SessionID: "session-7", Agent: "codex", CheckoutDirectory: dir}
+	if err := saveWorkState(statePath, map[int]workState{7: want}); err != nil {
+		t.Fatal(err)
+	}
+	binary, log := writeFakeAgent(t, "", 0)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}},
+		Runner: CommandRunner{Agent: "claude", Agents: []string{"claude", "codex"}, ClaudeBinary: binary, CodexBinary: binary, Repo: "o/r"},
+	}
+	invocation := runGlorpUntilAgentInvoked(t, w, log)
+	if !strings.Contains(invocation, "resume") || !strings.Contains(invocation, "session-7") {
+		t.Fatalf("invocation = %q, want the still configured codex session resumed", invocation)
+	}
+}

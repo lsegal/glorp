@@ -220,3 +220,45 @@ func (w *Glorp) runner() AgentRunner {
 	}
 	return w.Runner
 }
+
+// configuredAgents returns the agent specs new dispatches may use: the live
+// override when one is set, otherwise the CommandRunner's configured agents.
+// It reports nothing for runners that carry no agent configuration at all.
+func (w *Glorp) configuredAgents() []string {
+	if override := w.agentOverride.Load(); override != nil && *override != "" {
+		return []string{*override}
+	}
+	runner, ok := w.Runner.(CommandRunner)
+	if !ok {
+		return nil
+	}
+	if len(runner.Agents) > 0 {
+		return append([]string(nil), runner.Agents...)
+	}
+	if runner.Agent != "" {
+		return []string{runner.Agent}
+	}
+	return nil
+}
+
+// agentStillConfigured reports whether a persisted session's agent is one the
+// current configuration would still dispatch to (issue #358). Work state
+// written by an earlier run must not pin an issue to an agent the -agent flag
+// no longer includes. Runners that expose no agent configuration can't
+// contradict the persisted value, so their sessions resume unchanged.
+func (w *Glorp) agentStillConfigured(agent string) bool {
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		return false
+	}
+	configured := w.configuredAgents()
+	if len(configured) == 0 {
+		return true
+	}
+	for _, candidate := range configured {
+		if strings.TrimSpace(candidate) == agent {
+			return true
+		}
+	}
+	return false
+}

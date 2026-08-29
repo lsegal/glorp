@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop resuming an issue with the agent recorded in `.glorp.json` when the current `-agent` configuration no longer includes it; the issue is dispatched to a configured agent with a fresh session instead.
+
 ## v1.2.20 - 2026-08-29
 
 - Log the failing agent's actual output (not just the exit status) when a dispatched run fails, and include that output in the bug report link glorp generates, instead of a `[robot output omitted]` placeholder.
