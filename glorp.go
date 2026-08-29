@@ -646,6 +646,46 @@ func issueKey(issue Issue) string {
 	return target + "#" + strconv.Itoa(issue.Number)
 }
 
+// parseIssueWorkKey splits a key built by issueKey back into its configured
+// target and issue number. Discussion keys carry an extra "#discussion"
+// segment and name a thread rather than an issue, so they are rejected.
+func parseIssueWorkKey(key string) (target string, number int, ok bool) {
+	index := strings.LastIndex(key, "#")
+	if index < 0 {
+		return "", 0, false
+	}
+	target = key[:index]
+	if strings.HasSuffix(target, "#discussion") {
+		return "", 0, false
+	}
+	number, err := strconv.Atoi(key[index+1:])
+	if err != nil || number <= 0 {
+		return "", 0, false
+	}
+	return target, number, true
+}
+
+// activeIssuesForRepo lists, in ascending order, the issue numbers this
+// instance is actively working in repo. Work keys are scoped by configured
+// target, which may be a project URL rather than a repository, so each key
+// is resolved back to its repository before comparison instead of being
+// string-matched against repo directly.
+func activeIssuesForRepo(active map[string]string, repo string) []int {
+	var numbers []int
+	for key := range active {
+		target, number, ok := parseIssueWorkKey(key)
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(issueRepository(target, Issue{}), repo) {
+			continue
+		}
+		numbers = append(numbers, number)
+	}
+	slices.Sort(numbers)
+	return numbers
+}
+
 type taskState struct {
 	mu        sync.Mutex
 	running   int
@@ -1150,10 +1190,35 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if !ok || kind != claimAsking || id == w.Identity {
 			return
 		}
-		key := event.Repository + "#" + strconv.Itoa(event.IssueNumber)
 		workMu.Lock()
-		_, owned := active[key]
+		numbers := activeIssuesForRepo(active, event.Repository)
 		workMu.Unlock()
+		owned := slices.Contains(numbers, event.IssueNumber)
+		// Once a draft pull request exists the handshake moves to it
+		// (ownershipTargetFor), so the ask names the pull request number and
+		// never matches an active issue number. Checking the open pull
+		// requests of the work already in flight is what keeps a busy
+		// instance from silently losing its branch (issue #363).
+		if !owned && closureChecker != nil {
+			for _, number := range numbers {
+				state, err := closureChecker.OriginatingWorkState(ctx, event.Repository, number)
+				if err != nil {
+					w.logf("issue #%d failed to check whether pull request #%d continues it: %v", number, event.IssueNumber, err)
+					continue
+				}
+				for _, pullRequest := range state.PullRequests {
+					if pullRequest.Number != event.IssueNumber || pullRequest.Merged || strings.EqualFold(pullRequest.State, "closed") {
+						continue
+					}
+					owned = true
+					w.logf("issue #%d instance %s asked who owns pull request #%d; it continues our active work", number, id, event.IssueNumber)
+					break
+				}
+				if owned {
+					break
+				}
+			}
+		}
 		if !owned {
 			w.logf("issue #%d instance %s asked who owns it; not ours, staying quiet", event.IssueNumber, id)
 			return

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -497,4 +498,51 @@ func TestNegotiateContestedIssuesLogsProjectItemReasonAndPullRequestTarget(t *te
 		"negotiating on pull request o/r#42",
 		"pull request o/r#42 asking \"Does anyone have this?\"",
 	)
+}
+
+func TestActiveIssuesForRepo(t *testing.T) {
+	active := map[string]string{
+		"o/r#7":     "session-7",
+		"o/r#3":     "session-3",
+		"o/other#9": "session-9",
+		"https://github.com/users/loren/projects/3#11": "session-11",
+		"o/r#discussion#4": "discussion",
+		"malformed":        "junk",
+	}
+	if got := activeIssuesForRepo(active, "o/r"); !slices.Equal(got, []int{3, 7}) {
+		t.Fatalf("activeIssuesForRepo(o/r) = %v, want [3 7]", got)
+	}
+	if got := activeIssuesForRepo(active, "o/other"); !slices.Equal(got, []int{9}) {
+		t.Fatalf("activeIssuesForRepo(o/other) = %v, want [9]", got)
+	}
+	// A project-scoped key names the project, not the repository, so it only
+	// matches once the key is resolved back to the repository it belongs to.
+	if got := activeIssuesForRepo(active, "https://github.com/users/loren/projects/3"); !slices.Equal(got, []int{11}) {
+		t.Fatalf("activeIssuesForRepo(project) = %v, want [11]", got)
+	}
+	if got := activeIssuesForRepo(active, "o/none"); len(got) != 0 {
+		t.Fatalf("activeIssuesForRepo(o/none) = %v, want none", got)
+	}
+}
+
+func TestParseIssueWorkKey(t *testing.T) {
+	cases := []struct {
+		key    string
+		target string
+		number int
+		ok     bool
+	}{
+		{"o/r#7", "o/r", 7, true},
+		{"https://github.com/users/loren/projects/3#11", "https://github.com/users/loren/projects/3", 11, true},
+		{"o/r#discussion#4", "", 0, false},
+		{"o/r#0", "", 0, false},
+		{"o/r#abc", "", 0, false},
+		{"o/r", "", 0, false},
+	}
+	for _, tc := range cases {
+		target, number, ok := parseIssueWorkKey(tc.key)
+		if ok != tc.ok || target != tc.target || number != tc.number {
+			t.Fatalf("parseIssueWorkKey(%q) = (%q, %d, %v), want (%q, %d, %v)", tc.key, target, number, ok, tc.target, tc.number, tc.ok)
+		}
+	}
 }
