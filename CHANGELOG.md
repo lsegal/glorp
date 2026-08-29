@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fix `install.sh` silently skipping its final steps when piped into `bash`: the `npx skills add` calls consumed the piped script from stdin, so the installed-version message was echoed back as raw script text instead of running.
+- Stop resuming an issue with the agent recorded in `.glorp.json` when the current `-agent` configuration no longer includes it; the issue is dispatched to a configured agent with a fresh session instead.
 
 ## v1.2.20 - 2026-08-29
 

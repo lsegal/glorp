@@ -865,6 +865,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 					// so the agent can recover the existing draft PR and worktree.
 					Resume: state.SessionID != "" && state.Agent != "",
 				}
+				// Work state persisted by an earlier run must not pin the issue
+				// to an agent the current configuration no longer dispatches to
+				// (issue #358). Drop the stale identity so the dispatch below
+				// selects a currently configured agent and starts a fresh
+				// session instead of resuming with the retired one.
+				if session.Agent != "" && !w.agentStillConfigured(session.Agent) {
+					w.logf("issue #%d discarded persisted agent %q; it is no longer configured", issue.Number, session.Agent)
+					session.ID, session.Agent, session.Resume = "", "", false
+				}
 				if directMention {
 					// A direct mention is a new threaded instruction. Start a fresh
 					// gh-fix invocation so it receives the identity argument and
