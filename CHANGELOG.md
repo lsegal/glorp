@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Include the failing agent's output in the bug report link glorp generates when a dispatched run exits with an error, instead of a `[robot output omitted]` placeholder.
+
 ## v1.2.19 - 2026-08-29
 
 - Fix `glorp upgrade` still re-running the installer for release builds whose embedded version omits the leading `v` from the latest GitHub release tag.
