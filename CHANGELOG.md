@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the webhook daemon starting an ngrok tunnel to its listener's wildcard address (`[::]`/`0.0.0.0`), which macOS refuses to connect to; ngrok now targets `127.0.0.1` on the bound port instead.
+
 ## v1.2.19 - 2026-08-29
 
 - Fix `glorp upgrade` still re-running the installer for release builds whose embedded version omits the leading `v` from the latest GitHub release tag.

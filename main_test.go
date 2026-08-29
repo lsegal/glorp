@@ -35,6 +35,22 @@ func TestListenForWebhooksAssignsRandomPort(t *testing.T) {
 	}
 }
 
+func TestNgrokTargetAddrRewritesWildcardHostToLoopback(t *testing.T) {
+	cases := map[string]string{
+		"[::]:51587":         "127.0.0.1:51587",
+		"0.0.0.0:51587":      "127.0.0.1:51587",
+		":51587":             "127.0.0.1:51587",
+		"127.0.0.1:51587":    "127.0.0.1:51587",
+		"192.168.1.5:51587":  "192.168.1.5:51587",
+		"not-a-valid-target": "not-a-valid-target",
+	}
+	for input, want := range cases {
+		if got := ngrokTargetAddr(input); got != want {
+			t.Errorf("ngrokTargetAddr(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestOriginatingWorkStateLoadsLinkedPullRequest(t *testing.T) {
 	responses := [][]byte{
 		[]byte(`{"state":"OPEN"}`),
