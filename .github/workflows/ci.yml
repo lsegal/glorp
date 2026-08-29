@@ -1,11 +1,29 @@
 name: CI
 on:
+  # Pushes are only built for the default branch. Branch coverage comes from the
+  # pull_request trigger below, which attaches its verdict to the pull request's
+  # head SHA even when that commit is empty or only touches markdown.
   push:
+    branches: ["main"]
     paths-ignore:
       - "**/*.md"
+  # No paths filter here on purpose: every head SHA of a pull request that is up
+  # for review must carry a CI verdict before it can be merged.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
+    # Draft pull requests are skipped so the empty `[skip ci]` commit that opens
+    # a draft does not burn a run; the ready_for_review event checks the head SHA
+    # once the pull request is actually up for review.
+    if: >-
+      (github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]'))
+      && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +53,12 @@ jobs:
       - run: GOOS=darwin go vet ./...
 
   test-windows:
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
+    # Draft pull requests are skipped so the empty `[skip ci]` commit that opens
+    # a draft does not burn a run; the ready_for_review event checks the head SHA
+    # once the pull request is actually up for review.
+    if: >-
+      (github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]'))
+      && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
