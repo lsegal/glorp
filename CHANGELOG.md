@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Answer the `Does anyone have this?` handoff ask when it is posted on an issue's pull request. Once a draft PR exists the handshake happens on the PR, but the running instance only recognised asks that named the issue number, so it stayed silent while actively committing and another instance took its work. Handoff ownership lookups also now resolve project-scoped work back to its repository.
 - Read the ngrok tunnel URL from the log of the ngrok process glorp starts instead of the fixed local ngrok API on port 4040. When another ngrok agent already owns that port (commonly an orphaned tunnel from an earlier run), glorp used to adopt that agent's tunnel and point the GitHub webhook at a dead port while reporting the tunnel as ready. ngrok's own error output is now shown and included in the failure message when no tunnel comes up. `--ngrok-api` is deprecated and ignored.
 - Fix `install.sh` silently skipping its final steps when piped into `bash`: the `npx skills add` calls consumed the piped script from stdin, so the installed-version message was echoed back as raw script text instead of running.
 - Stop resuming an issue with the agent recorded in `.glorp.json` when the current `-agent` configuration no longer includes it; the issue is dispatched to a configured agent with a fresh session instead.

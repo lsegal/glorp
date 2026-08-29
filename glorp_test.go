@@ -3016,3 +3016,106 @@ func TestGlorpResumesPersistedAgentThatIsStillConfigured(t *testing.T) {
 		t.Fatalf("invocation = %q, want the still configured codex session resumed", invocation)
 	}
 }
+
+func TestGlorpAnswersOwnershipAskOnItsPullRequest(t *testing.T) {
+	dir := t.TempDir()
+	// The issue is worked locally as #7, but its draft pull request is #42, so
+	// the handoff ask arrives naming #42 (issue #363).
+	source := &fakeClosureSource{
+		fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r"}}}},
+		state:      OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 42, State: "open"}}},
+	}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	events := make(chan WebhookEvent, 1)
+	comments := newFakeCommentClient()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: source, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF", Comments: comments,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("dispatched issue #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("issue #7 was not dispatched")
+	}
+
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 42, CommentBody: signComment(askClaimBody, "OTHER")}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var posted []Comment
+	for time.Now().Before(deadline) {
+		var err error
+		if posted, err = comments.ListComments(context.Background(), "o/r", 42); err != nil {
+			t.Fatal(err)
+		}
+		if len(posted) > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(posted) != 1 {
+		t.Fatalf("pull request comments = %v, want a presence reply", posted)
+	}
+	if kind, id, ok := parseClaim(posted[0].Body); !ok || kind != claimPresence || id != "SELF" {
+		t.Fatalf("posted comment = %q, want a presence claim from SELF", posted[0].Body)
+	}
+
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlorpIgnoresOwnershipAskOnAnotherInstancesPullRequest(t *testing.T) {
+	dir := t.TempDir()
+	source := &fakeClosureSource{
+		fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r"}}}},
+		// #42 was this issue's pull request, but it is merged, so an ask on it
+		// is no longer about work in flight here.
+		state: OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 42, State: "merged", Merged: true}}},
+	}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	events := make(chan WebhookEvent, 1)
+	comments := newFakeCommentClient()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: source, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF", Comments: comments,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("issue #7 was not dispatched")
+	}
+
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 42, CommentBody: signComment(askClaimBody, "OTHER")}
+	time.Sleep(200 * time.Millisecond)
+
+	posted, err := comments.ListComments(context.Background(), "o/r", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 0 {
+		t.Fatalf("pull request comments = %v, want silence for work this instance does not hold", posted)
+	}
+
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
