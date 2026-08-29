@@ -66,6 +66,10 @@ func latestReleaseTag(ctx context.Context, doer publicAPIDoer, repo string) (str
 	return data.TagName, nil
 }
 
+func normalizedReleaseVersion(version string) string {
+	return strings.TrimPrefix(strings.TrimSpace(version), "v")
+}
+
 // runUpgrade runs the platform installer, streaming its output to out, unless
 // currentVersion already matches the latest published release, in which case
 // it noops and reports the version the user is on instead of downloading
@@ -73,7 +77,7 @@ func latestReleaseTag(ctx context.Context, doer publicAPIDoer, repo string) (str
 // running the installer as if the check had not been made.
 func runUpgrade(ctx context.Context, out io.Writer, currentVersion string, latestTag func(context.Context) (string, error), newCommand func(context.Context) *exec.Cmd) error {
 	if currentVersion != "" && currentVersion != "dev" {
-		if latest, err := latestTag(ctx); err == nil && latest == currentVersion {
+		if latest, err := latestTag(ctx); err == nil && normalizedReleaseVersion(latest) == normalizedReleaseVersion(currentVersion) {
 			fmt.Fprintf(out, "glorp %s is already the latest release.\n", currentVersion)
 			return nil
 		}

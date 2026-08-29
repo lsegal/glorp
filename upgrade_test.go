@@ -96,6 +96,24 @@ func TestRunUpgradeNoopsWhenAlreadyLatest(t *testing.T) {
 	}
 }
 
+func TestRunUpgradeNoopsWhenReleaseTagHasLeadingV(t *testing.T) {
+	var out bytes.Buffer
+	ranInstaller := false
+	err := runUpgrade(context.Background(), &out, "1.2.9", stubLatestTag("v1.2.9", nil), func(ctx context.Context) *exec.Cmd {
+		ranInstaller = true
+		return exec.CommandContext(ctx, "echo", "installed")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ranInstaller {
+		t.Fatal("runUpgrade ran the installer even though the installed version matches the latest release tag")
+	}
+	if got, want := out.String(), "glorp 1.2.9 is already the latest release.\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestRunUpgradeRunsInstallerWhenDevVersion(t *testing.T) {
 	var out bytes.Buffer
 	ranInstaller := false
