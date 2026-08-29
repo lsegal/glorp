@@ -687,47 +687,44 @@ func TestBugReportURLWithoutOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := u.Query().Get("body")
-	if !strings.Contains(body, "[no agent output was captured]") {
-		t.Fatalf("body missing the no-output note: %q", body)
-	}
-}
-
-func TestBugReportOutputSectionNotesTruncation(t *testing.T) {
-	full := strings.Repeat("x", agentOutputTailLimit)
-	got := bugReportOutputSection(full)
-	if !strings.HasPrefix(got, "Last ") {
-		t.Fatalf("expected truncation note for output at the tail limit, got: %q", got[:min(50, len(got))])
-	}
-
-	short := "just a bit of output"
-	got = bugReportOutputSection(short)
-	if strings.HasPrefix(got, "Last ") {
-		t.Fatalf("did not expect a truncation note for short output, got: %q", got)
+	if body := u.Query().Get("body"); !strings.Contains(body, "[no agent output was captured]") {
+		t.Fatalf("body = %q, want the no-output note", body)
 	}
 }
 
 func TestAgentOutputTailWriterKeepsTailAndPassesThrough(t *testing.T) {
-	var passthrough bytes.Buffer
-	w := &agentOutputTailWriter{output: &passthrough, limit: 10}
-	if _, err := w.Write([]byte("hello world")); err != nil {
-		t.Fatal(err)
+	var seen bytes.Buffer
+	w := &agentOutputTailWriter{output: &seen, limit: 8}
+	for _, chunk := range []string{"abcdef", "ghij", "klmno"} {
+		if n, err := w.Write([]byte(chunk)); err != nil || n != len(chunk) {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
 	}
-	if passthrough.String() != "hello world" {
-		t.Fatalf("expected full write to pass through, got %q", passthrough.String())
+	if got := seen.String(); got != "abcdefghijklmno" {
+		t.Fatalf("passthrough = %q, want the full stream", got)
 	}
-	if got := w.Tail(); got != "ello world" {
-		t.Fatalf("Tail() = %q, want %q", got, "ello world")
+	if got := w.Tail(); got != "hijklmno" {
+		t.Fatalf("Tail() = %q, want the last 8 bytes", got)
 	}
 }
 
 func TestAgentOutputTailWriterStripsControlSequences(t *testing.T) {
 	w := &agentOutputTailWriter{output: io.Discard, limit: agentOutputTailLimit}
-	if _, err := w.Write([]byte("\x1b[31mred\x1b[0m\r\ntext")); err != nil {
+	if _, err := w.Write([]byte("\x1b[31mfatal:\x1b[0m no such file\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	if got := w.Tail(); got != "red\ntext" {
-		t.Fatalf("Tail() = %q, want %q", got, "red\ntext")
+	if got := w.Tail(); got != "fatal: no such file" {
+		t.Fatalf("Tail() = %q, want the escape sequences removed", got)
+	}
+}
+
+func TestBugReportOutputSectionNotesTruncation(t *testing.T) {
+	got := bugReportOutputSection(strings.Repeat("x", agentOutputTailLimit))
+	if !strings.HasPrefix(got, "Last ") {
+		t.Fatalf("section = %q, want a truncation note", got)
+	}
+	if short := bugReportOutputSection("boom"); strings.HasPrefix(short, "Last ") {
+		t.Fatalf("section = %q, want no truncation note for short output", short)
 	}
 }
 

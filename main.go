@@ -1859,6 +1859,13 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	if r.Output != nil {
 		agentOutput = io.MultiWriter(agentOutput, r.Output)
 	}
+	// Retain the trailing output so a failing run can quote what actually went
+	// wrong, both in glorp's own logs and in its bug report, instead of an
+	// empty placeholder (issues #353, #355). Wrapping here, before the
+	// decoding writers, means the captured text is the human-readable stream
+	// rather than raw agent JSON.
+	outputTail := &agentOutputTailWriter{output: agentOutput, limit: agentOutputTailLimit}
+	agentOutput = outputTail
 	var metadataOutput *sessionMetadataCaptureWriter
 	if updateSession != nil {
 		metadataOutput = &sessionMetadataCaptureWriter{
@@ -1877,11 +1884,6 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		detector = &missingSessionDetector{output: agentOutput}
 		agentOutput = detector
 	}
-	// Retain the trailing output so a failure reports what the agent actually
-	// printed instead of just the exit status, both in glorp's own logs and in
-	// the bug report it files (issue #355).
-	outputTail := &agentOutputTailWriter{output: agentOutput, limit: agentOutputTailLimit}
-	agentOutput = outputTail
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := runChildProcess(cmd)
 	if claudeOutput != nil {
