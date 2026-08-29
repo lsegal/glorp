@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix `install.sh` silently skipping its final steps when piped into `bash`: the `npx skills add` calls consumed the piped script from stdin, so the installed-version message was echoed back as raw script text instead of running.
+
 ## v1.2.20 - 2026-08-29
 
 - Log the failing agent's actual output (not just the exit status) when a dispatched run fails, and include that output in the bug report link glorp generates, instead of a `[robot output omitted]` placeholder.

@@ -22,6 +22,9 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$url" -o "$tmp/$archive"
 tar -xzf "$tmp/$archive" -C "$tmp"
 install "$tmp/glorp" "$bin_dir/glorp"
-npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y
-npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code -y
+# This script is normally piped into bash, so stdin is the rest of the script.
+# npx reads stdin, which would swallow the lines below and echo them back
+# instead of letting bash run them, so keep it away from the pipe.
+npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y </dev/null
+npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code -y </dev/null
 echo "Installed glorp $version to $bin_dir/glorp and gh-fix/gh-discuss globally."
