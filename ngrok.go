@@ -80,20 +80,25 @@ func (w *ngrokLogWatcher) consume(line string) {
 	if err := json.Unmarshal([]byte(line), &record); err != nil {
 		// Not a JSON record, so it cannot be classified; show it rather than
 		// swallow output that may explain a failure.
-		w.report(line)
+		w.record(line, true)
 		return
 	}
 	if record.Message == "started tunnel" && record.URL != "" && w.url == "" {
 		w.url = strings.TrimRight(record.URL, "/")
 	}
 	if ngrokLogFailure(record.Level) {
-		w.report(ngrokLogMessage(record))
+		w.record(ngrokLogMessage(record), ngrokLogFatal(record.Level))
 	}
 }
 
-func (w *ngrokLogWatcher) report(message string) {
+// record keeps a failure for the error glorp returns if no tunnel comes up.
+// Only fatal records are also printed, matching what the previous
+// critical-only log level showed: ngrok reports recoverable problems (such as
+// a host-info probe it could not run) at error level, and those would
+// otherwise clutter glorp's UI on an otherwise healthy tunnel.
+func (w *ngrokLogWatcher) record(message string, fatal bool) {
 	w.failure = append(w.failure, message)
-	if w.out != nil {
+	if fatal && w.out != nil {
 		fmt.Fprintln(w.out, message)
 	}
 }
@@ -117,6 +122,16 @@ func (w *ngrokLogWatcher) Failure() string {
 func ngrokLogFailure(level string) bool {
 	switch strings.ToLower(level) {
 	case "eror", "error", "crit", "fatal":
+		return true
+	}
+	return false
+}
+
+// ngrokLogFatal reports whether a log level means ngrok is giving up, as
+// opposed to reporting a problem it recovered from.
+func ngrokLogFatal(level string) bool {
+	switch strings.ToLower(level) {
+	case "crit", "fatal":
 		return true
 	}
 	return false

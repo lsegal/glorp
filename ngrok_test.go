@@ -47,8 +47,17 @@ func TestNgrokLogWatcherReadsTunnelURLFromOwnProcess(t *testing.T) {
 func TestNgrokLogWatcherReportsFailures(t *testing.T) {
 	var out bytes.Buffer
 	watcher := &ngrokLogWatcher{out: &out}
+	// A recoverable error is remembered for diagnostics but kept off the UI,
+	// which only ever showed critical output.
+	watcher.Write([]byte(`{"lvl":"eror","msg":"unable to check host info","err":"exec: \"ioreg\" not found"}` + "\n"))
+	if out.Len() != 0 {
+		t.Fatalf("recoverable ngrok error was forwarded: %q", out.String())
+	}
 	watcher.Write([]byte(`{"lvl":"crit","msg":"command failed","err":"authentication failed\nERR_NGROK_108"}` + "\n"))
 	watcher.Write([]byte("ngrok exploded\n"))
+	if !strings.Contains(watcher.Failure(), "unable to check host info") {
+		t.Fatalf("recoverable error was not captured: %q", watcher.Failure())
+	}
 	failure := watcher.Failure()
 	if !strings.Contains(failure, "ERR_NGROK_108") || !strings.Contains(failure, "ngrok exploded") {
 		t.Fatalf("failure = %q", failure)
