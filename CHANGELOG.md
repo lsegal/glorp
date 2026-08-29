@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.19 - 2026-08-29
+
 - Fix `glorp upgrade` still re-running the installer for release builds whose embedded version omits the leading `v` from the latest GitHub release tag.
 
 ## v1.2.18 - 2026-08-24
