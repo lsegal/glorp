@@ -2945,10 +2945,13 @@ func runGlorpUntilAgentInvoked(t *testing.T, w *Glorp, log string) string {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
-	invoked := waitFor(t, 5*time.Second, func() bool {
+	invoked := false
+	for deadline := time.Now().Add(5 * time.Second); !invoked && time.Now().Before(deadline); {
 		data, err := os.ReadFile(log)
-		return err == nil && strings.Contains(string(data), "<<<END>>>")
-	})
+		if invoked = err == nil && strings.Contains(string(data), "<<<END>>>"); !invoked {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	cancel()
 	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
