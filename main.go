@@ -1860,9 +1860,10 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		agentOutput = io.MultiWriter(agentOutput, r.Output)
 	}
 	// Retain the trailing output so a failing run can quote what actually went
-	// wrong in its bug report instead of an empty placeholder (issue #353).
-	// Wrapping here, before the decoding writers, means the captured text is
-	// the human-readable stream rather than raw agent JSON.
+	// wrong, both in glorp's own logs and in its bug report, instead of an
+	// empty placeholder (issues #353, #355). Wrapping here, before the
+	// decoding writers, means the captured text is the human-readable stream
+	// rather than raw agent JSON.
 	outputTail := &agentOutputTailWriter{output: agentOutput, limit: agentOutputTailLimit}
 	agentOutput = outputTail
 	var metadataOutput *sessionMetadataCaptureWriter
@@ -1898,23 +1899,28 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 			fmt.Fprintf(agentOutput, "Session %s no longer exists; restarting the work from scratch.\n", session.ID)
 			return runErr, true
 		}
+		tail := outputTail.Tail()
 		repo := r.Repo
 		if issue.Target != "" {
 			repo = issueRepository(issue.Target, issue)
 		}
-		report, reportErr := bugReportURL(repo, issue, args, outputTail.Tail())
+		report, reportErr := bugReportURL(repo, issue, args, tail)
 		if reportErr != nil {
 			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", runErr, reportErr), false
 		}
-		return fmt.Errorf("agent failed: %w; bug report: %s", runErr, report), false
+		if tail == "" {
+			return fmt.Errorf("agent failed: %w; bug report: %s", runErr, report), false
+		}
+		return fmt.Errorf("agent failed: %w; bug report: %s\n\nAgent output:\n%s", runErr, report, tail), false
 	}
 	return nil, false
 }
 
-// agentOutputTailLimit bounds how much of a failing agent's output is retained
-// for its bug report. GitHub rejects overly long issue-creation URLs, so the
-// tail has to stay small enough to survive percent-encoding.
-const agentOutputTailLimit = 2000
+// agentOutputTailLimit bounds how much of a failing agent's output is
+// retained for logging and its bug report. GitHub rejects overly long
+// issue-creation URLs, so the tail has to stay small enough to survive
+// percent-encoding.
+const agentOutputTailLimit = 4000
 
 // agentOutputTailWriter passes output straight through while keeping the last
 // agentOutputTailLimit bytes, so a failed run can report what the agent
@@ -1937,7 +1943,7 @@ func (w *agentOutputTailWriter) Write(p []byte) (int, error) {
 }
 
 // Tail returns the retained output with terminal control sequences removed so
-// it reads cleanly inside a Markdown code block.
+// it reads cleanly in logs and inside a Markdown code block.
 func (w *agentOutputTailWriter) Tail() string {
 	if w == nil {
 		return ""
