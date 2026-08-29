@@ -1859,6 +1859,12 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	if r.Output != nil {
 		agentOutput = io.MultiWriter(agentOutput, r.Output)
 	}
+	// Retain the trailing output so a failing run can quote what actually went
+	// wrong in its bug report instead of an empty placeholder (issue #353).
+	// Wrapping here, before the decoding writers, means the captured text is
+	// the human-readable stream rather than raw agent JSON.
+	outputTail := &agentOutputTailWriter{output: agentOutput, limit: agentOutputTailLimit}
+	agentOutput = outputTail
 	var metadataOutput *sessionMetadataCaptureWriter
 	if updateSession != nil {
 		metadataOutput = &sessionMetadataCaptureWriter{
@@ -1896,7 +1902,7 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		if issue.Target != "" {
 			repo = issueRepository(issue.Target, issue)
 		}
-		report, reportErr := bugReportURL(repo, issue, args)
+		report, reportErr := bugReportURL(repo, issue, args, outputTail.Tail())
 		if reportErr != nil {
 			return fmt.Errorf("agent failed: %w (could not create bug report URL: %v)", runErr, reportErr), false
 		}
@@ -1905,7 +1911,45 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	return nil, false
 }
 
-func bugReportURL(repo string, issue Issue, args []string) (string, error) {
+// agentOutputTailLimit bounds how much of a failing agent's output is retained
+// for its bug report. GitHub rejects overly long issue-creation URLs, so the
+// tail has to stay small enough to survive percent-encoding.
+const agentOutputTailLimit = 2000
+
+// agentOutputTailWriter passes output straight through while keeping the last
+// agentOutputTailLimit bytes, so a failed run can report what the agent
+// actually printed before it died.
+type agentOutputTailWriter struct {
+	mu     sync.Mutex
+	output io.Writer
+	limit  int
+	buffer []byte
+}
+
+func (w *agentOutputTailWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.buffer = append(w.buffer, p...)
+	if limit := w.limit; limit > 0 && len(w.buffer) > limit {
+		w.buffer = append(w.buffer[:0], w.buffer[len(w.buffer)-limit:]...)
+	}
+	w.mu.Unlock()
+	return w.output.Write(p)
+}
+
+// Tail returns the retained output with terminal control sequences removed so
+// it reads cleanly inside a Markdown code block.
+func (w *agentOutputTailWriter) Tail() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return strings.TrimSpace(ansiEscapePattern.ReplaceAllString(string(w.buffer), ""))
+}
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|\r`)
+
+func bugReportURL(repo string, issue Issue, args []string, output string) (string, error) {
 	target, err := parseTarget(repo)
 	if err != nil || target.isProject || target.repo == "" {
 		if err == nil {
@@ -1916,8 +1960,22 @@ func bugReportURL(repo string, issue Issue, args []string) (string, error) {
 	values := url.Values{}
 	values.Set("template", "bug_report.md")
 	values.Set("title", fmt.Sprintf("Agent failed while handling issue #%d", issue.Number))
-	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n[robot output omitted]\n", target.repo, issue.Number, strings.Join(args, " ")))
+	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n%s\n", target.repo, issue.Number, strings.Join(args, " "), bugReportOutputSection(output)))
 	return "https://github.com/" + target.repo + "/issues/new?" + values.Encode(), nil
+}
+
+// bugReportOutputSection renders the captured agent output as a fenced block,
+// noting when only the tail of a longer run survived.
+func bugReportOutputSection(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return "[no agent output was captured]"
+	}
+	prefix := ""
+	if len(output) >= agentOutputTailLimit {
+		prefix = fmt.Sprintf("Last %d characters of the agent's output:\n\n", len(output))
+	}
+	return prefix + "```\n" + output + "\n```"
 }
 func validRepo(repo string) bool {
 	parts := strings.Split(repo, "/")
