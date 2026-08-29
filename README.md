@@ -223,7 +223,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--filter QUERY` | `is:issue state:open author:@me label:agent-ready` | GitHub issue-search filter. Repeat the option to combine terms. The default author and `agent-ready` label filter applies to repository targets; Project targets default to all open project issues. |
 | `--interval DURATION` | `30s` | Periodic GitHub synchronization interval. Uses Go duration syntax such as `10s`, `2m`, or `1h30m`; must be positive. |
 | `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
-| `--ngrok-api URL` | `http://127.0.0.1:4040` | URL of the ngrok local API used to discover the public tunnel. |
+| `--ngrok-api URL` | `http://127.0.0.1:4040` | Deprecated and ignored. The public tunnel URL is read from the log of the ngrok process glorp starts. |
 | `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. |
 | `--ui MODE` | `web` | Select the UI: `web`, `tui`, or `none`. |
 | `--no-ui` | `false` | Disable all UI; equivalent to `--ui none`. |

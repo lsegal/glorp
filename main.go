@@ -42,7 +42,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("webhook-path", "/webhook", "path for GitHub webhook deliveries")
 	flags.String("webhook-secret", "", "optional GitHub webhook secret")
 	flags.String("ngrok-binary", "ngrok", "ngrok executable")
-	flags.String("ngrok-api", "http://127.0.0.1:4040", "ngrok local API URL")
+	flags.String("ngrok-api", "http://127.0.0.1:4040", "deprecated and ignored: the tunnel URL is read from ngrok's own log")
 	flags.String("ui", "web", "user interface: web, tui, or none")
 	flags.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
 	flags.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
@@ -89,7 +89,6 @@ func runWatch(args []string) int {
 	webhookPath := flagValue[string](flags, "webhook-path")
 	webhookSecret := flagValue[string](flags, "webhook-secret")
 	ngrokBinary := flagValue[string](flags, "ngrok-binary")
-	ngrokAPI := flagValue[string](flags, "ngrok-api")
 	uiMode := flagValue[string](flags, "ui")
 	noUI := flagValue[bool](flags, "no-ui")
 	webUIPort := flagValue[int](flags, "web-ui-port")
@@ -247,7 +246,7 @@ func runWatch(args []string) int {
 		fmt.Fprintf(output, "webhook server listening on %s%s\n", listenAddr, webhookPath)
 		ngrokAddr := ngrokTargetAddr(listenAddr)
 		fmt.Fprintf(output, "starting ngrok tunnel for %s\n", ngrokAddr)
-		tunnel, err := startNgrok(ctx, ngrokBinary, ngrokAddr, ngrokAPI, output)
+		tunnel, err := startNgrok(ctx, ngrokBinary, ngrokAddr, output)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
