@@ -80,12 +80,29 @@ func TestSpawnerReportsStartFailures(t *testing.T) {
 	}
 }
 
-// The acceptance case from issues #264 and #266: SIGKILL glorp and its
-// subprocesses must go with it on every Unix, even though no userspace cleanup
-// can run.
+// The acceptance case from issues #264, #266 and #364: however glorp itself
+// dies, its subprocesses must go with it on every Unix, even though no
+// userspace cleanup can run. A hangup stands in for the terminal window being
+// closed out from under a `glorp watch`, and a panic for a crash.
 func TestKilledParentTakesItsChildrenDown(t *testing.T) {
+	for _, exit := range []struct {
+		name string
+		mode string
+	}{
+		{name: "sigkill", mode: "kill"},
+		{name: "closed terminal", mode: "hangup"},
+		{name: "panic", mode: "panic"},
+	} {
+		t.Run(exit.name, func(t *testing.T) { assertParentTakesItsChildDown(t, exit.mode) })
+	}
+}
+
+// assertParentTakesItsChildDown re-executes the test binary as a stand-in
+// glorp, ends it the way mode describes, and requires the child it owned to be
+// gone.
+func assertParentTakesItsChildDown(t *testing.T, mode string) {
 	parent := exec.Command(os.Args[0], "-test.run=TestOrphanGuardHelperProcess", "-test.timeout=60s")
-	parent.Env = append(os.Environ(), "GLORP_ORPHAN_HELPER=1")
+	parent.Env = append(os.Environ(), "GLORP_ORPHAN_HELPER=1", "GLORP_ORPHAN_HELPER_EXIT="+mode)
 	stdout, err := parent.StdoutPipe()
 	if err != nil {
 		t.Fatalf("pipe helper stdout: %v", err)
@@ -114,12 +131,16 @@ func TestKilledParentTakesItsChildrenDown(t *testing.T) {
 		t.Fatalf("helper child %d never started", pid)
 	}
 
-	if err := parent.Process.Signal(syscall.SIGKILL); err != nil {
-		t.Fatalf("kill helper parent: %v", err)
+	// A hangup and a panic end the parent through its own code path; only a
+	// SIGKILL has to be delivered here, and it is the case the guards exist for.
+	if mode == "kill" {
+		if err := parent.Process.Signal(syscall.SIGKILL); err != nil {
+			t.Fatalf("kill helper parent: %v", err)
+		}
 	}
-	if !waitFor(t, 5*time.Second, func() bool { return !processAlive(pid) }) {
+	if !waitFor(t, 10*time.Second, func() bool { return !processAlive(pid) }) {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
-		t.Fatalf("child %d outlived a SIGKILLed parent", pid)
+		t.Fatalf("child %d outlived a parent ended by %s", pid, mode)
 	}
 }
 
@@ -136,5 +157,13 @@ func TestOrphanGuardHelperProcess(t *testing.T) {
 	}
 	fmt.Printf("child-pid %d\n", cmd.Process.Pid)
 	os.Stdout.Sync()
+	switch os.Getenv("GLORP_ORPHAN_HELPER_EXIT") {
+	case "hangup":
+		// What a closed terminal sends, with no handler installed, so the
+		// process dies exactly as an unattended `glorp watch` would.
+		_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
+	case "panic":
+		panic("helper crash")
+	}
 	time.Sleep(50 * time.Second)
 }
