@@ -146,6 +146,10 @@ func ngrokLogMessage(record ngrokLogRecord) string {
 }
 
 func startNgrok(ctx context.Context, binary, listenAddr string, out io.Writer) (*NgrokTunnel, error) {
+	// Agents abandoned by an earlier run hold the local ngrok API port and one
+	// of the account's simultaneous agent sessions, so clear them out before
+	// asking for a tunnel of glorp's own (issue #364).
+	reapOrphanedNgrokAgents(out)
 	watcher := &ngrokLogWatcher{out: out}
 	cmd := exec.CommandContext(ctx, binary, ngrokArgs(listenAddr)...)
 	cmd.Stdout, cmd.Stderr = watcher, watcher
