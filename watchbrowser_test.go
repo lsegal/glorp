@@ -146,3 +146,32 @@ func TestWatchHelpDocumentsBrowserMode(t *testing.T) {
 		t.Fatal("watch usage does not describe browser mode")
 	}
 }
+
+// The screenshot fallback is off unless it is asked for, and it only means
+// anything in browser mode.
+func TestResolveBrowserWatchVision(t *testing.T) {
+	flags := parseWatchFlags(t, "--browser", "owner/repo")
+	options, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolveBrowserWatch: %v", err)
+	}
+	if options.Vision {
+		t.Fatal("the screenshot fallback is on without -browser-vision")
+	}
+
+	flags = parseWatchFlags(t, "--browser", "--browser-vision", "owner/repo")
+	options, _, _, err = resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolveBrowserWatch: %v", err)
+	}
+	if !options.Vision {
+		t.Fatal("-browser-vision did not enable the fallback")
+	}
+}
+
+func TestResolveBrowserWatchRejectsVisionWithoutBrowserMode(t *testing.T) {
+	flags := parseWatchFlags(t, "--browser-vision", "owner/repo")
+	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
+		t.Fatal("expected -browser-vision without -browser to be rejected")
+	}
+}

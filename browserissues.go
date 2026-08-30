@@ -43,6 +43,11 @@ type browserIssueSource struct {
 	filter    string
 	allIssues bool
 	logf      func(string, ...interface{})
+	// vision is the bounded screenshot-to-agent fallback, or nil when
+	// -browser-vision was not passed. It is consulted only for the
+	// distinguishable extraction failure below, never for an empty or a
+	// successful read.
+	vision *browserVision
 
 	mu sync.Mutex
 	// reported remembers which page URLs have already had an extraction
@@ -59,7 +64,7 @@ type browserIssueSource struct {
 
 // newBrowserIssueSource builds the issue source browser mode polls with,
 // reading each target through its own tab of the shared browser.
-func newBrowserIssueSource(browser *Browser, filter string, allIssues bool, logf func(string, ...interface{})) *browserIssueSource {
+func newBrowserIssueSource(browser *Browser, filter string, allIssues bool, vision *browserVision, logf func(string, ...interface{})) *browserIssueSource {
 	return &browserIssueSource{
 		pageFor: func(target string) (browserPage, error) {
 			tab, err := browser.Tab(target)
@@ -70,6 +75,7 @@ func newBrowserIssueSource(browser *Browser, filter string, allIssues bool, logf
 		},
 		filter:    filter,
 		allIssues: allIssues,
+		vision:    vision,
 		logf:      logf,
 		reported:  map[string]bool{},
 		lastURL:   map[string]string{},
@@ -154,7 +160,19 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 		current := next
 		list, err := s.readPage(target, page, current, visited == 0)
 		if err != nil {
-			return nil, err
+			recovered := s.recoverWithVision(ctx, target, page, current, err)
+			if len(recovered) == 0 {
+				return nil, err
+			}
+			for _, number := range recovered {
+				key := parsed.repo + "#" + strconv.Itoa(number)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				issues = append(issues, issueFromBrowserRow(browserIssueRow{Number: number}, parsed.repo))
+			}
+			break
 		}
 		for _, row := range list.Rows {
 			if row.Number <= 0 {
@@ -220,6 +238,23 @@ func (s *browserIssueSource) extractionFailed(pageURL, reason string) error {
 		s.logf("could not read the issue list at %s: %s", pageURL, reason)
 	}
 	return &browserExtractionError{URL: pageURL, Reason: reason}
+}
+
+// recoverWithVision asks the screenshot fallback to read the page the DOM
+// extractor could not. Only the distinguishable extraction failure qualifies: a
+// navigation error, an HTTP error, or an empty-but-recognised list is never
+// worth a screenshot. The fallback answers with issue numbers alone, so the
+// issues it recovers carry no title or labels; the dispatch path hydrates them
+// from the API, and the extractor is still expected to be fixed in code.
+func (s *browserIssueSource) recoverWithVision(ctx context.Context, target string, page browserPage, pageURL string, cause error) []int {
+	if s.vision == nil || !errors.Is(cause, errBrowserExtraction) {
+		return nil
+	}
+	shooter, ok := page.(browserScreenshotter)
+	if !ok {
+		return nil
+	}
+	return s.vision.Recover(ctx, target, pageURL, cause.Error(), shooter.Screenshot)
 }
 
 // logChange emits one line when a target's issue list differs from the previous
