@@ -16,6 +16,12 @@ import (
 // is navigated or reloaded on each tick: opening a tab per poll would leak
 // renderer processes for as long as the run lasts.
 type Browser struct {
+	// ctx and config are what the browser was started from, kept so the same
+	// browser can be stopped and started again on the same profile without the
+	// readers that hold it having to be rebuilt (issue #379).
+	ctx    context.Context
+	config browserConfig
+
 	cmd         *browserProcess
 	allocCtx    context.Context
 	cancelAlloc context.CancelFunc
@@ -37,11 +43,41 @@ func startBrowser(ctx context.Context, config browserConfig) (*Browser, error) {
 	// so chromedp is told not to rewrite it.
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	return &Browser{
+		ctx:         ctx,
+		config:      config,
 		cmd:         process,
 		allocCtx:    allocCtx,
 		cancelAlloc: cancelAlloc,
 		tabs:        map[string]*BrowserTab{},
 	}, nil
+}
+
+// Suspend stops the browser process and drops its tabs, leaving the Browser
+// itself usable. Chrome allows exactly one process per --user-data-dir, so
+// putting a login window on the same profile the watch loop reads GitHub with
+// means getting out of the way first; Resume starts a new process afterwards
+// and the readers holding this Browser keep working, because they ask for their
+// tab by name on every read rather than holding one.
+func (b *Browser) Suspend() error { return b.Close() }
+
+// Resume starts the browser again after Suspend. Tabs are not restored: a tab
+// belongs to the process that owned it, and every reader re-opens the one it
+// needs on its next read, navigating it where it needs to be anyway.
+func (b *Browser) Resume() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.closed {
+		return nil
+	}
+	process, err := launchBrowser(b.ctx, b.config)
+	if err != nil {
+		return err
+	}
+	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(b.ctx, process.wsURL, chromedp.NoModifyURL)
+	b.cmd, b.allocCtx, b.cancelAlloc = process, allocCtx, cancelAlloc
+	b.tabs = map[string]*BrowserTab{}
+	b.closed = false
+	return nil
 }
 
 // Profile reports the profile directory the browser was launched against, or

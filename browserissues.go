@@ -367,6 +367,13 @@ func (s *browserIssueSource) readPage(target string, page browserPage, pageURL s
 		return browserIssueList{}, fmt.Errorf("load issue list at %s: %w", pageURL, err)
 	}
 	if status := page.HTTPStatus(); status >= 400 {
+		// A 404 or 403 on a repository the run was asked to watch is how a
+		// private repository looks to a signed-out profile, so the page is
+		// asked which it was before the status is reported as a dead target
+		// (issue #379).
+		if browserSignedOutStatus(page, status) {
+			return browserIssueList{}, &browserSignedOutError{URL: pageURL, Profile: s.profile, Status: status}
+		}
 		return browserIssueList{}, fmt.Errorf("load issue list at %s: GitHub returned HTTP %d", pageURL, status)
 	}
 	var list browserIssueList

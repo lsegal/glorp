@@ -230,6 +230,12 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 		return nil, fmt.Errorf("open project board %s: %w", target, err)
 	}
 	if status := page.HTTPStatus(); status >= 400 {
+		// Private boards are hidden from a signed-out profile the same way
+		// private repositories are, so the same question is asked here before
+		// the status is blamed on the target (issue #379).
+		if browserSignedOutStatus(page, status) {
+			return nil, &browserSignedOutError{URL: boardURL(parsed, b.Filter, b.AllIssues), Profile: b.Profile, Status: status}
+		}
 		return nil, fmt.Errorf("open project board %s: HTTP %d", target, status)
 	}
 
