@@ -303,10 +303,47 @@ func TestBoardURL(t *testing.T) {
 			want:   "https://github.com/lsegal/glorp/projects/1?filterQuery=is%3Aissue+is%3Aopen&layout=table",
 		},
 		{
-			name:   "custom filter reaches the page",
+			name:   "custom filter reaches the page without repeating the defaults",
 			target: "https://github.com/users/lsegal/projects/3",
 			filter: "is:issue state:open label:bug",
-			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen+is%3Aissue+state%3Aopen+label%3Abug&layout=table",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen+label%3Abug&layout=table",
+		},
+		{
+			name:   "filter with no kind or state still gets both defaults",
+			target: "https://github.com/users/lsegal/projects/3",
+			filter: "label:ready",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen+label%3Aready&layout=table",
+		},
+		{
+			name:   "filter naming its own kind is not contradicted",
+			target: "https://github.com/users/lsegal/projects/3",
+			filter: "is:pr state:open label:bug",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Apr+is%3Aopen+label%3Abug&layout=table",
+		},
+		{
+			name:   "filter naming its own state keeps the kind default",
+			target: "https://github.com/users/lsegal/projects/3",
+			filter: "state:closed label:bug",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aclosed+label%3Abug&layout=table",
+		},
+		{
+			name:   "is:closed counts as a state rather than a kind",
+			target: "https://github.com/users/lsegal/projects/3",
+			filter: "is:closed",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aclosed&layout=table",
+		},
+		{
+			name:      "all issues drops a filter that named its own kind",
+			target:    "https://github.com/users/lsegal/projects/3",
+			filter:    "is:pr label:bug",
+			allIssues: true,
+			want:      "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen&layout=table",
+		},
+		{
+			name:   "default filter is not repeated on the board",
+			target: "https://github.com/users/lsegal/projects/3",
+			filter: defaultIssueFilter,
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen&layout=table",
 		},
 	}
 	for _, test := range tests {

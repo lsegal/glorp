@@ -976,12 +976,47 @@ func projectListArgs(t target, filter string, allIssues bool) []string {
 	return append(args, "--query", projectItemQuery(filter, allIssues))
 }
 
+// projectItemQuery builds the item filter a project board is asked for, both
+// as the board page's ?filterQuery= and as the GraphQL/`gh project item-list`
+// item query.
+//
+// "is:issue" and "is:open" are supplied only as defaults, for a filter that
+// does not already say what to search for: the default filter opens with both
+// qualifiers itself, and repeating them made the logged board URL harder to
+// read and contradicted a filter that deliberately asked for something else (a
+// "--filter is:pr ..." must not become "is:issue ... is:pr"). This mirrors
+// browserIssuesURL, which does the same for the repository issues page.
+//
+// A board speaks a narrower search vocabulary than the issues page: it knows
+// "is:open"/"is:closed" but not "state:open". A state the filter names in the
+// issues-page vocabulary is therefore translated rather than passed through,
+// so the qualifier is emitted once and still means something to the board.
 func projectItemQuery(filter string, allIssues bool) string {
-	query := "is:issue is:open"
-	if !allIssues && filter != "" && filter != defaultIssueFilter {
-		query += " " + filter
+	if allIssues || filter == defaultIssueFilter {
+		filter = ""
 	}
-	return query
+	var terms []string
+	var kind, state bool
+	for _, term := range strings.Fields(filter) {
+		switch {
+		case strings.HasPrefix(term, "state:"):
+			term = "is:" + strings.TrimPrefix(term, "state:")
+			state = true
+		case term == "is:open", term == "is:closed", term == "is:merged":
+			state = true
+		case strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
+			kind = true
+		}
+		terms = append(terms, term)
+	}
+	var query []string
+	if !kind {
+		query = append(query, "is:issue")
+	}
+	if !state {
+		query = append(query, "is:open")
+	}
+	return strings.Join(append(query, terms...), " ")
 }
 
 func (g GHCLI) listProjectItems(ctx context.Context, target target, filter string, allIssues bool) ([]projectItem, error) {
