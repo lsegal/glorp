@@ -48,9 +48,16 @@ type browserScreenshotter interface {
 // and a bare number is unambiguous; it is always set for a project board,
 // which spans repositories and where a bare number cannot be turned back into
 // an addressable issue.
+//
+// Status is the board's Status column for the item, and is only ever set for a
+// project target: it is what the --ready-state gate reads, so a recovered board
+// item without it is addressable but undispatchable (issue #398). It is empty
+// when the board itself shows the item no status, which is a real answer rather
+// than a parse failure.
 type browserVisionRef struct {
 	Repository string
 	Number     int
+	Status     string
 }
 
 // browserVision is the budget around the screenshot-to-agent fallback. It owns
@@ -178,9 +185,9 @@ func browserVisionPrompt(imagePath, pageURL string, qualified bool) string {
 	if qualified {
 		return fmt.Sprintf(`The image at %s is a screenshot of the GitHub project board at %s.
 
-The board's items come from several repositories, so a bare issue number is not enough. Reply with a strict JSON array of strings, each one "OWNER/REPO#NUMBER" for an issue listed on that page, and absolutely nothing else: no prose, no explanation, no markdown code fence. For example: ["octocat/hello-world#412","octocat/spoon-knife#398"]
+The board's items come from several repositories, so a bare issue number is not enough, and each item's Status column decides whether it is ready to work on. Reply with a strict JSON array of objects, one per issue listed on that page, each with exactly two fields: "ref", the issue as "OWNER/REPO#NUMBER", and "status", the item's Status column copied verbatim as it is written on the board. Reply with that and absolutely nothing else: no prose, no explanation, no markdown code fence. For example: [{"ref":"octocat/hello-world#412","status":"Todo"},{"ref":"octocat/spoon-knife#398","status":"In Progress"}]
 
-If the board shows no issues, reply with []. Do not open a browser, run commands, or read anything other than the image.`, imagePath, pageURL)
+If an item shows no status at all, use "" for its status; do not guess one. If the board shows no issues, reply with []. Do not open a browser, run commands, or read anything other than the image.`, imagePath, pageURL)
 	}
 	return fmt.Sprintf(`The image at %s is a screenshot of the GitHub issue list at %s.
 
@@ -282,23 +289,60 @@ func parseBrowserVisionRefs(output string, qualified bool) ([]browserVisionRef, 
 		}
 		return refs, nil
 	}
-	var names []string
-	if err := json.Unmarshal([]byte(answer), &names); err != nil {
-		return nil, fmt.Errorf(`the agent's answer is not a JSON array of "OWNER/REPO#NUMBER" strings: %w`, err)
+	var items []browserVisionAnswer
+	decoder := json.NewDecoder(strings.NewReader(answer))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&items); err != nil {
+		return nil, fmt.Errorf(`the agent's answer is not a JSON array of {"ref","status"} objects: %w`, err)
 	}
-	refs := make([]browserVisionRef, 0, len(names))
-	for _, name := range names {
-		match := browserVisionRefPattern.FindStringSubmatch(strings.TrimSpace(name))
+	refs := make([]browserVisionRef, 0, len(items))
+	for _, item := range items {
+		match := browserVisionRefPattern.FindStringSubmatch(strings.TrimSpace(item.Ref))
 		if match == nil {
-			return nil, fmt.Errorf("the agent reported %q, which is not an OWNER/REPO#NUMBER issue reference", name)
+			return nil, fmt.Errorf("the agent reported %q, which is not an OWNER/REPO#NUMBER issue reference", item.Ref)
 		}
 		number, err := strconv.Atoi(match[3])
 		if err != nil || number <= 0 {
-			return nil, fmt.Errorf("the agent reported %q, which is not an issue number", name)
+			return nil, fmt.Errorf("the agent reported %q, which is not an issue number", item.Ref)
 		}
-		refs = append(refs, browserVisionRef{Repository: match[1] + "/" + match[2], Number: number})
+		status, err := browserVisionStatus(item.Ref, item.Status)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, browserVisionRef{Repository: match[1] + "/" + match[2], Number: number, Status: status})
 	}
 	return refs, nil
+}
+
+// browserVisionAnswer is one element of the qualified answer shape. Decoding
+// with DisallowUnknownFields keeps the object as strict as the reference
+// pattern is: an answer carrying extra fields is a different shape than the one
+// that was asked for, and a different shape is discarded rather than
+// interpreted.
+type browserVisionAnswer struct {
+	Ref    string `json:"ref"`
+	Status string `json:"status"`
+}
+
+// browserVisionStatusLimit is the longest status a board column can plausibly
+// be. A status is a short label a person reads at a glance ("Todo", "In
+// Progress", "Ready for review"), so anything longer is prose that arrived in
+// the status field rather than a column value.
+const browserVisionStatusLimit = 40
+
+// browserVisionStatus validates the Status column read off the board. An empty
+// status is accepted as-is: boards really do leave items without one, and
+// inventing a status would be exactly the guess this fallback must not make.
+// Callers are expected to say loudly that such an item cannot dispatch.
+func browserVisionStatus(ref, status string) (string, error) {
+	status = strings.TrimSpace(status)
+	if len(status) > browserVisionStatusLimit {
+		return "", fmt.Errorf("the agent reported a %d-character status for %q, which is not a board column", len(status), ref)
+	}
+	if strings.ContainsFunc(status, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "", fmt.Errorf("the agent reported %q with a status that is not a single line", ref)
+	}
+	return status, nil
 }
 
 // lastNonEmptyLine returns the final line of text an agent printed, which is

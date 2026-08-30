@@ -290,9 +290,11 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 // extractor could not, and turns its answer into rows. A board spans
 // repositories, so the agent is asked for qualified OWNER/REPO#NUMBER
 // references: a bare number could not be turned back into an addressable
-// issue. The recovered rows carry no title and no Status, because neither can
-// be trusted off a screenshot; the extractor is still expected to be fixed in
-// code.
+// issue. It is asked for each item's Status column alongside the reference,
+// because that column is what the --ready-state gate reads: without it a
+// recovered board would be addressable but permanently undispatchable (issue
+// #398). Recovered rows still carry no title, which nothing gates on. The
+// extractor is still expected to be fixed in code.
 func (b *BrowserBoard) recoverWithVision(ctx context.Context, target string, page browserPage, cause *browserExtractionError) []boardRow {
 	if b.Vision == nil {
 		return nil
@@ -304,6 +306,7 @@ func (b *BrowserBoard) recoverWithVision(ctx context.Context, target string, pag
 	refs := b.Vision.Recover(ctx, target, cause.URL, cause.Error(), shooter.Screenshot, true)
 	rows := make([]boardRow, 0, len(refs))
 	seen := map[string]bool{}
+	statusless := 0
 	for _, ref := range refs {
 		if ref.Repository == "" || ref.Number <= 0 {
 			continue
@@ -313,7 +316,17 @@ func (b *BrowserBoard) recoverWithVision(ctx context.Context, target string, pag
 			continue
 		}
 		seen[key] = true
-		rows = append(rows, boardRow{Number: ref.Number, Repository: ref.Repository})
+		if ref.Status == "" {
+			statusless++
+		}
+		rows = append(rows, boardRow{Number: ref.Number, Repository: ref.Repository, Status: ref.Status})
+	}
+	if statusless > 0 {
+		// An item the screenshot showed no status for cannot be dispatched,
+		// because the ready-state gate has nothing to match. Saying so is the
+		// point: a recovered board that stays quiet must not look like a
+		// recovered board with nothing to do.
+		b.Vision.log("browser vision: %d of %d recovered item(s) on %s came back with no Status column, so the ready-state gate will not dispatch them; fix the board extractor rather than relying on this", statusless, len(rows), cause.URL)
 	}
 	return rows
 }

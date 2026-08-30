@@ -129,10 +129,10 @@ func TestBrowserBoardVisionSpendsOneScreenshotPerCooldownAndStopsAtTheSharedCap(
 func TestBrowserBoardVisionRecoveredReferencesBecomeAddressableIssues(t *testing.T) {
 	clock := &visionClock{step: browserWatchInterval}
 	answer := []browserVisionRef{
-		{Repository: "lsegal/glorp", Number: 412},
-		{Repository: "lsegal/yard", Number: 398},
+		{Repository: "lsegal/glorp", Number: 412, Status: "Todo"},
+		{Repository: "lsegal/yard", Number: 398, Status: "In Progress"},
 		// The same item twice is what a scrolled screenshot can look like.
-		{Repository: "lsegal/glorp", Number: 412},
+		{Repository: "lsegal/glorp", Number: 412, Status: "Todo"},
 	}
 	vision, asks, _ := testVisionRefs(t, browserVisionRunLimit, browserVisionCooldown, clock, answer, true)
 	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
@@ -149,9 +149,13 @@ func TestBrowserBoardVisionRecoveredReferencesBecomeAddressableIssues(t *testing
 		t.Fatalf("recovered %d issues, want 2 de-duplicated: %+v", len(issues), issues)
 	}
 	want := []string{"lsegal/glorp#412", "lsegal/yard#398"}
+	wantStatus := []string{"Todo", "In Progress"}
 	for i, issue := range issues {
 		if got := fmt.Sprintf("%s#%d", issue.Repository, issue.Number); got != want[i] {
 			t.Fatalf("issue %d is %q, want %q", i, got, want[i])
+		}
+		if issue.ProjectStatus != wantStatus[i] {
+			t.Fatalf("issue %d has status %q, want %q", i, issue.ProjectStatus, wantStatus[i])
 		}
 	}
 	// The recovery is not free for the rest of the window: the push-mode probe
@@ -205,5 +209,96 @@ func TestBrowserBoardWithoutVisionNeverScreenshots(t *testing.T) {
 	}
 	if page.screenshots != 0 {
 		t.Fatalf("the default build took %d screenshot(s)", page.screenshots)
+	}
+}
+
+// Recovering a board is only worth anything if the issues it recovers can
+// actually be dispatched. The Status column the agent reads off the screenshot
+// is what the ready-state gate matches, so an item the board shows as "Todo"
+// passes that gate under the default ready state exactly like an item the DOM
+// extractor read (issue #398).
+func TestBrowserBoardVisionRecoveredItemsDispatchUnderTheDefaultReadyState(t *testing.T) {
+	clock := &visionClock{step: browserWatchInterval}
+	answer := []browserVisionRef{
+		{Repository: "lsegal/glorp", Number: 412, Status: "Todo"},
+		{Repository: "lsegal/yard", Number: 398, Status: "Done"},
+	}
+	vision, _, _ := testVisionRefs(t, browserVisionRunLimit, browserVisionCooldown, clock, answer, true)
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	board := newVisionBoard(page, vision)
+
+	issues, err := board.ListIssues(context.Background(), boardTarget)
+	if err != nil {
+		t.Fatalf("expected the fallback to recover the board: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("recovered %d issues, want 2: %+v", len(issues), issues)
+	}
+	// The default ready state is Todo/Ready, so the first item dispatches and
+	// the finished one does not.
+	if !shouldDispatchIssue(boardTarget, issues[0], false, false, false, false, "") {
+		t.Fatalf("a recovered %q item is not a dispatch candidate", issues[0].ProjectStatus)
+	}
+	if shouldDispatchIssue(boardTarget, issues[1], false, false, false, false, "") {
+		t.Fatalf("a recovered %q item is a dispatch candidate", issues[1].ProjectStatus)
+	}
+	// A configured --ready-state is matched the same way.
+	if !shouldDispatchIssue(boardTarget, issues[1], false, false, false, false, "Done") {
+		t.Fatalf("a recovered item does not honour a configured ready state")
+	}
+}
+
+// A board that genuinely shows an item no status leaves it undispatchable,
+// because there is nothing for the ready-state gate to match and guessing one
+// is exactly what this fallback must not do. The run has to say so: a quiet
+// recovered board must not look like a recovered board with nothing to do.
+func TestBrowserBoardVisionSaysWhyAStatuslessItemStaysQuiet(t *testing.T) {
+	clock := &visionClock{step: browserWatchInterval}
+	answer := []browserVisionRef{
+		{Repository: "lsegal/glorp", Number: 412, Status: "Todo"},
+		{Repository: "lsegal/yard", Number: 398},
+	}
+	vision, _, logs := testVisionRefs(t, browserVisionRunLimit, browserVisionCooldown, clock, answer, true)
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	board := newVisionBoard(page, vision)
+
+	issues, err := board.ListIssues(context.Background(), boardTarget)
+	if err != nil {
+		t.Fatalf("expected the fallback to recover the board: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("recovered %d issues, want 2: %+v", len(issues), issues)
+	}
+	if issues[1].ProjectStatus != "" {
+		t.Fatalf("a statusless item was given a status: %q", issues[1].ProjectStatus)
+	}
+	if shouldDispatchIssue(boardTarget, issues[1], false, false, false, false, "") {
+		t.Fatal("an item with no status was treated as ready")
+	}
+	joined := strings.Join(*logs, "\n")
+	if !strings.Contains(joined, "1 of 2 recovered item(s)") || !strings.Contains(joined, "no Status column") {
+		t.Fatalf("the run did not say why the recovered board is quiet:\n%s", joined)
+	}
+	if !strings.Contains(joined, "will not dispatch them") {
+		t.Fatalf("the log does not name the consequence:\n%s", joined)
+	}
+}
+
+// The status the agent reads is used verbatim, so an item parked in the column
+// a glorp instance claims work with is recognised as claimed rather than
+// dispatched afresh.
+func TestBrowserBoardVisionRecoveredInProgressItemIsRecognised(t *testing.T) {
+	clock := &visionClock{step: browserWatchInterval}
+	answer := []browserVisionRef{{Repository: "lsegal/glorp", Number: 412, Status: "In Progress"}}
+	vision, _, _ := testVisionRefs(t, browserVisionRunLimit, browserVisionCooldown, clock, answer, true)
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	board := newVisionBoard(page, vision)
+
+	issues, err := board.ListIssues(context.Background(), boardTarget)
+	if err != nil {
+		t.Fatalf("expected the fallback to recover the board: %v", err)
+	}
+	if !projectItemInProgress(boardTarget, issues[0]) {
+		t.Fatalf("a recovered %q item is not seen as claimed work", issues[0].ProjectStatus)
 	}
 }

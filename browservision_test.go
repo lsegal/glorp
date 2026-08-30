@@ -381,15 +381,26 @@ func TestParseBrowserVisionRefsQualified(t *testing.T) {
 		want    []browserVisionRef
 		wantErr bool
 	}{
-		{name: "qualified array", output: `["octocat/hello-world#412","octocat/spoon-knife#398"]`, want: []browserVisionRef{{Repository: "octocat/hello-world", Number: 412}, {Repository: "octocat/spoon-knife", Number: 398}}},
+		{name: "qualified array", output: `[{"ref":"octocat/hello-world#412","status":"Todo"},{"ref":"octocat/spoon-knife#398","status":"In Progress"}]`, want: []browserVisionRef{{Repository: "octocat/hello-world", Number: 412, Status: "Todo"}, {Repository: "octocat/spoon-knife", Number: 398, Status: "In Progress"}}},
 		{name: "empty array", output: "[]"},
-		{name: "trailing narration is tolerated", output: "Reading the board.\n[\"o/r#7\"]\n", want: []browserVisionRef{{Repository: "o/r", Number: 7}}},
+		{name: "trailing narration is tolerated", output: "Reading the board.\n[{\"ref\":\"o/r#7\",\"status\":\"Ready\"}]\n", want: []browserVisionRef{{Repository: "o/r", Number: 7, Status: "Ready"}}},
+		// An item the board shows no status for is a real answer, not a parse
+		// failure: the caller keeps it addressable and says loudly that the
+		// ready-state gate will not dispatch it.
+		{name: "an empty status is kept", output: `[{"ref":"o/r#7","status":""}]`, want: []browserVisionRef{{Repository: "o/r", Number: 7}}},
+		{name: "a missing status field reads as empty", output: `[{"ref":"o/r#7"}]`, want: []browserVisionRef{{Repository: "o/r", Number: 7}}},
+		{name: "a status is trimmed", output: `[{"ref":"o/r#7","status":"  Todo  "}]`, want: []browserVisionRef{{Repository: "o/r", Number: 7, Status: "Todo"}}},
+		{name: "the old bare-string shape is rejected", output: `["octocat/hello-world#412"]`, wantErr: true},
 		{name: "bare numbers are rejected", output: "[412,398]", wantErr: true},
 		{name: "bare number strings are rejected", output: `["412"]`, wantErr: true},
-		{name: "a repository without an owner is rejected", output: `["repo#412"]`, wantErr: true},
-		{name: "a reference without a number is rejected", output: `["o/r#"]`, wantErr: true},
-		{name: "zero is not an issue", output: `["o/r#0"]`, wantErr: true},
-		{name: "a full URL is rejected", output: `["https://github.com/o/r/issues/412"]`, wantErr: true},
+		{name: "a repository without an owner is rejected", output: `[{"ref":"repo#412","status":"Todo"}]`, wantErr: true},
+		{name: "a reference without a number is rejected", output: `[{"ref":"o/r#","status":"Todo"}]`, wantErr: true},
+		{name: "zero is not an issue", output: `[{"ref":"o/r#0","status":"Todo"}]`, wantErr: true},
+		{name: "a full URL is rejected", output: `[{"ref":"https://github.com/o/r/issues/412","status":"Todo"}]`, wantErr: true},
+		{name: "an extra field is a different shape", output: `[{"ref":"o/r#7","status":"Todo","title":"one"}]`, wantErr: true},
+		{name: "a non-string status is rejected", output: `[{"ref":"o/r#7","status":3}]`, wantErr: true},
+		{name: "prose in the status field is rejected", output: `[{"ref":"o/r#7","status":"The board groups this item under the Todo column, I think"}]`, wantErr: true},
+		{name: "a multi-line status is rejected", output: `[{"ref":"o/r#7","status":"Todo\nReady"}]`, wantErr: true},
 		{name: "prose only", output: "The board shows o/r#12.", wantErr: true},
 		{name: "object", output: `{"issues":["o/r#12"]}`, wantErr: true},
 	}
@@ -438,6 +449,14 @@ func TestBrowserVisionArgs(t *testing.T) {
 	}
 	if strings.Contains(boardPrompt, "[412,398,377]") {
 		t.Fatalf("the board prompt offers a bare-number example: %q", boardPrompt)
+	}
+	// The Status column is what the ready-state gate reads, so the board
+	// prompt has to ask for it, verbatim rather than guessed (issue #398).
+	if !strings.Contains(boardPrompt, `"status"`) || !strings.Contains(boardPrompt, "Status column") {
+		t.Fatalf("the board prompt does not ask for the Status column: %q", boardPrompt)
+	}
+	if !strings.Contains(boardPrompt, "do not guess one") {
+		t.Fatalf("the board prompt does not forbid guessing a status: %q", boardPrompt)
 	}
 }
 
