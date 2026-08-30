@@ -258,13 +258,15 @@ func runWatch(args []string) int {
 		//
 		// The screenshot fallback is a safety net for a markup change, not
 		// part of polling: without -browser-vision no screenshot is ever
-		// taken and no agent is ever called by the issue source.
+		// taken and no agent is ever called by the issue source or the board
+		// reader. Both share one browserVision, so the per-run cap is a single
+		// budget across issue pages and project boards (issue #393).
 		var vision *browserVision
 		if browserOptions.Vision {
 			runner, _ := w.Runner.(CommandRunner)
 			vision = newBrowserVision(runner, w.logf)
 		}
-		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
+		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues, vision)
 		w.Issues = browserWatchIssues{
 			Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf),
 			Board: board,

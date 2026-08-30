@@ -59,7 +59,20 @@ func (c *visionClock) Now() time.Time {
 }
 
 // testVision builds a fallback with a recorded asker and a controllable clock.
+// The asker answers with bare numbers and fails the test if it is asked for a
+// qualified answer, so the repository path's contract is checked in place.
 func testVision(t *testing.T, limit int, cooldown time.Duration, clock *visionClock, answer []int) (*browserVision, *int, *[]string) {
+	t.Helper()
+	refs := make([]browserVisionRef, 0, len(answer))
+	for _, number := range answer {
+		refs = append(refs, browserVisionRef{Number: number})
+	}
+	return testVisionRefs(t, limit, cooldown, clock, refs, false)
+}
+
+// testVisionRefs is the same seam for either answer shape. wantQualified is the
+// shape the source under test is expected to ask for.
+func testVisionRefs(t *testing.T, limit int, cooldown time.Duration, clock *visionClock, answer []browserVisionRef, wantQualified bool) (*browserVision, *int, *[]string) {
 	t.Helper()
 	asks := 0
 	var logs []string
@@ -68,8 +81,11 @@ func testVision(t *testing.T, limit int, cooldown time.Duration, clock *visionCl
 		limit:    limit,
 		now:      clock.Now,
 		lastCall: map[string]time.Time{},
-		ask: func(context.Context, []byte, string) ([]int, error) {
+		ask: func(_ context.Context, _ []byte, _ string, qualified bool) ([]browserVisionRef, error) {
 			asks++
+			if qualified != wantQualified {
+				t.Errorf("vision asked with qualified=%v, want %v", qualified, wantQualified)
+			}
 			return answer, nil
 		},
 		logf: func(format string, args ...interface{}) {
@@ -260,7 +276,7 @@ func TestBrowserVisionDiscardsAnUnparseableAnswerWithoutRetrying(t *testing.T) {
 		limit:    browserVisionRunLimit,
 		now:      clock.Now,
 		lastCall: map[string]time.Time{},
-		ask: func(context.Context, []byte, string) ([]int, error) {
+		ask: func(context.Context, []byte, string, bool) ([]browserVisionRef, error) {
 			asks++
 			return nil, errors.New("not a JSON array")
 		},
@@ -330,7 +346,56 @@ func TestParseBrowserVisionNumbers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseBrowserVisionNumbers(tc.output)
+			got, err := parseBrowserVisionRefs(tc.output, false)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			numbers := make([]int, 0, len(got))
+			for _, ref := range got {
+				if ref.Repository != "" {
+					t.Fatalf("a bare-number answer named a repository: %+v", ref)
+				}
+				numbers = append(numbers, ref.Number)
+			}
+			if fmt.Sprint(numbers) != fmt.Sprint(tc.want) {
+				t.Fatalf("got %v, want %v", numbers, tc.want)
+			}
+		})
+	}
+}
+
+// A project board spans repositories, so its answers must name one. The parser
+// is exactly as strict here as it is for bare numbers, and the two shapes are
+// mutually exclusive: a bare-number answer to a board is discarded, because the
+// numbers it names cannot be resolved to addressable issues.
+func TestParseBrowserVisionRefsQualified(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  string
+		want    []browserVisionRef
+		wantErr bool
+	}{
+		{name: "qualified array", output: `["octocat/hello-world#412","octocat/spoon-knife#398"]`, want: []browserVisionRef{{Repository: "octocat/hello-world", Number: 412}, {Repository: "octocat/spoon-knife", Number: 398}}},
+		{name: "empty array", output: "[]"},
+		{name: "trailing narration is tolerated", output: "Reading the board.\n[\"o/r#7\"]\n", want: []browserVisionRef{{Repository: "o/r", Number: 7}}},
+		{name: "bare numbers are rejected", output: "[412,398]", wantErr: true},
+		{name: "bare number strings are rejected", output: `["412"]`, wantErr: true},
+		{name: "a repository without an owner is rejected", output: `["repo#412"]`, wantErr: true},
+		{name: "a reference without a number is rejected", output: `["o/r#"]`, wantErr: true},
+		{name: "zero is not an issue", output: `["o/r#0"]`, wantErr: true},
+		{name: "a full URL is rejected", output: `["https://github.com/o/r/issues/412"]`, wantErr: true},
+		{name: "prose only", output: "The board shows o/r#12.", wantErr: true},
+		{name: "object", output: `{"issues":["o/r#12"]}`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseBrowserVisionRefs(tc.output, true)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got %v", got)
@@ -348,20 +413,31 @@ func TestParseBrowserVisionNumbers(t *testing.T) {
 }
 
 func TestBrowserVisionArgs(t *testing.T) {
-	codex := browserVisionArgs(agentSpec{Name: "codex", Model: "gpt-5"}, false, "/tmp/shot.png", "https://github.com/o/r/issues")
+	codex := browserVisionArgs(agentSpec{Name: "codex", Model: "gpt-5"}, false, "/tmp/shot.png", "https://github.com/o/r/issues", false)
 	if codex[0] != "exec" || codex[1] != "--image" || codex[2] != "/tmp/shot.png" {
 		t.Fatalf("codex is not given the image: %v", codex)
 	}
 	if !strings.Contains(codex[len(codex)-1], "strict JSON array") {
 		t.Fatalf("codex prompt does not ask for a strict array: %q", codex[len(codex)-1])
 	}
-	claude := browserVisionArgs(agentSpec{Name: "claude"}, false, "/tmp/shot.png", "https://github.com/o/r/issues")
+	claude := browserVisionArgs(agentSpec{Name: "claude"}, false, "/tmp/shot.png", "https://github.com/o/r/issues", false)
 	if claude[0] != "-p" {
 		t.Fatalf("claude is not run headlessly: %v", claude)
 	}
 	prompt := claude[len(claude)-1]
 	if !strings.Contains(prompt, "/tmp/shot.png") || !strings.Contains(prompt, "nothing else") {
 		t.Fatalf("claude prompt does not point at the image and constrain the answer: %q", prompt)
+	}
+	// A board target is asked for the qualified shape instead, and only that
+	// shape: an example of a bare number would invite the answer the parser
+	// discards.
+	board := browserVisionArgs(agentSpec{Name: "claude"}, false, "/tmp/shot.png", "https://github.com/orgs/o/projects/1", true)
+	boardPrompt := board[len(board)-1]
+	if !strings.Contains(boardPrompt, "OWNER/REPO#NUMBER") || !strings.Contains(boardPrompt, "several repositories") {
+		t.Fatalf("the board prompt does not ask for qualified references: %q", boardPrompt)
+	}
+	if strings.Contains(boardPrompt, "[412,398,377]") {
+		t.Fatalf("the board prompt offers a bare-number example: %q", boardPrompt)
 	}
 }
 
@@ -371,17 +447,17 @@ func TestBrowserVisionCapHoldsAcrossConcurrentTargets(t *testing.T) {
 	vision, asks, _ := testVision(t, browserVisionRunLimit, browserVisionCooldown, clock, []int{7})
 	var mu sync.Mutex
 	inner := vision.ask
-	vision.ask = func(ctx context.Context, image []byte, url string) ([]int, error) {
+	vision.ask = func(ctx context.Context, image []byte, url string, qualified bool) ([]browserVisionRef, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		return inner(ctx, image, url)
+		return inner(ctx, image, url, qualified)
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			vision.Recover(context.Background(), fmt.Sprintf("owner/repo%d", i), "url", "reason", func() ([]byte, error) { return []byte("png"), nil })
+			vision.Recover(context.Background(), fmt.Sprintf("owner/repo%d", i), "url", "reason", func() ([]byte, error) { return []byte("png"), nil }, false)
 		}(i)
 	}
 	wg.Wait()
