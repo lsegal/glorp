@@ -247,30 +247,9 @@ func runWatch(args []string) int {
 		return 1
 	}
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
-	if browser != nil {
-		// Browser mode reads the issue list off GitHub's own issues page and a
-		// project board off its Projects v2 page. Only the reads change:
-		// statuses and comments still go through gh, and the dispatch path
-		// downstream is untouched. Dispatch still needs the body and
-		// dependency state the issues page does not render, so the repository
-		// source hydrates newly seen candidates through gh's REST helpers;
-		// issues already in flight or completed are skipped (issue #381).
-		//
-		// The screenshot fallback is a safety net for a markup change, not
-		// part of polling: without -browser-vision no screenshot is ever
-		// taken and no agent is ever called by the issue source.
-		var vision *browserVision
-		if browserOptions.Vision {
-			runner, _ := w.Runner.(CommandRunner)
-			vision = newBrowserVision(runner, w.logf)
-		}
-		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
-		w.Issues = browserWatchIssues{
-			Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf),
-			Board: board,
-		}
-		w.Projects = board
-	}
+	// Browser mode reads issues and boards off GitHub's rendered pages instead
+	// of the API. A nil browser leaves the GHCLI sources above in place.
+	applyBrowserSources(w, browser, browserOptions, gh)
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
