@@ -167,39 +167,12 @@ func (e *browserExtractionError) Error() string {
 func (e *browserExtractionError) Is(target error) bool { return target == errBrowserExtraction }
 
 // browserIssuesURL builds the issues-page URL for a repository, carrying the
-// same filter the API path searches with as the page's own ?q= value. The "@me"
-// qualifiers are left as they are: the browser is signed in as the user, which
-// is exactly who "@me" means to GitHub's own search.
-//
-// "is:issue" and "state:open" are supplied only as defaults for a filter that
-// does not already say what to search for: the default filter opens with both
-// qualifiers itself, and repeating them would make the logged URL harder to
-// read and would contradict a filter that deliberately asked for something else
-// (a "--filter is:pr ..." must not become "is:issue ... is:pr").
+// same filter the API path searches with as the page's own ?q= value, built by
+// the same issueSearchTerms helper. The "@me" qualifiers are left as they are:
+// the browser is signed in as the user, which is exactly who "@me" means to
+// GitHub's own search.
 func browserIssuesURL(repo, filter string, allIssues bool) string {
-	if allIssues {
-		filter = ""
-	}
-	var kind, state bool
-	for _, term := range strings.Fields(filter) {
-		switch {
-		case strings.HasPrefix(term, "state:"), term == "is:open", term == "is:closed", term == "is:merged":
-			state = true
-		case strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
-			kind = true
-		}
-	}
-	var terms []string
-	if !kind {
-		terms = append(terms, "is:issue")
-	}
-	if !state {
-		terms = append(terms, "state:open")
-	}
-	if filter = strings.TrimSpace(filter); filter != "" {
-		terms = append(terms, filter)
-	}
-	query := strings.Join(terms, " ")
+	query := strings.Join(issueSearchTerms(filter, allIssues), " ")
 	return "https://github.com/" + repo + "/issues?" + url.Values{"q": {query}}.Encode()
 }
 
