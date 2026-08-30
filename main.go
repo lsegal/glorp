@@ -53,7 +53,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("codex-binary", "codex", "Codex executable")
 	flags.String("claude-binary", "claude", "Claude executable")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
-	flags.Var(filter, "filter", "GitHub issue search filter (repeatable)")
+	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
 	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
 	return flags
@@ -472,7 +472,7 @@ func closesIssue(body, repo string, number int) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
-const defaultIssueFilter = "is:issue state:open assignee:@me"
+const defaultIssueFilter = "is:issue state:open assignee:@me author:@me"
 
 type filterFlag struct {
 	values []string
