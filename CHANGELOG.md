@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hydrate browser-mode issues with the body and dependency/sub-issue state the rendered issues page does not carry, so `glorp watch -browser` blocks on dependencies and open sub-issues exactly like the API path does. The fetch is one targeted REST read plus the existing dependency lookup, made only for issues that are dispatch candidates this instance does not already have in flight or completed, and memoized for the life of the run: a poll whose issue list did not change makes no API calls at all, and no GraphQL query is ever issued.
+
 - Read the issue list from GitHub's own issues page when `glorp watch -browser` is used, instead of calling the GitHub API. Browser mode keeps one tab per watched repository, reloads it on each poll, and reads the rendered rows out of the page in a single evaluation, so polling spends no API quota, no agent tokens, and issues no GraphQL query. `-filter` and `-all-issues` keep their meaning, a list with no results is reported as no issues rather than an error, and a page that loads but cannot be read is reported once with its URL instead of on every poll.
 - Add an opt-in `glorp watch -browser` mode that drives GitHub through a headless Chrome instead of the GitHub API, with `-browser-profile` and `-browser-binary` to choose the profile directory and executable. Browser mode implies `-poll` (no webhook server and no ngrok tunnel are started), defaults `-interval` to 5s unless one is given, and fails with an actionable error when no Chromium-based browser can be launched. Without `-browser` nothing changes and no browser is started.
 
