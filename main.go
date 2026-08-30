@@ -59,6 +59,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.Bool("browser", false, "watch GitHub through a headless browser instead of the GitHub API (implies -poll)")
 	flags.String("browser-profile", "", "Chrome profile directory for browser mode (default: <config dir>/glorp/browser-data)")
 	flags.String("browser-binary", "", "Chrome/Chromium/Edge executable for browser mode")
+	flags.Bool("browser-vision", false, "in browser mode, let an agent read a screenshot of a page whose markup glorp no longer recognises (off by default, hard budget per run)")
 	return flags
 }
 
@@ -254,9 +255,18 @@ func runWatch(args []string) int {
 		// dependency state the issues page does not render, so the repository
 		// source hydrates newly seen candidates through gh's REST helpers;
 		// issues already in flight or completed are skipped (issue #381).
+		//
+		// The screenshot fallback is a safety net for a markup change, not
+		// part of polling: without -browser-vision no screenshot is ever
+		// taken and no agent is ever called by the issue source.
+		var vision *browserVision
+		if browserOptions.Vision {
+			runner, _ := w.Runner.(CommandRunner)
+			vision = newBrowserVision(runner, w.logf)
+		}
 		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
 		w.Issues = browserWatchIssues{
-			Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, w.logf),
+			Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf),
 			Board: board,
 		}
 		w.Projects = board

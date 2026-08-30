@@ -229,7 +229,15 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 		}
 	}
 	if !rendered {
-		return nil, fmt.Errorf("read project board %s: the board did not render within %s", target, time.Duration(b.attempts())*b.delay())
+		// A board that loaded but never drew its own markup is the same
+		// category of failure as an unrecognised issues page: GitHub served
+		// something, and glorp could not read it. Reporting it as
+		// errBrowserExtraction lets callers tell it apart from a navigation or
+		// HTTP failure the way they already can for the issues page.
+		return nil, &browserExtractionError{
+			URL:    boardURL(parsed, b.Filter, b.AllIssues),
+			Reason: fmt.Sprintf("the board did not render within %s", time.Duration(b.attempts())*b.delay()),
+		}
 	}
 
 	seen := map[string]bool{}
