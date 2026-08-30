@@ -18,7 +18,7 @@ Install and configure these tools before installing glorp:
 - [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with access to every repository glorp will watch.
 - [Node.js](https://nodejs.org/) and `npx`. The installer uses `npx` to install the bundled `gh-fix` and `gh-discuss` skills through skills.sh.
 - [ngrok](https://ngrok.com/) for the default webhook mode. Configure its authentication before starting glorp. ngrok is not required with `--poll`.
-- A Chromium-based browser ([Chrome](https://www.google.com/chrome/), Chromium, or Edge) for `--browser` mode. Only required with `--browser`, which needs no ngrok tunnel and no extra token. Safari cannot be used: it does not speak the DevTools Protocol.
+- A Chromium-based browser ([Chrome](https://www.google.com/chrome/), Chromium, or Edge) for `--browser` mode. Only required with `--browser`, which needs no ngrok tunnel and no extra token. Safari cannot be used: it does not speak the DevTools Protocol. Browser mode reads GitHub as a signed-in user would, and glorp's browser profile starts signed out, so run `glorp auth` once before watching anything private; see [`glorp auth`](#glorp-auth).
 - At least one supported coding agent: [Codex CLI](https://developers.openai.com/codex/cli/) (`codex`) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`).
 
 The Unix installer also requires `curl` and standard archive tools. The Windows installer requires PowerShell.
@@ -28,6 +28,15 @@ Authenticate the GitHub CLI before running glorp:
 ```sh
 gh auth login
 ```
+
+Browser mode needs no `gh` scopes of its own, but its browser profile does need a GitHub session. Sign it in once, before the first `glorp watch --browser` against a private repository or board:
+
+```sh
+glorp auth          # opens a browser window; sign in there
+glorp auth --status # confirm it took
+```
+
+The session is stored in the profile directory and survives later runs, so this is a one-time step per profile.
 
 Repository targets require permission to read issues, manage glorp's labels, and manage webhooks unless `--poll` is used. GitHub Project targets require the `read:project` scope to list items and the `project` scope to update their status. Push mode for organization-owned Projects also requires organization-owner access and the `admin:org_hook` scope:
 
@@ -179,7 +188,7 @@ For repository targets, opening an issue yourself and assigning it to yourself m
 
 Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--poll` to avoid starting an unused webhook tunnel for those targets.
 
-`--browser` selects a different transport for the same loop. The default mode reaches GitHub through the API: webhook deliveries arrive over an ngrok tunnel for instant refreshes, and `--interval` polling through `gh` (30s by default) covers everything webhooks do not. Browser mode instead launches one headless Chromium-based browser for the whole run, gives each target a tab on it, and reloads those pages on a short loop, reading what a signed-in user would see. There is no webhook server, no ngrok tunnel, and no API rate limit to stay under, which is why the interval defaults to 5s rather than 30s. Because it always polls, `--browser` is rejected rather than silently ignored when combined with `--listen`, `--webhook-path`, `--webhook-secret`, or `--ngrok-binary`, and a browser that cannot be launched is a fatal error instead of a quiet fallback to the API path.
+`--browser` selects a different transport for the same loop. The default mode reaches GitHub through the API: webhook deliveries arrive over an ngrok tunnel for instant refreshes, and `--interval` polling through `gh` (30s by default) covers everything webhooks do not. Browser mode instead launches one headless Chromium-based browser for the whole run, gives each target a tab on it, and reloads those pages on a short loop, reading what a signed-in user would see. There is no webhook server, no ngrok tunnel, and no API rate limit to stay under, which is why the interval defaults to 5s rather than 30s. Reading the pages a signed-in user sees means the browser profile has to be signed in: it starts empty, and a private repository or board renders as a 404, a 403, or a login wall until it has a session. `glorp auth` opens a visible window on that same profile so you can sign in once; `glorp watch` itself never opens a window, and Chrome allows only one process per profile directory, so signing in is a separate step rather than something a running watch does on the side. `glorp auth --status` reports the profile's current state without opening anything. Because it always polls, `--browser` is rejected rather than silently ignored when combined with `--listen`, `--webhook-path`, `--webhook-secret`, or `--ngrok-binary`, and a browser that cannot be launched is a fatal error instead of a quiet fallback to the API path.
 
 Reading a rendered page means depending on GitHub's markup, which can change. `--browser-vision` adds an opt-in safety net for that day: when the page extractor fails on a page that loaded fine, glorp hands a single screenshot to the configured agent and asks it for the issue numbers. It is bounded hard in code (one screenshot per target per 10 minutes, three per run, then off) and logs every call it makes, because the steady state is meant to be zero AI calls. Recovering a list this way is a signal that the extractor needs fixing, not a mode to run in.
 
