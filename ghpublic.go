@@ -176,19 +176,52 @@ func (g GHCLI) resolveSelfLogin(ctx context.Context) (string, error) {
 	return login, nil
 }
 
+// issueSearchTerms builds the search terms for filter, the query body shared by
+// the API path and the browser mode's page URL.
+//
+// "is:issue" and "state:open" are supplied only as defaults for a filter that
+// does not already say what to search for: the default filter opens with both
+// qualifiers itself, and repeating them would make the logged query harder to
+// read and would contradict a filter that deliberately asked for something else
+// (a "--filter is:pr ..." must not become "is:issue ... is:pr").
+//
+// allIssues drops the filter entirely, leaving the bare defaults.
+func issueSearchTerms(filter string, allIssues bool) []string {
+	if allIssues {
+		filter = ""
+	}
+	var kind, state bool
+	for _, term := range strings.Fields(filter) {
+		switch {
+		case strings.HasPrefix(term, "state:"), term == "is:open", term == "is:closed", term == "is:merged":
+			state = true
+		case strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
+			kind = true
+		}
+	}
+	var terms []string
+	if !kind {
+		terms = append(terms, "is:issue")
+	}
+	if !state {
+		terms = append(terms, "state:open")
+	}
+	if filter = strings.TrimSpace(filter); filter != "" {
+		terms = append(terms, filter)
+	}
+	return terms
+}
+
 // publicIssueSearchQuery builds the GitHub search-syntax query equivalent to
 // issueListArgs, substituting the "@me" search qualifier (meaningless to an
 // unauthenticated request) with the resolved login.
 func publicIssueSearchQuery(repo, filter string, allIssues bool, selfLogin string) string {
-	query := "repo:" + repo + " is:issue state:open"
-	if !allIssues && filter != "" {
-		if selfLogin != "" {
-			filter = strings.ReplaceAll(filter, "author:@me", "author:"+selfLogin)
-			filter = strings.ReplaceAll(filter, "assignee:@me", "assignee:"+selfLogin)
-		}
-		query += " " + filter
+	if !allIssues && selfLogin != "" {
+		filter = strings.ReplaceAll(filter, "author:@me", "author:"+selfLogin)
+		filter = strings.ReplaceAll(filter, "assignee:@me", "assignee:"+selfLogin)
 	}
-	return query
+	terms := append([]string{"repo:" + repo}, issueSearchTerms(filter, allIssues)...)
+	return strings.Join(terms, " ")
 }
 
 type searchIssueResult struct {

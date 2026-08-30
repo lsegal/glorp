@@ -242,10 +242,14 @@ func TestPublicIssueSearchQuery(t *testing.T) {
 		selfLogin string
 		want      string
 	}{
-		{name: "default filter substitutes self login", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open is:issue state:open assignee:lsegal author:lsegal"},
+		{name: "default filter substitutes self login without repeating qualifiers", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open assignee:lsegal author:lsegal"},
 		{name: "all issues ignores filter", repo: "owner/repo", filter: defaultIssueFilter, allIssues: true, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open"},
 		{name: "custom filter without author", repo: "owner/repo", filter: "label:bug", want: "repo:owner/repo is:issue state:open label:bug"},
 		{name: "author filter still substitutes self login", repo: "owner/repo", filter: "author:@me", selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open author:lsegal"},
+		{name: "filter naming its own kind is not contradicted", repo: "owner/repo", filter: "is:pr author:@me", selfLogin: "lsegal", want: "repo:owner/repo state:open is:pr author:lsegal"},
+		{name: "filter naming its own state is not contradicted", repo: "owner/repo", filter: "state:closed label:bug", want: "repo:owner/repo is:issue state:closed label:bug"},
+		{name: "filter naming kind and state keeps only the repo qualifier", repo: "owner/repo", filter: "type:issue is:closed", want: "repo:owner/repo type:issue is:closed"},
+		{name: "empty filter falls back to the defaults", repo: "owner/repo", want: "repo:owner/repo is:issue state:open"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := publicIssueSearchQuery(test.repo, test.filter, test.allIssues, test.selfLogin); got != test.want {
