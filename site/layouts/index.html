@@ -78,6 +78,7 @@
             <h2>It keeps going after you stop looking</h2>
             <p>A webhook delivery &mdash; or a poll, if you would rather skip the tunnel &mdash; surfaces the issue in seconds. glorp claims it with a signed comment so no two instances take the same ticket, then starts the agent.</p>
             <p class="muted">When a pull request closes, it sweeps for <code>#123</code> mentions and picks up whatever that unblocked. Sessions persist in <code>.glorp.json</code>, so a restart resumes instead of repeating.</p>
+            <p class="muted">Would rather skip the tunnel entirely? <code>glorp watch --browser</code> reads GitHub through a headless Chrome it drives itself &mdash; no ngrok, no API rate limit to ration. It always polls, every five seconds, on a browser profile of its own. Point it at another Chromium build with <code>--browser-binary</code>, or another profile directory with <code>--browser-profile</code>.</p>
           </div>
           <div class="loop-circle">
             <svg viewBox="0 0 520 520" aria-hidden="true">
@@ -177,6 +178,7 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
               <li><strong>GitHub CLI (gh)</strong><span>Authenticated with access to every repository glorp watches. Project targets need the <code>read:project</code> and <code>project</code> scopes.</span></li>
               <li><strong>Node.js and npx</strong><span>The installer uses <code>npx</code> to install the bundled gh-fix and gh-discuss skills through skills.sh.</span></li>
               <li><strong>ngrok</strong><span>For the default webhook mode; configure its auth before starting. Not required with <code>--poll</code>.</span></li>
+              <li><strong>Chrome, Chromium or Edge</strong><span>Only for <code>--browser</code> mode, which needs no ngrok tunnel and no extra token. Safari has no DevTools Protocol and cannot be used.</span></li>
               <li><strong>A coding agent</strong><span>At least one of Codex CLI (<code>codex</code>) or Claude Code (<code>claude</code>) on your PATH.</span></li>
             </ul>
             <p class="alert alert-important"><strong class="alert-title">Note.</strong> glorp launches agents non-interactively. Agent sandbox and permission controls remain enabled by default. <code>--yolo</code> disables those protections; use it only with repositories and issues whose contents you trust.</p>
