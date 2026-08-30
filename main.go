@@ -56,6 +56,9 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
 	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
+	flags.Bool("browser", false, "watch GitHub through a headless browser instead of the GitHub API (implies -poll)")
+	flags.String("browser-profile", "", "Chrome profile directory for browser mode (default: <config dir>/glorp/browser-data)")
+	flags.String("browser-binary", "", "Chrome/Chromium/Edge executable for browser mode")
 	return flags
 }
 
@@ -100,6 +103,11 @@ func runWatch(args []string) int {
 	statePath := flagValue[string](flags, "state")
 	allIssues := flagValue[bool](flags, "all-issues")
 	allowedCommenters := splitAllowedCommenters(flagValue[string](flags, "allowed-commenters"))
+	browserOptions, interval, poll, err := resolveBrowserWatch(flags, interval, poll)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	targets := flags.Args()
 	if len(targets) == 0 {
 		if repo, ok := originRemoteTarget(); ok {
@@ -144,6 +152,18 @@ func runWatch(args []string) int {
 	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
 	// cleanup did not run before the daemon returns (issue #260).
 	defer reapChildProcesses()
+	if browserOptions.Enabled {
+		// One browser for the whole run: every target gets a tab on it rather
+		// than a browser of its own. A browser that cannot start is fatal, since
+		// quietly falling back to the API path would answer a request for
+		// browser mode with something else entirely.
+		browser, err := startBrowser(ctx, browserOptions.config())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		defer func() { _ = browser.Close() }()
+	}
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), allIssues
 	if len(allowedCommenters) == 0 {
