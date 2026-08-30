@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 )
 
 // browserSignInScript reports whether the page glorp is looking at was served
@@ -48,6 +49,26 @@ func browserSignedOut(page browserPage) bool {
 	return state.SignedOut
 }
 
+// browserSignedOutStatus reports whether a main-frame status glorp just read a
+// page with is GitHub's way of hiding something from a signed-out session
+// rather than a genuine mistake in the target. GitHub answers a private
+// repository, a private board, and a deleted one identically -- 404 to anyone
+// not entitled to see it, 403 where it prefers to say so -- and the status
+// alone cannot tell the two apart. The page it served can: a session that is
+// signed in gets a 404 page stamped with its own login, so only a 404 served
+// to a signed-out profile is read as a sign-in signal, and a signed-in run
+// that really did mistype a repository still gets told it was a 404.
+//
+// The probe runs only on a failing status, so a page that loaded costs
+// nothing, and it piggybacks on the navigation the tick already made: no extra
+// request, no agent, no API call.
+func browserSignedOutStatus(page browserPage, status int) bool {
+	if status != http.StatusNotFound && status != http.StatusForbidden {
+		return false
+	}
+	return browserSignedOut(page)
+}
+
 // errBrowserSignedOut marks a page that came back with nothing because the
 // browser profile is not signed in to GitHub. Callers match it with errors.Is
 // to tell it apart from a page whose markup glorp could not read
@@ -61,12 +82,20 @@ var errBrowserSignedOut = errors.New("browser profile is signed out of GitHub")
 type browserSignedOutError struct {
 	URL     string
 	Profile string
+	// Status is the main-frame HTTP status the page was served with when that
+	// is what gave the session away (404 or 403), and zero when the diagnosis
+	// came from a page that loaded normally. It is carried so the recovery
+	// path can say which of the two it saw.
+	Status int
 }
 
 func (e *browserSignedOutError) Error() string {
 	where := "the browser profile"
 	if e.Profile != "" {
 		where = "the browser profile at " + e.Profile
+	}
+	if e.Status != 0 {
+		return fmt.Sprintf("GitHub returned HTTP %d for %s to %s, which is signed out of GitHub: a private repository or board is invisible to a signed-out session and is served the same 404 a missing one is. Run `glorp auth` to sign that profile in (the session persists), or point -browser-profile at a profile that already is", e.Status, e.URL, where)
 	}
 	return fmt.Sprintf("read %s while %s is signed out of GitHub, so \"@me\" in the filter matches nobody and private repositories are invisible: GitHub's own empty result is not glorp's issue list. Run `glorp auth` to sign that profile in (the session persists), or point -browser-profile at a profile that already is", e.URL, where)
 }

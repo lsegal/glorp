@@ -278,7 +278,9 @@ Signs the browser profile that `glorp watch --browser` reads GitHub with in to G
 
 `glorp auth` opens an ordinary, visible browser window on glorp's own profile at `https://github.com/login` and waits until the sign-in finishes, then closes it and prints the account it signed in as. The session lives in the profile directory, so it survives later `glorp watch` runs and only has to be done once per profile. glorp gives up after 5 minutes rather than leaving the window open indefinitely.
 
-Chrome allows only one process per profile directory, so stop a running `glorp watch --browser` (or point `--browser-profile` at a different directory) before signing in. On Linux with no display server — `DISPLAY` and `WAYLAND_DISPLAY` both unset — the command refuses to open a window and says so instead of hanging; sign in on a desktop session and point `--browser-profile` at that profile directory.
+`glorp watch --browser` also does this for you. When a poll reads a page GitHub served to a signed-out session — a 404 or a 403 on a repository or board you asked it to watch, or a page carrying GitHub's own signed-out markers — the run logs what it saw, stops its headless browser, opens the same login window on the same profile, and resumes polling once you have signed in. A sign-in that is declined, times out, or cannot happen is not offered again on the next poll: the run backs off (10 minutes, doubling to an hour), keeps watching in the meantime, and leaves `glorp auth` available at any time.
+
+Chrome allows only one process per profile directory, so stop a running `glorp watch --browser` (or point `--browser-profile` at a different directory) before signing in yourself. On Linux with no display server — `DISPLAY` and `WAYLAND_DISPLAY` both unset — the command refuses to open a window and says so instead of hanging; sign in on a desktop session and point `--browser-profile` at that profile directory.
 
 | Option | Default | Description |
 | --- | --- | --- |

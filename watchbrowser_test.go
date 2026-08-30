@@ -177,6 +177,25 @@ func TestResolveBrowserWatchRejectsVisionWithoutBrowserMode(t *testing.T) {
 	}
 }
 
+// browserPageReaders unwraps the sign-in guard browser mode's issue source is
+// wrapped in and returns the page readers underneath, so the wiring tests keep
+// asserting on the readers rather than on the guard (issue #379).
+func browserPageReaders(t *testing.T, source IssueSource) browserWatchIssues {
+	t.Helper()
+	guard, ok := source.(browserSignInGuard)
+	if !ok {
+		t.Fatalf("Issues = %T, want browserSignInGuard", source)
+	}
+	if guard.recovery == nil {
+		t.Fatal("the issue source has no sign-in recovery, so a signed-out profile is never recovered")
+	}
+	issues, ok := guard.source.(browserWatchIssues)
+	if !ok {
+		t.Fatalf("guarded source = %T, want browserWatchIssues", guard.source)
+	}
+	return issues
+}
+
 // The acceptance test for browser mode's wiring: with -browser the sources
 // Glorp actually reads through must be the browser-backed ones, not merely a
 // parsed flag. Issues goes to the page readers and the push-mode project probe
@@ -186,10 +205,7 @@ func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 	w := &Glorp{Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Out: io.Discard}
 	applyBrowserSources(w, &Browser{}, browserWatchOptions{Enabled: true}, gh)
 
-	issues, ok := w.Issues.(browserWatchIssues)
-	if !ok {
-		t.Fatalf("Issues = %T, want browserWatchIssues", w.Issues)
-	}
+	issues := browserPageReaders(t, w.Issues)
 	repos, ok := issues.Repos.(*browserIssueSource)
 	if !ok {
 		t.Fatalf("Issues.Repos = %T, want *browserIssueSource", issues.Repos)
@@ -241,10 +257,7 @@ func TestApplyBrowserSourcesAttachesVisionFallback(t *testing.T) {
 	w := &Glorp{Issues: gh, Projects: gh, Out: io.Discard}
 	applyBrowserSources(w, &Browser{}, browserWatchOptions{Enabled: true, Vision: true}, gh)
 
-	issues, ok := w.Issues.(browserWatchIssues)
-	if !ok {
-		t.Fatalf("Issues = %T, want browserWatchIssues", w.Issues)
-	}
+	issues := browserPageReaders(t, w.Issues)
 	repos, ok := issues.Repos.(*browserIssueSource)
 	if !ok {
 		t.Fatalf("Issues.Repos = %T, want *browserIssueSource", issues.Repos)

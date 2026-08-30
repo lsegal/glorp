@@ -113,9 +113,14 @@ func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions
 	}
 	repos := newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf)
 	board := newBrowserBoard(browser, gh.Filter, gh.AllIssues, vision, repos.browserHydration)
-	w.Issues = browserWatchIssues{
-		Repos: repos,
-		Board: board,
+	// A read that came back signed out is recovered in place: the run stops
+	// the headless browser, opens a login window on the same profile, and
+	// starts polling again once the sign-in lands (issue #379). The guard
+	// wraps the source rather than living inside it because both page readers
+	// reach the same conclusion the same way.
+	w.Issues = browserSignInGuard{
+		source:   browserWatchIssues{Repos: repos, Board: board},
+		recovery: newBrowserSignInRecovery(browser, options.config(), w.logf),
 	}
 	w.Projects = board
 }
