@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in `glorp watch -browser` mode that drives GitHub through a headless Chrome instead of the GitHub API, with `-browser-profile` and `-browser-binary` to choose the profile directory and executable. Browser mode implies `-poll` (no webhook server and no ngrok tunnel are started), defaults `-interval` to 5s unless one is given, and fails with an actionable error when no Chromium-based browser can be launched. Without `-browser` nothing changes and no browser is started.
+
 ## v1.2.23 - 2026-08-30
 
 - Require `author:@me` in addition to `assignee:@me` in the default `--filter`. Marking a repository issue ready for an agent now means opening it yourself *and* assigning it to yourself, so another user cannot trigger a run by assigning you an issue they filed.
