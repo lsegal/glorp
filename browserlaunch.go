@@ -23,6 +23,10 @@ type browserConfig struct {
 	Binary string
 	// Profile is an explicit profile directory (--browser-profile).
 	Profile string
+	// Headed launches a visible browser window instead of a headless one. It is
+	// how `glorp auth` puts a login form in front of the user, on the same
+	// profile the headless watch loop reads GitHub with.
+	Headed bool
 }
 
 const (
@@ -123,16 +127,20 @@ func freeBrowserPort() (int, error) {
 // browserLaunchArgs are the flags glorp launches the browser with. The new
 // headless mode is asked for by name because it is the one that behaves like a
 // real browser; the first-run and default-browser prompts would otherwise block
-// a fresh profile from ever reaching the DevTools endpoint.
-func browserLaunchArgs(profile string, port int) []string {
-	return []string{
-		"--headless=new",
-		"--disable-gpu",
+// a fresh profile from ever reaching the DevTools endpoint. A headed launch
+// drops the headless flags so a window actually appears, and keeps everything
+// else so it lands on the same profile and DevTools endpoint.
+func browserLaunchArgs(profile string, port int, headed bool) []string {
+	args := make([]string, 0, 6)
+	if !headed {
+		args = append(args, "--headless=new", "--disable-gpu")
+	}
+	return append(args,
 		"--no-first-run",
 		"--no-default-browser-check",
-		"--user-data-dir=" + profile,
-		"--remote-debugging-port=" + strconv.Itoa(port),
-	}
+		"--user-data-dir="+profile,
+		"--remote-debugging-port="+strconv.Itoa(port),
+	)
 }
 
 // browserDebugURL is the base URL of the DevTools endpoint on a given port.
@@ -151,7 +159,7 @@ type browserProcess struct {
 	profile string
 }
 
-// launchBrowser starts a headless browser against glorp's own profile and waits
+// launchBrowser starts a browser against glorp's own profile and waits
 // for its DevTools endpoint to answer. The browser is started as a tracked
 // child process, so glorp's existing orphan guards take it down on every exit
 // path, including one that runs no cleanup of its own.
@@ -171,7 +179,7 @@ func launchBrowser(ctx context.Context, config browserConfig) (*browserProcess, 
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, binary, browserLaunchArgs(profile, port)...)
+	cmd := exec.CommandContext(ctx, binary, browserLaunchArgs(profile, port, config.Headed)...)
 	// The browser writes a steady stream of diagnostics to standard error that
 	// would otherwise be painted over glorp's terminal UI.
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard

@@ -6,7 +6,10 @@ import (
 )
 
 // browserSignInScript reports whether the page glorp is looking at was served
-// to a signed-in GitHub session.
+// to a signed-in GitHub session. `glorp auth -status` asks the same question of
+// the home page and only needs the login; this one runs on whatever page a poll
+// just read, and needs the signed-out answer as its own positive evidence
+// rather than as the absence of a login.
 //
 // Both answers are read as positive evidence rather than as each other's
 // negation, because the diagnosis only helps when it is right: GitHub stamps a
@@ -65,7 +68,7 @@ func (e *browserSignedOutError) Error() string {
 	if e.Profile != "" {
 		where = "the browser profile at " + e.Profile
 	}
-	return fmt.Sprintf("read %s while %s is signed out of GitHub, so \"@me\" in the filter matches nobody and private repositories are invisible: GitHub's own empty result is not glorp's issue list. Sign that profile in to GitHub once (it persists), or point -browser-profile at a profile that already is", e.URL, where)
+	return fmt.Sprintf("read %s while %s is signed out of GitHub, so \"@me\" in the filter matches nobody and private repositories are invisible: GitHub's own empty result is not glorp's issue list. Run `glorp auth` to sign that profile in (the session persists), or point -browser-profile at a profile that already is", e.URL, where)
 }
 
 // Is reports errBrowserSignedOut so callers can match the category without

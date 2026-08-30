@@ -26,7 +26,7 @@ func TestBrowserSignedOutErrorIdentity(t *testing.T) {
 	if errors.Is(&browserExtractionError{URL: "u"}, errBrowserSignedOut) {
 		t.Fatalf("extraction error must not be mistaken for a signed-out read")
 	}
-	for _, want := range []string{"https://github.com/lsegal/glorp/issues", "/tmp/profile", "-browser-profile"} {
+	for _, want := range []string{"https://github.com/lsegal/glorp/issues", "/tmp/profile", "-browser-profile", "glorp auth"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("signed-out message %q does not mention %q", err.Error(), want)
 		}

@@ -185,7 +185,7 @@ func TestFreeBrowserPortIsUsable(t *testing.T) {
 }
 
 func TestBrowserLaunchArgs(t *testing.T) {
-	args := browserLaunchArgs("/profiles/glorp", 4321)
+	args := browserLaunchArgs("/profiles/glorp", 4321, false)
 	want := []string{
 		"--headless=new",
 		"--disable-gpu",

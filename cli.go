@@ -61,6 +61,22 @@ Flags:`,
 			run: runUICommand,
 		},
 		{
+			name:    "auth",
+			summary: "Sign glorp's browser profile in to GitHub for -browser mode",
+			usage: `Usage: glorp auth [flags]
+
+Sign the browser profile that "glorp watch -browser" reads GitHub with in to
+GitHub. glorp opens a normal browser window on its own profile at GitHub's login
+page and waits until the sign-in finishes, then closes it again; the session is
+stored in the profile and survives later watch runs.
+
+Chrome allows one process per profile directory, so stop a running
+"glorp watch -browser" (or pass a different -browser-profile) before signing in.
+
+Flags:`,
+			run: runAuthCommand,
+		},
+		{
 			name:    "version",
 			summary: "Print the glorp version",
 			usage:   "Usage: glorp version",
