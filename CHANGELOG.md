@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in `glorp watch -browser -browser-vision` safety net for the day GitHub's markup changes: when the issues page loads but its rows cannot be read, glorp hands one screenshot to the configured agent and asks for the issue numbers so the run keeps dispatching. It is off by default and never runs on a schedule, on a successful read, on an empty list, or on a page that failed to load. The budget is enforced in code — one screenshot per target per 10 minutes and three per run, after which the fallback turns itself off for the rest of the run — every call is logged with its reason and running count, and an answer that is not a bare JSON list of issue numbers is discarded rather than retried.
+
 - Read the issue list from GitHub's own issues page when `glorp watch -browser` is used, instead of calling the GitHub API. Browser mode keeps one tab per watched repository, reloads it on each poll, and reads the rendered rows out of the page in a single evaluation, so polling spends no API quota, no agent tokens, and issues no GraphQL query. `-filter` and `-all-issues` keep their meaning, a list with no results is reported as no issues rather than an error, and a page that loads but cannot be read is reported once with its URL instead of on every poll.
 - Add an opt-in `glorp watch -browser` mode that drives GitHub through a headless Chrome instead of the GitHub API, with `-browser-profile` and `-browser-binary` to choose the profile directory and executable. Browser mode implies `-poll` (no webhook server and no ngrok tunnel are started), defaults `-interval` to 5s unless one is given, and fails with an actionable error when no Chromium-based browser can be launched. Without `-browser` nothing changes and no browser is started.
 

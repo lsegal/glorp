@@ -41,6 +41,8 @@ the current directory's "origin" git remote when it points to GitHub.
 With -browser, glorp reads GitHub through a headless Chrome it signs in once
 and reuses, instead of the GitHub API. Browser mode always polls: no webhook
 server and no ngrok tunnel are started, and the poll interval defaults to 5s.
+-browser-vision additionally lets an agent recover the issue list from a single
+screenshot when GitHub's markup changes, under a hard per-run budget.
 
 Flags:`,
 			run: runWatch,

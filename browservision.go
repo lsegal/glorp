@@ -220,19 +220,20 @@ func browserVisionArgs(spec agentSpec, yolo bool, imagePath, pageURL string) []s
 	return append(args, prompt)
 }
 
-// parseBrowserVisionNumbers reads the JSON array the agent was asked for. The
-// last bracketed span is used so a model that narrates before answering is
-// still understood, but anything that is not a plain array of positive integers
-// is an error: a half-understood answer is worse than no answer, and it is
-// discarded rather than retried.
+// parseBrowserVisionNumbers reads the JSON array the agent was asked for. Only
+// the last non-empty line is considered, and it has to be a plain array of
+// positive integers on its own: a model that thinks out loud before answering
+// is still understood, but an array buried inside some other structure is not
+// the answer that was requested. Anything else is an error, and the caller
+// discards it rather than re-prompting.
 func parseBrowserVisionNumbers(output string) ([]int, error) {
-	start := strings.LastIndex(output, "[")
-	end := strings.LastIndex(output, "]")
-	if start < 0 || end < start {
-		return nil, fmt.Errorf("no JSON array in the agent's answer")
+	answer := lastNonEmptyLine(output)
+	answer = strings.TrimSpace(strings.Trim(answer, "`"))
+	if !strings.HasPrefix(answer, "[") || !strings.HasSuffix(answer, "]") {
+		return nil, fmt.Errorf("the agent answered with something other than a JSON array")
 	}
 	var numbers []int
-	if err := json.Unmarshal([]byte(output[start:end+1]), &numbers); err != nil {
+	if err := json.Unmarshal([]byte(answer), &numbers); err != nil {
 		return nil, fmt.Errorf("the agent's answer is not a JSON array of issue numbers: %w", err)
 	}
 	for _, number := range numbers {
@@ -241,4 +242,16 @@ func parseBrowserVisionNumbers(output string) ([]int, error) {
 		}
 	}
 	return numbers, nil
+}
+
+// lastNonEmptyLine returns the final line of text an agent printed, which is
+// where a one-line answer ends up regardless of what preceded it.
+func lastNonEmptyLine(output string) string {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return ""
 }
