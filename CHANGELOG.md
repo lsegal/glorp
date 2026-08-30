@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix `gh-fix` potentially resuming a CLOSED (unmerged) pull request when its branch name matched the `fix/issue-N-*` convention for the issue being fixed. The skill now only resumes an OPEN pull request, regardless of which signal matched it.
+
 ## v1.2.22 - 2026-08-30
 
 - Mark repository issues ready for an agent by assigning them to yourself instead of labelling them. The default `--filter` is now `is:issue state:open assignee:@me`, glorp no longer creates or manages the `agent-ready` label on watched repositories, and the `gh-fix` skill assigns follow-up issues to the authenticated user rather than labelling them.
