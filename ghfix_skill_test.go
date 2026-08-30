@@ -72,6 +72,19 @@ func TestGhFixPrefersSquashMerges(t *testing.T) {
 	}
 }
 
+func TestGhFixNeverReusesClosedPullRequest(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"Never reuse a CLOSED pull request, whether or not it was merged",
+		"only an OPEN pull request is eligible to resume, regardless of which signal matched it",
+		"otherwise proceed as if none was found, even if a closed one matched",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not forbid reusing a closed pull request %q", required)
+		}
+	}
+}
+
 func TestGhFixTreatsIdentityMentionsAsThreadedInstructions(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{
