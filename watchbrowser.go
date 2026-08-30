@@ -81,3 +81,41 @@ func explicitFlags(flags *flag.FlagSet) map[string]bool {
 	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	return set
 }
+
+// applyBrowserSources swaps the reads a run does for their browser-backed
+// equivalents. Browser mode reads the issue list off GitHub's own issues page
+// (issue #377) and a project board off its Projects v2 page (issue #378), both
+// through tabs on the one shared browser the run launched.
+//
+// Only reads move. Discussions has no REST API to trade for a page read,
+// comments drive the handoff handshake, and status writes have no stable page
+// affordance, so those stay on GHCLI. A nil browser means -browser was not
+// passed, and the run is left exactly as the API path built it.
+//
+// The board is built once and shared: it answers as the issue source for
+// project targets and as the push-mode ProjectState probe, and giving each of
+// those its own reader would open two tabs on the same board. Dispatch needs
+// the body and dependency state neither rendered page carries, so both readers
+// hydrate newly seen candidates through gh, sharing one memo so an issue costs
+// its REST calls once for the run whichever page found it (issues #381 and
+// #395), and the screenshot fallback is attached only when -browser-vision asked for
+// it (issue #384). One browserVision is built and shared by the repository
+// source and the board, so its per-run cap is a single budget for the run
+// rather than one per page kind (issue #393).
+func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions, gh GHCLI) {
+	if w == nil || browser == nil {
+		return
+	}
+	var vision *browserVision
+	if options.Vision {
+		runner, _ := w.Runner.(CommandRunner)
+		vision = newBrowserVision(runner, w.logf)
+	}
+	repos := newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf)
+	board := newBrowserBoard(browser, gh.Filter, gh.AllIssues, vision, repos.browserHydration)
+	w.Issues = browserWatchIssues{
+		Repos: repos,
+		Board: board,
+	}
+	w.Projects = board
+}
