@@ -32,6 +32,9 @@ func (p *fakeBoardPage) Navigate(url string) error {
 	return p.navErr
 }
 
+// Reload is part of the browserPage contract; board reads always navigate.
+func (p *fakeBoardPage) Reload() error { return p.navErr }
+
 func (p *fakeBoardPage) HTTPStatus() int {
 	if p.status == 0 {
 		return 200
@@ -82,7 +85,7 @@ func readBoardFixture(t *testing.T, name string) string {
 func newTestBoard(page *fakeBoardPage) (*BrowserBoard, *int) {
 	waits := 0
 	board := &BrowserBoard{
-		Page:  func(string) (boardPage, error) { return page, nil },
+		Page:  func(string) (browserPage, error) { return page, nil },
 		sleep: func(context.Context, time.Duration) bool { waits++; return true },
 	}
 	return board, &waits
@@ -380,7 +383,7 @@ func TestBrowserBoardReportsNavigationFailures(t *testing.T) {
 func TestBrowserBoardStopsOnCancelledContext(t *testing.T) {
 	page := &fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}
 	board := &BrowserBoard{
-		Page:  func(string) (boardPage, error) { return page, nil },
+		Page:  func(string) (browserPage, error) { return page, nil },
 		sleep: func(context.Context, time.Duration) bool { return false },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -398,20 +401,19 @@ func (s *stubIssueSource) ListIssues(_ context.Context, target string) ([]Issue,
 	return nil, nil
 }
 
-// TestBrowserIssueSourceRoutesOnlyProjectTargets pins the scope of browser
-// mode's reads: boards come off the page, repositories stay on the API path
-// until the issues-page extractor lands.
-func TestBrowserIssueSourceRoutesOnlyProjectTargets(t *testing.T) {
+// TestBrowserWatchIssuesRoutesByTarget pins which reader answers for which
+// target: a project goes to the board page, a repository to the issues page.
+func TestBrowserWatchIssuesRoutesByTarget(t *testing.T) {
 	page := &fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-table.html")}}
 	board, _ := newTestBoard(page)
 	api := &stubIssueSource{}
-	source := browserIssueSource{Board: board, API: api}
+	source := browserWatchIssues{Board: board, Repos: api}
 
 	if _, err := source.ListIssues(context.Background(), "https://github.com/users/lsegal/projects/3"); err != nil {
 		t.Fatalf("ListIssues for a project target: %v", err)
 	}
 	if len(api.targets) != 0 {
-		t.Errorf("project target reached the API path: %v", api.targets)
+		t.Errorf("project target reached the issues-page reader: %v", api.targets)
 	}
 	if len(page.navigated) != 1 {
 		t.Errorf("project target did not reach the board page: %v", page.navigated)
@@ -421,7 +423,7 @@ func TestBrowserIssueSourceRoutesOnlyProjectTargets(t *testing.T) {
 		t.Fatalf("ListIssues for a repository target: %v", err)
 	}
 	if len(api.targets) != 1 || api.targets[0] != "lsegal/glorp" {
-		t.Errorf("repository target reached %v, want the API path", api.targets)
+		t.Errorf("repository target reached %v, want the issues-page reader", api.targets)
 	}
 	if len(page.navigated) != 1 {
 		t.Errorf("repository target opened a page: %v", page.navigated)
@@ -433,8 +435,8 @@ func TestBrowserIssueSourceRoutesOnlyProjectTargets(t *testing.T) {
 func TestBrowserBoardSatisfiesTheWatchInterfaces(t *testing.T) {
 	var _ IssueSource = &BrowserBoard{}
 	var _ ProjectStateSource = &BrowserBoard{}
-	var _ IssueSource = browserIssueSource{}
-	var _ boardPage = &BrowserTab{}
+	var _ IssueSource = browserWatchIssues{}
+	var _ browserPage = &BrowserTab{}
 }
 
 // TestNormalizeStatus covers the label shapes a Status cell is written in.

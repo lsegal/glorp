@@ -15,16 +15,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-// boardPage is the slice of a browser tab that project-board extraction needs:
-// somewhere to point at a URL, the status that URL was served with, and a way
-// to run a script in the loaded page. Keeping it this narrow is what lets the
-// extractor be tested against captured board markup instead of a live board.
-type boardPage interface {
-	Navigate(url string) error
-	HTTPStatus() int
-	Eval(js string, out any) error
-}
-
 // BrowserBoard reads a Projects v2 board through its rendered page instead of
 // the projects(v2) GraphQL API, which is where the remaining GraphQL calls in
 // the watch loop live (issue #276). It satisfies both IssueSource and
@@ -37,7 +27,7 @@ type boardPage interface {
 // issues extracted here.
 type BrowserBoard struct {
 	// Page hands out the tab a target is read in, one tab per target.
-	Page func(name string) (boardPage, error)
+	Page func(name string) (browserPage, error)
 	// Filter and AllIssues mirror the GHCLI fields of the same name so the
 	// board page is asked for the same items the GraphQL query selects.
 	Filter    string
@@ -64,14 +54,18 @@ const (
 
 // newBrowserBoard builds the board reader for a run's browser, giving each
 // target its own tab so boards are reloaded rather than reopened.
-func newBrowserBoard(browser *Browser) *BrowserBoard {
-	return &BrowserBoard{Page: func(name string) (boardPage, error) {
-		tab, err := browser.Tab(name)
-		if err != nil {
-			return nil, err
-		}
-		return tab, nil
-	}}
+func newBrowserBoard(browser *Browser, filter string, allIssues bool) *BrowserBoard {
+	return &BrowserBoard{
+		Page: func(name string) (browserPage, error) {
+			tab, err := browser.Tab(name)
+			if err != nil {
+				return nil, err
+			}
+			return tab, nil
+		},
+		Filter:    filter,
+		AllIssues: allIssues,
+	}
 }
 
 // boardDocumentScript returns the page as it currently stands. Extraction is
@@ -262,7 +256,7 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 
 // harvest reads the page once, reporting the items it shows and whether the
 // board has rendered at all yet.
-func (b *BrowserBoard) harvest(page boardPage) ([]boardRow, bool, error) {
+func (b *BrowserBoard) harvest(page browserPage) ([]boardRow, bool, error) {
 	document := ""
 	if err := page.Eval(boardDocumentScript, &document); err != nil {
 		return nil, false, err
@@ -572,17 +566,20 @@ func collectNodes(root *html.Node, want func(*html.Node) bool) []*html.Node {
 	return found
 }
 
-// browserIssueSource sends project-board targets to the browser and leaves
-// every other target on the API path, which is where repository issue lists
-// stay until the issues-page extractor lands (issue #377).
-type browserIssueSource struct {
+// browserWatchIssues is browser mode's issue source. The two page readers
+// answer for different targets — a repository has an issues page, a project has
+// a board — so a run needs both, and each target goes to the one that can read
+// it.
+type browserWatchIssues struct {
+	// Repos reads a repository's rendered issues page (issue #377).
+	Repos IssueSource
+	// Board reads a project's rendered Projects v2 page (issue #378).
 	Board *BrowserBoard
-	API   IssueSource
 }
 
-func (s browserIssueSource) ListIssues(ctx context.Context, target string) ([]Issue, error) {
+func (s browserWatchIssues) ListIssues(ctx context.Context, target string) ([]Issue, error) {
 	if isProjectTarget(target) {
 		return s.Board.ListIssues(ctx, target)
 	}
-	return s.API.ListIssues(ctx, target)
+	return s.Repos.ListIssues(ctx, target)
 }

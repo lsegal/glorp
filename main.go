@@ -152,31 +152,22 @@ func runWatch(args []string) int {
 	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
 	// cleanup did not run before the daemon returns (issue #260).
 	defer reapChildProcesses()
-	var board *BrowserBoard
+	var browser *Browser
 	if browserOptions.Enabled {
 		// One browser for the whole run: every target gets a tab on it rather
 		// than a browser of its own. A browser that cannot start is fatal, since
 		// quietly falling back to the API path would answer a request for
 		// browser mode with something else entirely.
-		browser, err := startBrowser(ctx, browserOptions.config())
+		started, err := startBrowser(ctx, browserOptions.config())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		browser = started
 		defer func() { _ = browser.Close() }()
-		board = newBrowserBoard(browser)
 	}
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), allIssues
-	// Browser mode reads project boards off their page instead of through the
-	// projects(v2) GraphQL API (issue #276). Every other target, and writing a
-	// status back, stays on the API path.
-	issueSource, projectState := IssueSource(gh), ProjectStateSource(gh)
-	if board != nil {
-		board.Filter, board.AllIssues = gh.Filter, gh.AllIssues
-		issueSource = browserIssueSource{Board: board, API: gh}
-		projectState = board
-	}
 	if len(allowedCommenters) == 0 {
 		// Defaults to the authenticated gh user, so a direct @/glorp:ID
 		// mention only fires for someone glorp already trusts (issue #294).
@@ -254,7 +245,19 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: issueSource, Discussions: gh, Status: gh, Comments: gh, Projects: projectState, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
+	if browser != nil {
+		// Browser mode reads the issue list off GitHub's own issues page and a
+		// project board off its Projects v2 page. Only the reads change:
+		// statuses and comments still go through gh, and the dispatch path
+		// downstream is untouched.
+		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
+		w.Issues = browserWatchIssues{
+			Repos: newBrowserIssueSource(browser, gh.Filter, gh.AllIssues, w.logf),
+			Board: board,
+		}
+		w.Projects = board
+	}
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
