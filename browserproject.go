@@ -32,6 +32,11 @@ type BrowserBoard struct {
 	// board page is asked for the same items the GraphQL query selects.
 	Filter    string
 	AllIssues bool
+	// hydration fills in the dispatch-only fields the board page cannot show,
+	// through the same candidate/memo helper the repository issues page uses
+	// (issue #395). Nil leaves board items unhydrated, which is what the
+	// extraction-only tests want.
+	hydration *browserHydration
 
 	// maxItems caps how many rows are read from one board, matching the cap
 	// the GraphQL path applies. maxScrolls caps how many times a virtualized
@@ -54,7 +59,7 @@ const (
 
 // newBrowserBoard builds the board reader for a run's browser, giving each
 // target its own tab so boards are reloaded rather than reopened.
-func newBrowserBoard(browser *Browser, filter string, allIssues bool) *BrowserBoard {
+func newBrowserBoard(browser *Browser, filter string, allIssues bool, hydration *browserHydration) *BrowserBoard {
 	return &BrowserBoard{
 		Page: func(name string) (browserPage, error) {
 			tab, err := browser.Tab(name)
@@ -65,6 +70,7 @@ func newBrowserBoard(browser *Browser, filter string, allIssues bool) *BrowserBo
 		},
 		Filter:    filter,
 		AllIssues: allIssues,
+		hydration: hydration,
 	}
 }
 
@@ -146,8 +152,13 @@ func (b *BrowserBoard) pause(ctx context.Context) bool {
 }
 
 // ListIssues reports the board's issues with the fields the dispatch gate
-// reads: number, repository, title, and the Status column. Bodies, labels, and
-// issue dependencies are not on the board page and are left unset.
+// reads: number, repository, title, and the Status column. The body and the
+// dependency/sub-issue state are not on the board page, so they are hydrated
+// afterwards through the shared helper, on the same budget the repository
+// issues page keeps: one targeted REST read per newly seen dispatch candidate,
+// memoized for the life of the run, never per tick and never for the whole
+// list. The Status column the board owns is not part of that hydration and
+// survives it.
 func (b *BrowserBoard) ListIssues(ctx context.Context, target string) ([]Issue, error) {
 	rows, err := b.readRows(ctx, target)
 	if err != nil {
@@ -161,6 +172,9 @@ func (b *BrowserBoard) ListIssues(ctx context.Context, target string) ([]Issue, 
 			Title:         row.Title,
 			ProjectStatus: row.Status,
 		})
+	}
+	if err := b.hydration.hydrateIssues(ctx, target, issues); err != nil {
+		return nil, err
 	}
 	return issues, nil
 }

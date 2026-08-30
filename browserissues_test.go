@@ -58,13 +58,14 @@ func newTestIssueSource(page *fakeBrowserPage, filter string, allIssues bool, lo
 		page.status = 200
 	}
 	return &browserIssueSource{
-		pageFor:   func(string) (browserPage, error) { return page, nil },
-		filter:    filter,
-		allIssues: allIssues,
-		logf:      logf,
-		reported:  map[string]bool{},
-		lastURL:   map[string]string{},
-		lastRows:  map[string]string{},
+		pageFor:          func(string) (browserPage, error) { return page, nil },
+		filter:           filter,
+		allIssues:        allIssues,
+		logf:             logf,
+		browserHydration: newBrowserHydration(nil, nil),
+		reported:         map[string]bool{},
+		lastURL:          map[string]string{},
+		lastRows:         map[string]string{},
 	}
 }
 

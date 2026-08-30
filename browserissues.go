@@ -45,14 +45,10 @@ type browserIssueSource struct {
 	filter    string
 	allIssues bool
 	logf      func(string, ...interface{})
-	// hydrate fetches the dispatch-only fields the issues page does not
-	// render. Nil leaves every extracted issue unhydrated, which is what the
-	// extraction-only tests want.
-	hydrate browserIssueHydrator
-	// handled reports issues this run already owns: work it has in flight or
-	// has already completed. Those are not dispatch candidates, so they are
-	// never worth a fetch. Nil treats every extracted issue as a candidate.
-	handled func(Issue) bool
+	// browserHydration is the shared candidate/memo hydration helper. It is
+	// embedded so the source's own hydrate, handled, and hydrated fields read
+	// and write the one memo the project board reader shares (issue #395).
+	*browserHydration
 	// vision is the bounded screenshot-to-agent fallback, or nil when
 	// -browser-vision was not passed. It is consulted only for the
 	// distinguishable extraction failure below, never for an empty or a
@@ -70,12 +66,6 @@ type browserIssueSource struct {
 	// lastRows fingerprints the issues each target last yielded, so a tick is
 	// logged when the list changes and stays silent when it does not.
 	lastRows map[string]string
-	// hydrated memoizes the hydrated fields per target and per "repo#number",
-	// so an issue costs its REST calls once for the life of the run. Entries
-	// for issues that are no longer candidates are dropped, which is what
-	// makes an issue that leaves and re-enters the candidate set hydrate
-	// again.
-	hydrated map[string]map[string]browserHydratedIssue
 }
 
 // browserIssueHydrator fills in the fields a rendered issues page does not
@@ -86,12 +76,45 @@ type browserIssueHydrator interface {
 }
 
 // browserHydratedIssue is the memoized result of one hydration: exactly the
-// fields the issues page cannot render and the dispatch path needs.
+// fields a rendered page cannot carry and the dispatch path needs. Title and
+// State are memoized too because the hydrator corrects them, and a cached tick
+// must yield the same issue a freshly hydrated one does.
 type browserHydratedIssue struct {
+	Title        string
 	Body         string
+	State        string
 	CreatedAt    time.Time
 	DependsOn    []IssueDependency
 	HasSubIssues bool
+}
+
+// browserHydration is the candidate selection and memoization both browser
+// page readers hydrate through: the repository issues page (issue #381) and
+// the Projects v2 board (issue #395). One instance is shared by both, keyed by
+// target, so the request budget below is a property of the whole run rather
+// than of either reader.
+type browserHydration struct {
+	// hydrate fetches the dispatch-only fields a rendered page does not
+	// render. Nil leaves every extracted issue unhydrated, which is what the
+	// extraction-only tests want.
+	hydrate browserIssueHydrator
+	// handled reports issues this run already owns: work it has in flight or
+	// has already completed. Those are not dispatch candidates, so they are
+	// never worth a fetch. Nil treats every extracted issue as a candidate.
+	handled func(Issue) bool
+
+	mu sync.Mutex
+	// hydrated memoizes the hydrated fields per target and per "repo#number",
+	// so an issue costs its REST calls once for the life of the run. Entries
+	// for issues that are no longer candidates are dropped, which is what
+	// makes an issue that leaves and re-enters the candidate set hydrate
+	// again.
+	hydrated map[string]map[string]browserHydratedIssue
+}
+
+// newBrowserHydration builds the shared hydration helper for a run.
+func newBrowserHydration(hydrate browserIssueHydrator, handled func(Issue) bool) *browserHydration {
+	return &browserHydration{hydrate: hydrate, handled: handled, hydrated: map[string]map[string]browserHydratedIssue{}}
 }
 
 // newBrowserIssueSource builds the issue source browser mode polls with,
@@ -105,16 +128,14 @@ func newBrowserIssueSource(browser *Browser, hydrate browserIssueHydrator, handl
 			}
 			return tab, nil
 		},
-		filter:    filter,
-		allIssues: allIssues,
-		vision:    vision,
-		logf:      logf,
-		hydrate:   hydrate,
-		handled:   handled,
-		reported:  map[string]bool{},
-		lastURL:   map[string]string{},
-		lastRows:  map[string]string{},
-		hydrated:  map[string]map[string]browserHydratedIssue{},
+		filter:           filter,
+		allIssues:        allIssues,
+		vision:           vision,
+		logf:             logf,
+		browserHydration: newBrowserHydration(hydrate, handled),
+		reported:         map[string]bool{},
+		lastURL:          map[string]string{},
+		lastRows:         map[string]string{},
 	}
 }
 
@@ -229,8 +250,9 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 	return issues, nil
 }
 
-// hydrateIssues fills in the body and dependency state the issues page does
-// not render, for the issues that could actually be dispatched from this tick.
+// hydrateIssues fills in the body and dependency state a rendered issues page
+// or project board does not carry, for the issues that could actually be
+// dispatched from this tick.
 //
 // The request budget this keeps is deliberate and is the whole point of the
 // browser transport: hydration is O(new candidate issues), never O(list) and
@@ -241,8 +263,8 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 // steady-state tick whose extraction is unchanged therefore makes zero
 // requests, and the requests it does make are plain REST GETs -- never a
 // GraphQL query.
-func (s *browserIssueSource) hydrateIssues(ctx context.Context, target string, issues []Issue) error {
-	if s.hydrate == nil {
+func (s *browserHydration) hydrateIssues(ctx context.Context, target string, issues []Issue) error {
+	if s == nil || s.hydrate == nil {
 		return nil
 	}
 	candidates := make(map[string]bool, len(issues))
@@ -268,7 +290,9 @@ func (s *browserIssueSource) hydrateIssues(ctx context.Context, target string, i
 			return err
 		}
 		s.storeHydration(target, key, browserHydratedIssue{
+			Title:        issue.Title,
 			Body:         issue.Body,
+			State:        issue.State,
 			CreatedAt:    issue.CreatedAt,
 			DependsOn:    issue.DependsOn,
 			HasSubIssues: issue.HasSubIssues,
@@ -280,7 +304,7 @@ func (s *browserIssueSource) hydrateIssues(ctx context.Context, target string, i
 
 // cachedHydration returns a target's memoized hydration for an issue, if it
 // still has one.
-func (s *browserIssueSource) cachedHydration(target, key string) (browserHydratedIssue, bool) {
+func (s *browserHydration) cachedHydration(target, key string) (browserHydratedIssue, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cached, ok := s.hydrated[target][key]
@@ -288,7 +312,7 @@ func (s *browserIssueSource) cachedHydration(target, key string) (browserHydrate
 }
 
 // storeHydration memoizes one issue's hydrated fields for the life of the run.
-func (s *browserIssueSource) storeHydration(target, key string, hydrated browserHydratedIssue) {
+func (s *browserHydration) storeHydration(target, key string, hydrated browserHydratedIssue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.hydrated == nil {
@@ -303,7 +327,7 @@ func (s *browserIssueSource) storeHydration(target, key string, hydrated browser
 // pruneHydration forgets the issues that are no longer candidates for this
 // target, so one that later re-enters the candidate set is fetched afresh
 // rather than dispatched from a stale body.
-func (s *browserIssueSource) pruneHydration(target string, candidates map[string]bool) {
+func (s *browserHydration) pruneHydration(target string, candidates map[string]bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key := range s.hydrated[target] {
@@ -314,12 +338,20 @@ func (s *browserIssueSource) pruneHydration(target string, candidates map[string
 }
 
 // applyBrowserHydration copies a memoized hydration back onto a freshly
-// extracted row.
+// extracted row. Only the fields a page cannot carry are written back, so the
+// ones the extraction legitimately owns -- a board item's ProjectStatus and
+// ProjectItemID above all -- survive hydration untouched.
 func applyBrowserHydration(issue *Issue, hydrated browserHydratedIssue) {
 	issue.Body = hydrated.Body
 	issue.CreatedAt = hydrated.CreatedAt
 	issue.DependsOn = hydrated.DependsOn
 	issue.HasSubIssues = hydrated.HasSubIssues
+	if hydrated.Title != "" {
+		issue.Title = hydrated.Title
+	}
+	if hydrated.State != "" {
+		issue.State = hydrated.State
+	}
 }
 
 // readPage points the tab at one page of the list and runs the extractor in it.

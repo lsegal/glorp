@@ -252,9 +252,10 @@ func runWatch(args []string) int {
 		// project board off its Projects v2 page. Only the reads change:
 		// statuses and comments still go through gh, and the dispatch path
 		// downstream is untouched. Dispatch still needs the body and
-		// dependency state the issues page does not render, so the repository
-		// source hydrates newly seen candidates through gh's REST helpers;
-		// issues already in flight or completed are skipped (issue #381).
+		// dependency state neither rendered page carries, so both readers
+		// hydrate newly seen candidates through gh's REST helpers, sharing one
+		// memo; issues already in flight or completed are skipped (issues #381
+		// and #395).
 		//
 		// The screenshot fallback is a safety net for a markup change, not
 		// part of polling: without -browser-vision no screenshot is ever
@@ -264,9 +265,10 @@ func runWatch(args []string) int {
 			runner, _ := w.Runner.(CommandRunner)
 			vision = newBrowserVision(runner, w.logf)
 		}
-		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
+		repos := newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf)
+		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues, repos.browserHydration)
 		w.Issues = browserWatchIssues{
-			Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf),
+			Repos: repos,
 			Board: board,
 		}
 		w.Projects = board
