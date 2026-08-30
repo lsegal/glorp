@@ -170,11 +170,36 @@ func (e *browserExtractionError) Is(target error) bool { return target == errBro
 // same filter the API path searches with as the page's own ?q= value. The "@me"
 // qualifiers are left as they are: the browser is signed in as the user, which
 // is exactly who "@me" means to GitHub's own search.
+//
+// "is:issue" and "state:open" are supplied only as defaults for a filter that
+// does not already say what to search for: the default filter opens with both
+// qualifiers itself, and repeating them would make the logged URL harder to
+// read and would contradict a filter that deliberately asked for something else
+// (a "--filter is:pr ..." must not become "is:issue ... is:pr").
 func browserIssuesURL(repo, filter string, allIssues bool) string {
-	query := "is:issue state:open"
-	if !allIssues && filter != "" {
-		query += " " + filter
+	if allIssues {
+		filter = ""
 	}
+	var kind, state bool
+	for _, term := range strings.Fields(filter) {
+		switch {
+		case strings.HasPrefix(term, "state:"), term == "is:open", term == "is:closed", term == "is:merged":
+			state = true
+		case strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
+			kind = true
+		}
+	}
+	var terms []string
+	if !kind {
+		terms = append(terms, "is:issue")
+	}
+	if !state {
+		terms = append(terms, "state:open")
+	}
+	if filter = strings.TrimSpace(filter); filter != "" {
+		terms = append(terms, filter)
+	}
+	query := strings.Join(terms, " ")
 	return "https://github.com/" + repo + "/issues?" + url.Values{"q": {query}}.Encode()
 }
 
