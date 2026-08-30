@@ -57,6 +57,16 @@ func (p *fakeAuthPage) Eval(_ string, out any) error {
 	return nil
 }
 
+// withHeadedEnvironment fixes the display-server answer for one test, so the
+// login flow can be exercised on a headless CI runner and the refusal can be
+// exercised on a desktop.
+func withHeadedEnvironment(t *testing.T, err error) {
+	t.Helper()
+	original := headedEnvironmentCheck
+	headedEnvironmentCheck = func() error { return err }
+	t.Cleanup(func() { headedEnvironmentCheck = original })
+}
+
 // withAuthSession swaps in a session backed by the given page for one test.
 func withAuthSession(t *testing.T, page *fakeAuthPage, err error) *[]browserConfig {
 	t.Helper()
@@ -183,6 +193,7 @@ func TestAuthStatusReportsLaunchFailure(t *testing.T) {
 }
 
 func TestAuthLoginOpensHeadedWindowAtLoginPage(t *testing.T) {
+	withHeadedEnvironment(t, nil)
 	page := &fakeAuthPage{logins: []string{"octocat"}}
 	configs := withAuthSession(t, page, nil)
 	var out strings.Builder
@@ -263,6 +274,18 @@ func TestWaitForGitHubLoginStopsWithTheContext(t *testing.T) {
 	cancel()
 	if _, err := waitForGitHubLogin(ctx, page, time.Hour); err == nil {
 		t.Fatal("waitForGitHubLogin ignored a cancelled context")
+	}
+}
+
+func TestAuthLoginRefusesWithoutADisplayServer(t *testing.T) {
+	withHeadedEnvironment(t, errors.New("no display server"))
+	configs := withAuthSession(t, &fakeAuthPage{logins: []string{"octocat"}}, nil)
+	var out strings.Builder
+	if _, err := authLogin(context.Background(), browserConfig{}, &out, time.Second); err == nil {
+		t.Fatal("authLogin opened a window on a machine with no display server")
+	}
+	if len(*configs) != 0 {
+		t.Fatalf("launched %d browsers before the environment check, want 0", len(*configs))
 	}
 }
 

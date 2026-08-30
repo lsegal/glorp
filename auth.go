@@ -120,7 +120,7 @@ func authStatus(ctx context.Context, config browserConfig, out io.Writer) (bool,
 // is driving the same profile; that is why the command exists as the manual,
 // documented path rather than something watch does on the side.
 func authLogin(ctx context.Context, config browserConfig, out io.Writer, timeout time.Duration) (string, error) {
-	if err := checkHeadedEnvironment(runtime.GOOS, os.Getenv); err != nil {
+	if err := headedEnvironmentCheck(); err != nil {
 		return "", err
 	}
 	config.Headed = true
@@ -170,6 +170,12 @@ func waitForGitHubLogin(ctx context.Context, page browserPage, timeout time.Dura
 		}
 	}
 }
+
+// headedEnvironmentCheck reports whether this machine can put a window on
+// screen at all. It is a variable so tests can exercise both answers without
+// depending on the display server the test runner happens to have, which a CI
+// runner does not.
+var headedEnvironmentCheck = func() error { return checkHeadedEnvironment(runtime.GOOS, os.Getenv) }
 
 // checkHeadedEnvironment refuses to open a login window where no window could
 // appear. On Linux a session with no display server would leave the user
