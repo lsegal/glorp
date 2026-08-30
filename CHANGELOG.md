@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Require `author:@me` in addition to `assignee:@me` in the default `--filter`. Marking a repository issue ready for an agent now means opening it yourself *and* assigning it to yourself, so another user cannot trigger a run by assigning you an issue they filed.
 - Fix `gh-fix` potentially resuming a CLOSED (unmerged) pull request when its branch name matched the `fix/issue-N-*` convention for the issue being fixed. The skill now only resumes an OPEN pull request, regardless of which signal matched it.
 
 ## v1.2.22 - 2026-08-30

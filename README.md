@@ -174,7 +174,7 @@ In the default mode, glorp:
 4. Queries GitHub for matching open issues and queues previously unhandled work.
 5. Starts the selected agent with `/gh-fix ISSUE_NUMBER` and tracks its output and result.
 
-For repository targets, assigning an issue to yourself marks it eligible for pickup; glorp's default filter only dispatches open issues assigned to the authenticated user. Ownership of a claimed issue is tracked entirely through the comment-based handoff protocol below rather than a label. Project items are moved through their configured status as work starts and finishes.
+For repository targets, opening an issue yourself and assigning it to yourself marks it eligible for pickup; glorp's default filter only dispatches open issues that the authenticated user both authored and is assigned to, so somebody else assigning you their issue cannot start a run. Ownership of a claimed issue is tracked entirely through the comment-based handoff protocol below rather than a label. Project items are moved through their configured status as work starts and finishes.
 
 Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--poll` to avoid starting an unused webhook tunnel for those targets.
 
@@ -220,7 +220,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--claude-binary PATH` | `claude` | Claude Code executable name or path. |
 | `--codex-binary PATH` | `codex` | Codex executable name or path. |
 | `--concurrency N` | `0` | Maximum concurrent agents across all targets. `0` is normalized to `3`; negative values are invalid. |
-| `--filter QUERY` | `is:issue state:open assignee:@me` | GitHub issue-search filter. Repeat the option to combine terms. The default `assignee:@me` filter applies to repository targets; Project targets default to all open project issues. |
+| `--filter QUERY` | `is:issue state:open assignee:@me author:@me` | GitHub issue-search filter. Repeat the option to combine terms. The default requires that you both opened the issue and assigned it to yourself, so another user cannot trigger a run by assigning you an issue they filed. It applies to repository targets; Project targets default to all open project issues. |
 | `--interval DURATION` | `30s` | Periodic GitHub synchronization interval. Uses Go duration syntax such as `10s`, `2m`, or `1h30m`; must be positive. |
 | `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | Deprecated and ignored. The public tunnel URL is read from the log of the ngrok process glorp starts. |

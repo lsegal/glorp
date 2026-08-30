@@ -242,7 +242,7 @@ func TestPublicIssueSearchQuery(t *testing.T) {
 		selfLogin string
 		want      string
 	}{
-		{name: "default filter substitutes self login", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open is:issue state:open assignee:lsegal"},
+		{name: "default filter substitutes self login", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open is:issue state:open assignee:lsegal author:lsegal"},
 		{name: "all issues ignores filter", repo: "owner/repo", filter: defaultIssueFilter, allIssues: true, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open"},
 		{name: "custom filter without author", repo: "owner/repo", filter: "label:bug", want: "repo:owner/repo is:issue state:open label:bug"},
 		{name: "author filter still substitutes self login", repo: "owner/repo", filter: "author:@me", selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open author:lsegal"},
@@ -582,5 +582,58 @@ func TestListCommentsUsesPublicAPIForPublicRepo(t *testing.T) {
 	}
 	if ranGH {
 		t.Fatal("ListComments() ran the gh CLI for a public repo")
+	}
+}
+
+// TestDefaultIssueFilterRequiresBothAssigneeAndAuthor pins the default filter to
+// requiring that the authenticated user both authored and is assigned to an
+// issue. Matching either qualifier alone would let anyone dispatch an agent by
+// assigning the authenticated user an issue they filed themselves.
+func TestDefaultIssueFilterRequiresBothAssigneeAndAuthor(t *testing.T) {
+	if defaultIssueFilter != "is:issue state:open assignee:@me author:@me" {
+		t.Fatalf("defaultIssueFilter = %q, want both assignee:@me and author:@me", defaultIssueFilter)
+	}
+	query := publicIssueSearchQuery("owner/repo", defaultIssueFilter, false, "lsegal")
+	for _, want := range []string{"assignee:lsegal", "author:lsegal"} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("publicIssueSearchQuery() = %q, want it to contain %q", query, want)
+		}
+	}
+	if strings.Contains(query, "@me") {
+		t.Fatalf("publicIssueSearchQuery() = %q, want every @me qualifier substituted", query)
+	}
+}
+
+// TestListIssuesSearchesOnceWithBothQualifiers guards against reintroducing the
+// two-search union that treated the default filter as an OR of assignee and
+// author (see issue #371): a single search must carry both qualifiers.
+func TestListIssuesSearchesOnceWithBothQualifiers(t *testing.T) {
+	var queries []string
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		publicAPI: func(context.Context, string) ([]byte, http.Header, int, error) {
+			return []byte(`{"private":true}`), nil, http.StatusOK, nil
+		},
+		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+			if len(args) > 1 && args[0] == "api" && args[1] == "search/issues" {
+				for i, arg := range args {
+					if arg == "-f" && i+1 < len(args) && strings.HasPrefix(args[i+1], "q=") {
+						queries = append(queries, strings.TrimPrefix(args[i+1], "q="))
+					}
+				}
+				return []byte(`{"items":[{"number":7,"title":"bug"}]}`), nil
+			}
+			return []byte(`[]`), nil
+		},
+	}
+	gh.Filter = defaultIssueFilter
+	if _, err := gh.ListIssues(context.Background(), "owner/repo"); err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("issue searches = %#v, want exactly one search carrying both qualifiers", queries)
+	}
+	if !strings.Contains(queries[0], "assignee:@me") || !strings.Contains(queries[0], "author:@me") {
+		t.Fatalf("search query = %q, want both assignee:@me and author:@me", queries[0])
 	}
 }
