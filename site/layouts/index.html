@@ -1,4 +1,3 @@
-{{- $readme := readFile "README.md" -}}
 <!doctype html>
 <html lang="en">
   <head>
@@ -22,31 +21,171 @@
     <meta name="twitter:description" content="Git Loop fOr Robot Patchers watches GitHub issues and dispatches coding agents to fix them.">
     <meta name="twitter:image" content="{{ "images/og-home.png" | absURL }}">
   </head>
-  <body>
+  <body class="home">
     <header class="site-header">
       <a class="brand" href="{{ site.Home.RelPermalink }}" aria-label="glorp home">
         <img src="{{ "assets/glorp-logo.svg" | relURL }}" alt="">
         <span>glorp</span>
       </a>
       <nav class="site-nav" aria-label="Primary navigation">
-        <a class="nav-skill" href="{{ "skills/gh-fix/" | relURL }}">/gh-fix</a>
-        <a class="nav-skill" href="{{ "skills/gh-discuss/" | relURL }}">/gh-discuss</a>
+        <a href="#loop">The loop</a>
+        <a href="#dashboard">Dashboard</a>
+        <a href="#skills">Skills</a>
+        <a class="nav-install" href="#install">Install</a>
         <a class="repo-link" href="https://github.com/lsegal/glorp">View on GitHub</a>
       </nav>
     </header>
-    <main class="readme">
-      {{- $readme | markdownify -}}
-      <section class="skill-index" aria-labelledby="skill-guides">
+
+    <main>
+      <section id="top" class="hero-section">
+        <div>
+          <p class="eyebrow">Git Loop fOr Robot Patchers</p>
+          <h1>Focus on problems.<br>Let the robots solve them.</h1>
+          <p class="hero-lede">glorp is a daemon that watches your GitHub issues. You describe a problem &mdash; a bug, a proposal, a thing that should exist &mdash; and it puts a Claude or Codex agent on it.</p>
+          <p class="hero-sub">The queue is your issue list. The scheduling rules are labels and dependencies. The progress report is the thread. Nothing new to learn, nowhere new to look.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="#install">Install glorp</a>
+            <code class="hero-command">glorp watch owner/repo</code>
+          </div>
+        </div>
+        <div class="github-mock hero-mock" aria-label="Sample GitHub issue card">
+          <div class="mock-top"><span>owner/repo</span><span class="mock-dot">&middot;</span><span>Issues</span><span class="mock-dots">&bull;&bull;&bull;</span></div>
+          <div class="mock-body">
+            <div class="mock-meta-row">
+              <span class="open-pill">Open</span>
+              <span class="mock-byline">opened by <b>you</b> &middot; assigned to <b>you</b></span>
+            </div>
+            <h3>Load balance new issues across both agents <span class="mock-issue-num">#142</span></h3>
+            <p>Repeating <code>--agent</code> should split work evenly instead of always taking the first one. Blocked until #139 lands.</p>
+            <div class="mock-tags">
+              <span class="tag-blue">enhancement</span>
+              <span class="tag-purple">agents</span>
+            </div>
+            <div class="mock-comment"><b>glorp</b><span>waiting on #139</span><p>Dependency closed. Does anyone have this? <code>/glorp:8f21a</code></p></div>
+            <div class="mock-comment"><b>glorp</b><span>2 minutes later</span><p>Starting work on this issue.</p></div>
+            <div class="mock-comment"><b>glorp</b><span>18 minutes later</span><p>Opened #143 &mdash; round-robin dispatch across the listed agents, with tests for uneven queues.</p></div>
+            <div class="check-row"><span class="pulse-dot"></span><b class="check-ok">All checks have passed</b><b class="check-merged">#143 merged</b></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="loop" class="loop-section">
+        <div class="loop-wrap">
+          <div>
+            <p class="eyebrow">The loop</p>
+            <h2>It keeps going after you stop looking</h2>
+            <p>A webhook delivery &mdash; or a poll, if you would rather skip the tunnel &mdash; surfaces the issue in seconds. glorp claims it with a signed comment so no two instances take the same ticket, then starts the agent.</p>
+            <p class="muted">When a pull request closes, it sweeps for <code>#123</code> mentions and picks up whatever that unblocked. Sessions persist in <code>.glorp.json</code>, so a restart resumes instead of repeating.</p>
+          </div>
+          <div class="loop-circle">
+            <svg viewBox="0 0 520 520" aria-hidden="true">
+              <circle cx="260" cy="260" r="176" class="loop-ring"></circle>
+              <circle cx="260" cy="260" r="176" class="loop-ring-spin"></circle>
+              <circle cx="260" cy="260" r="122" class="loop-ring-dashed"></circle>
+            </svg>
+            <div class="loop-node" style="left:50%;top:8%"><i>01</i><b>You describe it</b><span>An issue, opened and assigned to yourself</span></div>
+            <div class="loop-node" style="left:92%;top:50%"><i>02</i><b>glorp claims it</b><span>Signed comment, then a two minute wait</span></div>
+            <div class="loop-node" style="left:50%;top:92%"><i>03</i><b>An agent builds</b><span>Investigates, ships a branch, proves it</span></div>
+            <div class="loop-node" style="left:8%;top:50%"><i>04</i><b>The thread reports</b><span>Merged, and the next issue unblocks</span></div>
+            <div class="loop-center">
+              <img src="{{ "assets/glorp-logo.svg" | relURL }}" alt="">
+              <span>glorp watch</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="dashboard" class="dashboard-section">
+        <div class="dashboard-wrap">
+          <div class="terminal-mock">
+            <div class="terminal-top">
+              <div>
+                <p class="terminal-kicker">Git Loop fOr Robot Patchers</p>
+                <h3>glorp <span>dashboard</span> <small>v0.9.2</small></h3>
+              </div>
+              <div class="terminal-live"><span class="pulse-dot"></span>live</div>
+            </div>
+            <div class="terminal-bar">
+              <div class="terminal-chip chip-blue">jobs: <span>1</span> idle <span>2</span> active <span>14</span> total</div>
+              <div class="terminal-chip chip-purple">quota: codex: 71% left</div>
+              <div class="terminal-chip chip-green">webhook (ngrok)</div>
+              <div class="terminal-chip chip-dark">targets: owner/repo (3 issues)</div>
+            </div>
+            <div class="job-grid">
+              <div class="job-card">
+                <div class="job-title"><span class="pulse-dot"></span>#142 Load balance new issues across agents</div>
+                <div class="job-line">checkout: /tmp/glorp-142-9fa1</div>
+                <div class="job-line">session: 01JC4K2M8ZQ</div>
+                <div class="job-line">agent: codex/gpt-5.6:high</div>
+                <div class="job-log"><div class="job-log-head">clone: /tmp/glorp-142-9fa1</div><pre>reading dispatch.go
+added round-robin selector
+running go test ./...
+ok  github.com/lsegal/glorp/internal</pre></div>
+              </div>
+              <div class="job-card">
+                <div class="job-title"><span class="pulse-dot"></span>#145 Reaper leaves ngrok running on SIGKILL</div>
+                <div class="job-line">checkout: /tmp/glorp-145-4c07</div>
+                <div class="job-line">session: 01JC4K3T1YB</div>
+                <div class="job-line">agent: claude/opus:medium</div>
+                <div class="job-log"><div class="job-log-head">clone: /tmp/glorp-145-4c07</div><pre>reproduced on darwin
+holding pipe to parent
+verifying process groups</pre></div>
+              </div>
+            </div>
+            <div class="terminal-logs">
+              <div class="terminal-logs-head">Logs</div>
+              <pre>webhook delivery: issues.opened #147 &rarr; queued
+claim posted on #147, waiting 2m for other instances
+dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span></pre>
+            </div>
+          </div>
+          <div>
+            <p class="eyebrow">The dashboard</p>
+            <h2>Watch it work, or don&rsquo;t</h2>
+            <p>A localhost-only browser dashboard shows every agent card, its output viewport, job counts, quota, delivery mode and target status. <code>glorp ui</code> finds a running instance and opens it without you hunting for the port.</p>
+            <p class="muted">Prefer the terminal? <code>--ui tui</code> gives the same view in your shell, and <code>--ui none</code> just writes timestamped lines to stdout.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="skills" class="skill-index" aria-labelledby="skill-guides">
         <p class="eyebrow">Two focused skills</p>
         <h2 id="skill-guides">Hand work to the right robot.</h2>
+        <p class="section-lede">Both ship with the installer and register globally for Codex and Claude Code.</p>
         <div class="skill-index-grid">
-          <a class="skill-index-card fix" href="{{ "skills/gh-fix/" | relURL }}"><span class="skill-command">/gh-fix</span><strong>Issue to merged fix</strong><span>Investigate, ship, prove, and close the loop.</span></a>
-          <a class="skill-index-card discuss" href="{{ "skills/gh-discuss/" | relURL }}"><span class="skill-command">/gh-discuss</span><strong>One useful answer</strong><span>Read the thread, research the repo, reply only when certain.</span></a>
+          <a class="skill-index-card fix" href="{{ "skills/gh-fix/" | relURL }}"><span class="skill-command">/gh-fix</span><strong>Issue to merged fix</strong><span>Investigate, ship, prove, and close the loop. Dispatched for every issue that clears its dependencies.</span></a>
+          <a class="skill-index-card discuss" href="{{ "skills/gh-discuss/" | relURL }}"><span class="skill-command">/gh-discuss</span><strong>One useful answer</strong><span>Read the thread, research the repo, reply only when certain. Read-only, and silent when it isn&rsquo;t sure.</span></a>
+        </div>
+      </section>
+
+      <section id="install" class="install-section home-install">
+        <div class="install-wrap">
+          <div>
+            <h2>Install</h2>
+            <p>The script downloads the release for your OS and architecture, installs the binary, and registers the bundled skills through skills.sh.</p>
+            <p class="install-label">macOS or Linux</p>
+            <pre><code>curl -fsSL https://github.com/lsegal/glorp/releases/latest/download/install.sh | bash</code></pre>
+            <p class="install-label">Windows PowerShell</p>
+            <pre><code>irm https://github.com/lsegal/glorp/releases/latest/download/install.ps1 | iex</code></pre>
+            <p class="upgrade-note">Already installed? <code>glorp upgrade</code> re-runs the installer for your platform.</p>
+          </div>
+          <div>
+            <p class="eyebrow">Prerequisites</p>
+            <ul class="prereq-list">
+              <li><strong>GitHub CLI (gh)</strong><span>Authenticated with access to every repository glorp watches. Project targets need the <code>read:project</code> and <code>project</code> scopes.</span></li>
+              <li><strong>Node.js and npx</strong><span>The installer uses <code>npx</code> to install the bundled gh-fix and gh-discuss skills through skills.sh.</span></li>
+              <li><strong>ngrok</strong><span>For the default webhook mode; configure its auth before starting. Not required with <code>--poll</code>.</span></li>
+              <li><strong>A coding agent</strong><span>At least one of Codex CLI (<code>codex</code>) or Claude Code (<code>claude</code>) on your PATH.</span></li>
+            </ul>
+            <p class="alert alert-important"><strong class="alert-title">Note.</strong> glorp launches agents non-interactively. Agent sandbox and permission controls remain enabled by default. <code>--yolo</code> disables those protections; use it only with repositories and issues whose contents you trust.</p>
+          </div>
         </div>
       </section>
     </main>
-    <footer>
-      Generated from <a href="https://github.com/lsegal/glorp/blob/main/README.md">README.md</a> with Hugo.
+
+    <footer class="home-footer">
+      <span>Press <code>q</code> or <code>Ctrl+C</code> to exit the dashboard. glorp waits for running agents during shutdown.</span>
+      <a href="https://github.com/lsegal/glorp">github.com/lsegal/glorp &#8599;</a>
     </footer>
   </body>
 </html>

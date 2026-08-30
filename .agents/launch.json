@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "glorp-hugo",
+      "runtimeExecutable": "hugo",
+      "runtimeArgs": ["server", "--config", "site/hugo.toml", "--baseURL", "http://localhost:1313/", "--disableFastRender"],
+      "port": 1313
+    }
+  ]
+}
