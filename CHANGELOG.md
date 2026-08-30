@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Read project boards through their Projects v2 page under `glorp watch -browser`, instead of the `projects(v2)` GraphQL API. A `projects:` target's items, repositories, titles, and `Status` column now come from the rendered board, so the `--ready-state` gate and the push-mode board probe work in browser mode without a GraphQL call. User, organization, and repository-scoped boards are all supported; draft cards and pull requests on the board are ignored. Moving an issue's status still goes through the API.
 - Add an opt-in `glorp watch -browser` mode that drives GitHub through a headless Chrome instead of the GitHub API, with `-browser-profile` and `-browser-binary` to choose the profile directory and executable. Browser mode implies `-poll` (no webhook server and no ngrok tunnel are started), defaults `-interval` to 5s unless one is given, and fails with an actionable error when no Chromium-based browser can be launched. Without `-browser` nothing changes and no browser is started.
 
 ## v1.2.23 - 2026-08-30

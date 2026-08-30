@@ -492,9 +492,12 @@ func statusText(n *html.Node) string {
 // label like "Status: In Progress" repeats, leaving the value on its own.
 func normalizeStatus(text string) string {
 	text = strings.Join(strings.Fields(text), " ")
-	if trimmed := strings.TrimSpace(strings.TrimPrefix(text, ":")); len(text) >= 6 && strings.EqualFold(text[:6], "status") {
-		trimmed = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text[6:]), ":"))
-		return trimmed
+	if len(text) > 6 && strings.EqualFold(text[:6], "status") {
+		// Only when something is left: a column genuinely named "Status"
+		// must not normalize away to nothing.
+		if rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text[6:]), ":")); rest != "" {
+			return rest
+		}
 	}
 	return text
 }
