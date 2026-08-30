@@ -176,6 +176,22 @@ func (g GHCLI) resolveSelfLogin(ctx context.Context) (string, error) {
 	return login, nil
 }
 
+// issueSearchQualifiers reports whether filter already says what to search for,
+// so a caller knows which of its own defaults would merely repeat it. It is
+// shared with projectItemQuery, which supplies a project board's defaults in
+// the board's own narrower vocabulary.
+func issueSearchQualifiers(filter string) (kind, state bool) {
+	for _, term := range strings.Fields(filter) {
+		switch {
+		case strings.HasPrefix(term, "state:"), term == "is:open", term == "is:closed", term == "is:merged":
+			state = true
+		case strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
+			kind = true
+		}
+	}
+	return kind, state
+}
+
 // issueSearchTerms builds the search terms for filter, the query body shared by
 // the API path and the browser mode's page URL.
 //
@@ -190,15 +206,7 @@ func issueSearchTerms(filter string, allIssues bool) []string {
 	if allIssues {
 		filter = ""
 	}
-	var kind, state bool
-	for _, term := range strings.Fields(filter) {
-		switch {
-		case strings.HasPrefix(term, "state:"), term == "is:open", term == "is:closed", term == "is:merged":
-			state = true
-		case strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
-			kind = true
-		}
-	}
+	kind, state := issueSearchQualifiers(filter)
 	var terms []string
 	if !kind {
 		terms = append(terms, "is:issue")

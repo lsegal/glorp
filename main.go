@@ -976,12 +976,40 @@ func projectListArgs(t target, filter string, allIssues bool) []string {
 	return append(args, "--query", projectItemQuery(filter, allIssues))
 }
 
+// projectItemQuery builds the item filter a project board is asked for, both
+// as the board page's ?filterQuery= and as the GraphQL/`gh project item-list`
+// item query.
+//
+// The kind and state qualifiers are supplied only as defaults, for a filter
+// that does not already say what to search for, exactly as issueSearchTerms
+// does for the issues page: repeating them made the logged board URL harder to
+// read and contradicted a filter that deliberately asked for something else (a
+// "--filter is:pr ..." must not become "is:issue ... is:pr").
+//
+// A board speaks a narrower search vocabulary than the issues page: it knows
+// "is:open"/"is:closed" but not "state:open". The defaults are therefore the
+// board's own, and a state the filter names in the issues-page vocabulary is
+// translated rather than passed through, so the qualifier is emitted once and
+// still means something to the board.
 func projectItemQuery(filter string, allIssues bool) string {
-	query := "is:issue is:open"
-	if !allIssues && filter != "" && filter != defaultIssueFilter {
-		query += " " + filter
+	if allIssues || filter == defaultIssueFilter {
+		filter = ""
 	}
-	return query
+	kind, state := issueSearchQualifiers(filter)
+	var terms []string
+	if !kind {
+		terms = append(terms, "is:issue")
+	}
+	if !state {
+		terms = append(terms, "is:open")
+	}
+	for _, term := range strings.Fields(filter) {
+		if rest, found := strings.CutPrefix(term, "state:"); found {
+			term = "is:" + rest
+		}
+		terms = append(terms, term)
+	}
+	return strings.Join(terms, " ")
 }
 
 func (g GHCLI) listProjectItems(ctx context.Context, target target, filter string, allIssues bool) ([]projectItem, error) {
