@@ -203,6 +203,7 @@ glorp <command> [arguments]
 | --- | --- |
 | `watch` | Watch GitHub targets and dispatch agents for ready issues. |
 | `ui` | Open a running glorp dashboard in a browser. |
+| `auth` | Sign glorp's browser profile in to GitHub for `--browser` mode. |
 | `version` | Print the glorp version. |
 | `upgrade` | Upgrade glorp to the latest release. |
 | `help` | Show help for glorp or one of its commands. |
@@ -255,6 +256,24 @@ Finds glorp dashboards by probing 16 consecutive localhost ports and opens one i
 | Option | Default | Description |
 | --- | --- | --- |
 | `--port PORT` | `8765` | First localhost port to scan. |
+
+### `glorp auth`
+
+```text
+glorp auth [options]
+```
+
+Signs the browser profile that `glorp watch --browser` reads GitHub with in to GitHub. The profile starts signed out, so private repositories and project boards render as a 404, a 403, or a login wall until it has a session.
+
+`glorp auth` opens an ordinary, visible browser window on glorp's own profile at `https://github.com/login` and waits until the sign-in finishes, then closes it and prints the account it signed in as. The session lives in the profile directory, so it survives later `glorp watch` runs and only has to be done once per profile. glorp gives up after 5 minutes rather than leaving the window open indefinitely.
+
+Chrome allows only one process per profile directory, so stop a running `glorp watch --browser` (or point `--browser-profile` at a different directory) before signing in. On Linux with no display server — `DISPLAY` and `WAYLAND_DISPLAY` both unset — the command refuses to open a window and says so instead of hanging; sign in on a desktop session and point `--browser-profile` at that profile directory.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--status` | `false` | Report whether the profile is currently signed in, and as whom, without opening a window. Exits 0 when signed in and 1 when not. |
+| `--browser-binary PATH` | auto-detected | Chromium-based browser executable, resolved the same way as `glorp watch --browser-binary`. |
+| `--browser-profile PATH` | `<config dir>/glorp/browser-data` | Profile directory to sign in. Defaults to the same profile `glorp watch --browser` uses: `~/Library/Application Support/glorp/browser-data` on macOS, `%AppData%\glorp\browser-data` on Windows, and `~/.config/glorp/browser-data` on Linux. |
 
 Supported target forms are:
 
