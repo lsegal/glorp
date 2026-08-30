@@ -230,7 +230,7 @@ footer {
   text-align: center;
 }
 
-.site-nav { display: flex; align-items: center; gap: 1.4rem; font-size: .88rem; font-weight: 700; }
+.site-nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .9rem 1.1rem; font-size: .88rem; font-weight: 700; }
 .site-nav > a:not(.repo-link):not(.nav-skill):not(.nav-install) { color: var(--muted); text-decoration: none; }
 .site-nav > a:not(.repo-link):not(.nav-skill):not(.nav-install):hover { color: var(--indigo); }
 .site-nav > a.nav-skill { display: inline-flex; align-items: center; padding: .4rem .75rem; border: 1px solid rgb(130 80 223 / 35%); border-radius: 999px; color: var(--orange); font-family: ui-monospace, monospace; font-size: .8rem; font-weight: 800; text-decoration: none; background: rgb(130 80 223 / 10%); }
