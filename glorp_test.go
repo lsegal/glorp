@@ -129,11 +129,6 @@ func (r *snapshotReporter) Snapshot(snapshot GlorpSnapshot) {
 
 func (r *snapshotReporter) Log(string) {}
 
-type fakeLabelEnsurer struct {
-	called bool
-	err    error
-}
-
 type fakeIssueStatuser struct {
 	mu       sync.Mutex
 	statuses []string
@@ -144,11 +139,6 @@ func (f *fakeIssueStatuser) SetIssueStatus(_ context.Context, _ string, _ Issue,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statuses = append(f.statuses, status)
-	return f.err
-}
-
-func (f *fakeLabelEnsurer) EnsureLabels(_ context.Context, _ string) error {
-	f.called = true
 	return f.err
 }
 
@@ -258,19 +248,6 @@ func TestGlorpDispatchesUnansweredDiscussions(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "discussion #9 completed") {
 		t.Errorf("logs missing discussion completion:\n%s", logs.String())
-	}
-}
-
-func TestGlorpSkipsLabelEnsuringForDiscussionTargets(t *testing.T) {
-	labels := &fakeLabelEnsurer{}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	w := &Glorp{Repo: "https://github.com/o/r/discussions", Interval: time.Hour, Concurrency: 1, Labels: labels, Discussions: &fakeDiscussionSource{batches: [][]Discussion{{}}}, Runner: &fakeRunner{release: make(chan struct{})}}
-	if err := w.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if labels.called {
-		t.Fatal("labels should not be ensured for a Discussions-board target")
 	}
 }
 
@@ -1131,27 +1108,6 @@ func TestInvalidRepo(t *testing.T) {
 	w := &Glorp{Repo: "bad", Interval: time.Second, Concurrency: 1}
 	if w.Run(context.Background()) == nil {
 		t.Fatal("expected error")
-	}
-}
-
-func TestGlorpEnsuresLabelsOnStart(t *testing.T) {
-	labels := &fakeLabelEnsurer{}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels, Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})}}
-	if err := w.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !labels.called {
-		t.Fatal("labels were not ensured on startup")
-	}
-}
-
-func TestGlorpStopsWhenLabelEnsuringFails(t *testing.T) {
-	labels := &fakeLabelEnsurer{err: context.Canceled}
-	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, Labels: labels}
-	if err := w.Run(context.Background()); err != context.Canceled {
-		t.Fatalf("expected label error, got %v", err)
 	}
 }
 

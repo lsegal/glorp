@@ -157,7 +157,7 @@ func nextPageURL(link string) string {
 }
 
 // resolveSelfLogin returns the authenticated gh user's login, caching it for
-// the lifetime of g's cache. It is only needed to translate the "author:@me"
+// the lifetime of g's cache. It is only needed to translate the "@me"
 // search qualifier, which has no meaning to an unauthenticated request.
 func (g GHCLI) resolveSelfLogin(ctx context.Context) (string, error) {
 	if g.selfLoginCache != nil {
@@ -184,6 +184,7 @@ func publicIssueSearchQuery(repo, filter string, allIssues bool, selfLogin strin
 	if !allIssues && filter != "" {
 		if selfLogin != "" {
 			filter = strings.ReplaceAll(filter, "author:@me", "author:"+selfLogin)
+			filter = strings.ReplaceAll(filter, "assignee:@me", "assignee:"+selfLogin)
 		}
 		query += " " + filter
 	}
@@ -226,7 +227,7 @@ func issueFromSearchResult(item searchIssueResult) (issue Issue, ok bool) {
 // the caller can fall back to listAuthenticatedIssues.
 func (g GHCLI) listPublicIssues(ctx context.Context, repo, filter string, allIssues bool) (issues []Issue, ok bool) {
 	selfLogin := ""
-	if !allIssues && strings.Contains(filter, "author:@me") {
+	if !allIssues && (strings.Contains(filter, "author:@me") || strings.Contains(filter, "assignee:@me")) {
 		login, err := g.resolveSelfLogin(ctx)
 		if err != nil {
 			return nil, false

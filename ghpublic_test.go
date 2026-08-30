@@ -242,9 +242,10 @@ func TestPublicIssueSearchQuery(t *testing.T) {
 		selfLogin string
 		want      string
 	}{
-		{name: "default filter substitutes self login", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open is:issue state:open author:lsegal label:agent-ready"},
+		{name: "default filter substitutes self login", repo: "owner/repo", filter: defaultIssueFilter, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open is:issue state:open assignee:lsegal"},
 		{name: "all issues ignores filter", repo: "owner/repo", filter: defaultIssueFilter, allIssues: true, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open"},
 		{name: "custom filter without author", repo: "owner/repo", filter: "label:bug", want: "repo:owner/repo is:issue state:open label:bug"},
+		{name: "author filter still substitutes self login", repo: "owner/repo", filter: "author:@me", selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open author:lsegal"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := publicIssueSearchQuery(test.repo, test.filter, test.allIssues, test.selfLogin); got != test.want {
@@ -284,14 +285,14 @@ func TestListPublicIssuesResolvesSelfLoginAndFiltersPullRequests(t *testing.T) {
 		},
 		publicAPI: func(_ context.Context, requestURL string) ([]byte, http.Header, int, error) {
 			searchURL = requestURL
-			return []byte(`{"items":[{"number":7,"title":"bug","body":"details","state":"open","created_at":"2026-07-20T17:38:43Z","labels":[{"name":"agent-ready"}]},{"number":8,"title":"a pr","pull_request":{}}]}`), nil, http.StatusOK, nil
+			return []byte(`{"items":[{"number":7,"title":"bug","body":"details","state":"open","created_at":"2026-07-20T17:38:43Z","labels":[{"name":"bug"}]},{"number":8,"title":"a pr","pull_request":{}}]}`), nil, http.StatusOK, nil
 		},
 	}
 	issues, ok := gh.listPublicIssues(context.Background(), "owner/repo", defaultIssueFilter, false)
 	if !ok {
 		t.Fatal("listPublicIssues() ok = false, want true")
 	}
-	if len(issues) != 1 || issues[0].Number != 7 || issues[0].Title != "bug" || len(issues[0].Labels) != 1 || issues[0].Labels[0].Name != "agent-ready" {
+	if len(issues) != 1 || issues[0].Number != 7 || issues[0].Title != "bug" || len(issues[0].Labels) != 1 || issues[0].Labels[0].Name != "bug" {
 		t.Fatalf("issues = %#v", issues)
 	}
 	if !strings.Contains(searchURL, "repo%3Aowner%2Frepo") || !strings.Contains(searchURL, "author%3Alsegal") {

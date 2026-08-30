@@ -80,7 +80,7 @@ func TestPersonalProjectRepositoryLookupIgnoresFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 	var itemQuery string
-	gh := GHCLI{Filter: "label:agent-ready", runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+	gh := GHCLI{Filter: "assignee:@me", runCommand: func(_ context.Context, args ...string) ([]byte, error) {
 		for i, arg := range args {
 			if strings.HasPrefix(arg, "itemQuery=") {
 				itemQuery = strings.TrimPrefix(args[i], "itemQuery=")
@@ -91,7 +91,7 @@ func TestPersonalProjectRepositoryLookupIgnoresFilter(t *testing.T) {
 	if _, err := gh.webhookSpecs(context.Background(), target); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(itemQuery, "agent-ready") {
+	if strings.Contains(itemQuery, "assignee") {
 		t.Fatalf("project repository lookup applied the ready filter: %q", itemQuery)
 	}
 }

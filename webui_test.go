@@ -133,7 +133,7 @@ func TestCombineUIReportersDropsTypedNilReporters(t *testing.T) {
 	terminal := &recordingReporter{}
 	reporter := combineUIReporters(terminal, webUI)
 	reporter.Snapshot(GlorpSnapshot{})
-	reporter.Log("ensured agent labels exist")
+	reporter.Log("watching o/r")
 	if terminal.snapshots != 1 || len(terminal.logs) != 1 {
 		t.Fatalf("updates were not sent to the terminal reporter: %#v", terminal)
 	}

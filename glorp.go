@@ -128,9 +128,6 @@ type OriginatingWorkState struct {
 type WorkClosureChecker interface {
 	OriginatingWorkState(context.Context, string, int) (OriginatingWorkState, error)
 }
-type LabelEnsurer interface {
-	EnsureLabels(context.Context, string) error
-}
 
 // ProjectStateSource returns a cheap fingerprint of a project board's
 // dispatchable state. GitHub publishes no projects_v2 webhook for user-owned
@@ -194,7 +191,6 @@ type Glorp struct {
 	Projects ProjectStateSource
 	// probeInterval overrides the project board probe interval in tests.
 	probeInterval time.Duration
-	Labels        LabelEnsurer
 	Status        IssueStatuser
 	UI            UIReporter
 	Quota         func(context.Context) map[string]string
@@ -746,17 +742,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 	}
 	if w.Out == nil {
 		w.Out = io.Discard
-	}
-	if w.Labels != nil {
-		for _, target := range targets {
-			if isDiscussionTarget(target) {
-				continue
-			}
-			if err := w.Labels.EnsureLabels(ctx, target); err != nil {
-				return err
-			}
-		}
-		w.logf("ensured agent labels exist")
 	}
 	watchCtx, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
