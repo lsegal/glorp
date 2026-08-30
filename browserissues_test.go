@@ -92,7 +92,7 @@ func TestBrowserIssuesURL(t *testing.T) {
 		{
 			name:   "default filter",
 			filter: defaultIssueFilter,
-			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen+is%3Aissue+state%3Aopen+assignee%3A%40me+author%3A%40me",
+			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen+assignee%3A%40me+author%3A%40me",
 		},
 		{
 			name:   "custom filter",
@@ -109,6 +109,27 @@ func TestBrowserIssuesURL(t *testing.T) {
 			name:   "empty filter",
 			filter: "",
 			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen",
+		},
+		{
+			name:   "filter naming its own kind is not contradicted",
+			filter: "is:pr assignee:@me",
+			want:   "https://github.com/lsegal/glorp/issues?q=state%3Aopen+is%3Apr+assignee%3A%40me",
+		},
+		{
+			name:   "filter naming its own state is not contradicted",
+			filter: "state:closed label:ready",
+			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aclosed+label%3Aready",
+		},
+		{
+			name:   "is:closed counts as a state",
+			filter: "is:closed",
+			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+is%3Aclosed",
+		},
+		{
+			name:      "all issues drops a filter that named its own kind",
+			filter:    "is:pr label:ready",
+			allIssues: true,
+			want:      "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
