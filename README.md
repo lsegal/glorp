@@ -100,7 +100,7 @@ glorp watch --all-issues owner/repo
 Select issues using GitHub issue-search syntax:
 
 ```sh
-glorp watch --filter "label:agent-ready" --filter "-label:blocked" owner/repo
+glorp watch --filter "assignee:@me" --filter "-label:blocked" owner/repo
 ```
 
 Run without ngrok or managed webhooks by polling every 30 seconds:
@@ -174,7 +174,7 @@ In the default mode, glorp:
 4. Queries GitHub for matching open issues and queues previously unhandled work.
 5. Starts the selected agent with `/gh-fix ISSUE_NUMBER` and tracks its output and result.
 
-glorp creates and manages the `agent-ready` label for repository targets, marking issues eligible for pickup. Ownership of a claimed issue is tracked entirely through the comment-based handoff protocol below rather than a label. Project items are moved through their configured status as work starts and finishes.
+For repository targets, assigning an issue to yourself marks it eligible for pickup; glorp's default filter only dispatches open issues assigned to the authenticated user. Ownership of a claimed issue is tracked entirely through the comment-based handoff protocol below rather than a label. Project items are moved through their configured status as work starts and finishes.
 
 Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--poll` to avoid starting an unused webhook tunnel for those targets.
 
@@ -220,7 +220,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--claude-binary PATH` | `claude` | Claude Code executable name or path. |
 | `--codex-binary PATH` | `codex` | Codex executable name or path. |
 | `--concurrency N` | `0` | Maximum concurrent agents across all targets. `0` is normalized to `3`; negative values are invalid. |
-| `--filter QUERY` | `is:issue state:open author:@me label:agent-ready` | GitHub issue-search filter. Repeat the option to combine terms. The default author and `agent-ready` label filter applies to repository targets; Project targets default to all open project issues. |
+| `--filter QUERY` | `is:issue state:open assignee:@me` | GitHub issue-search filter. Repeat the option to combine terms. The default `assignee:@me` filter applies to repository targets; Project targets default to all open project issues. |
 | `--interval DURATION` | `30s` | Periodic GitHub synchronization interval. Uses Go duration syntax such as `10s`, `2m`, or `1h30m`; must be positive. |
 | `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | Deprecated and ignored. The public tunnel URL is read from the log of the ngrok process glorp starts. |
@@ -266,6 +266,6 @@ discussions:CATEGORY
 
 The `projects:` and `discussions:` forms are shorthands for the URLs above. The `OWNER/REPOSITORY` prefix may be omitted inside a git checkout whose `origin` remote points at a GitHub repository, so `glorp watch projects:3 discussions:q-a` watches project 3 and the Q&A discussions category of the current repository. A discussions category is named by its URL slug (`q-a`) or its display name (`Q&A`); without one, every category is watched.
 
-A Discussions board target (`https://github.com/OWNER/REPOSITORY/discussions`) is watched differently from repository and Project targets: instead of the `gh-fix` skill, glorp dispatches the read-only `gh-discuss` skill for each new top-level Discussion thread that has no replies yet. `gh-discuss` only reads the repository to answer the question and posts a single top-level reply when it can do so accurately and positively; otherwise it leaves the thread untouched. Discussions targets work in both push and poll mode: in push mode glorp subscribes the repository webhook to GitHub's `discussion` event so a new thread dispatches immediately, with the periodic synchronization interval as the fallback. They are not affected by `--filter` or `--all-issues`, and do not use the `agent-ready` label or the comment-based ownership handoff protocol described below.
+A Discussions board target (`https://github.com/OWNER/REPOSITORY/discussions`) is watched differently from repository and Project targets: instead of the `gh-fix` skill, glorp dispatches the read-only `gh-discuss` skill for each new top-level Discussion thread that has no replies yet. `gh-discuss` only reads the repository to answer the question and posts a single top-level reply when it can do so accurately and positively; otherwise it leaves the thread untouched. Discussions targets work in both push and poll mode: in push mode glorp subscribes the repository webhook to GitHub's `discussion` event so a new thread dispatches immediately, with the periodic synchronization interval as the fallback. They are not affected by `--filter` or `--all-issues`, and do not use issue assignment or the comment-based ownership handoff protocol described below.
 
 Press `q` or `Ctrl+C` to exit the interactive dashboard. glorp waits for running agents during shutdown.

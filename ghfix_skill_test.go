@@ -37,7 +37,7 @@ func TestGhFixRoutesFollowUpsForGlorp(t *testing.T) {
 		"Match `Todo` case-insensitively",
 		"record whether the invocation directory contains `.glorp.json`",
 		"Use the presence recorded before cloning",
-		"add the `agent-ready` label",
+		"--add-assignee @me",
 	} {
 		if !strings.Contains(body, required) {
 			t.Errorf("gh-fix skill does not require follow-up routing %q", required)

@@ -223,7 +223,7 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Labels: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
@@ -472,7 +472,7 @@ func closesIssue(body, repo string, number int) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
-const defaultIssueFilter = "is:issue state:open author:@me label:agent-ready"
+const defaultIssueFilter = "is:issue state:open assignee:@me"
 
 type filterFlag struct {
 	values []string
@@ -681,31 +681,6 @@ type repositoryProjectItemsPage struct {
 			} `json:"issue"`
 		} `json:"repository"`
 	} `json:"data"`
-}
-
-type managedLabel struct {
-	name, color, description string
-}
-
-var managedLabels = []managedLabel{
-	{name: "agent-ready", color: "0E8A16", description: "Issue is ready for an agent"},
-}
-
-func (g GHCLI) EnsureLabels(ctx context.Context, repo string) error {
-	target, err := parseTarget(repo)
-	if err != nil {
-		return err
-	}
-	if target.isProject {
-		return nil
-	}
-	for _, label := range managedLabels {
-		cmd := exec.CommandContext(ctx, g.Binary, "label", "create", label.name, "--repo", target.repo, "--color", label.color, "--description", label.description, "--force")
-		if output, err := combinedOutputChildProcess(cmd); err != nil {
-			return fmt.Errorf("ensure %s label: %w: %s", label.name, err, strings.TrimSpace(string(output)))
-		}
-	}
-	return nil
 }
 
 func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {

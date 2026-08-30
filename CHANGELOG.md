@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Mark repository issues ready for an agent by assigning them to yourself instead of labelling them. The default `--filter` is now `is:issue state:open assignee:@me`, glorp no longer creates or manages the `agent-ready` label on watched repositories, and the `gh-fix` skill assigns follow-up issues to the authenticated user rather than labelling them.
+
 ## v1.2.21 - 2026-08-29
 
 - Answer the `Does anyone have this?` handoff ask when it is posted on an issue's pull request. Once a draft PR exists the handshake happens on the PR, but the running instance only recognised asks that named the issue number, so it stayed silent while actively committing and another instance took its work. Handoff ownership lookups also now resolve project-scoped work back to its repository.
