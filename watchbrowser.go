@@ -14,6 +14,10 @@ type browserWatchOptions struct {
 	Enabled bool
 	Binary  string
 	Profile string
+	// Vision enables the bounded screenshot-to-agent fallback for pages the
+	// DOM extractor stops recognising. It is off unless -browser-vision is
+	// passed, and it changes nothing on the success path.
+	Vision bool
 }
 
 // config converts the flag values into the launcher's configuration.
@@ -44,11 +48,15 @@ func resolveBrowserWatch(flags *flag.FlagSet, interval time.Duration, poll bool)
 		Enabled: flagValue[bool](flags, "browser"),
 		Binary:  flagValue[string](flags, "browser-binary"),
 		Profile: flagValue[string](flags, "browser-profile"),
-	}
-	if !options.Enabled {
-		return options, interval, poll, nil
+		Vision:  flagValue[bool](flags, "browser-vision"),
 	}
 	explicit := explicitFlags(flags)
+	if !options.Enabled {
+		if explicit["browser-vision"] {
+			return options, interval, poll, fmt.Errorf("-browser-vision only applies to browser mode, so it cannot be used without -browser")
+		}
+		return options, interval, poll, nil
+	}
 	var conflicting []string
 	for _, name := range browserExclusiveFlags {
 		if explicit[name] {
