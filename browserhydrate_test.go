@@ -1,0 +1,281 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// fakeIssueHydrator stands in for the REST hydrator and records every fetch,
+// so the tests below can assert the request budget browser mode promises:
+// O(new candidate issues), never O(list) and never O(ticks).
+type fakeIssueHydrator struct {
+	calls        []string
+	err          error
+	body         string
+	dependsOn    []IssueDependency
+	hasSubIssues bool
+}
+
+func (h *fakeIssueHydrator) HydrateIssue(_ context.Context, repo string, issue *Issue) error {
+	h.calls = append(h.calls, fmt.Sprintf("%s#%d", repo, issue.Number))
+	if h.err != nil {
+		return h.err
+	}
+	issue.Body = h.body
+	issue.DependsOn = h.dependsOn
+	issue.HasSubIssues = h.hasSubIssues
+	return nil
+}
+
+// hydratingTestSource builds an issue source that reads through one fake page
+// and hydrates through one fake hydrator.
+func hydratingTestSource(page *fakeBrowserPage, hydrate browserIssueHydrator, handled func(Issue) bool) *browserIssueSource {
+	source := newTestIssueSource(page, "", false, nil)
+	source.hydrate = hydrate
+	source.handled = handled
+	source.hydrated = map[string]map[string]browserHydratedIssue{}
+	return source
+}
+
+// rowsResult builds a single-page extraction result for the given numbers.
+func rowsResult(numbers ...int) browserIssueList {
+	list := browserIssueList{Recognized: true}
+	for _, number := range numbers {
+		list.Rows = append(list.Rows, browserIssueRow{Number: number, Repository: "lsegal/glorp", Title: fmt.Sprintf("issue %d", number), State: "open"})
+	}
+	return list
+}
+
+func repeatResult(list browserIssueList, times int) []browserIssueList {
+	results := make([]browserIssueList, 0, times)
+	for i := 0; i < times; i++ {
+		results = append(results, list)
+	}
+	return results
+}
+
+// TestBrowserIssueSourceSteadyStateTickMakesNoRequests is the budget
+// assertion: once the candidates on a page have been hydrated, reloading the
+// same unchanged list any number of times costs nothing at all.
+func TestBrowserIssueSourceSteadyStateTickMakesNoRequests(t *testing.T) {
+	const ticks = 6
+	page := &fakeBrowserPage{results: repeatResult(rowsResult(1, 2), ticks)}
+	hydrate := &fakeIssueHydrator{body: "hydrated"}
+	source := hydratingTestSource(page, hydrate, nil)
+	for tick := 0; tick < ticks; tick++ {
+		if _, err := source.ListIssues(context.Background(), "lsegal/glorp"); err != nil {
+			t.Fatalf("tick %d: ListIssues() error = %v", tick+1, err)
+		}
+		if tick == 0 && len(hydrate.calls) != 2 {
+			t.Fatalf("first tick hydrated %v, want one fetch per new issue", hydrate.calls)
+		}
+	}
+	if len(hydrate.calls) != 2 {
+		t.Fatalf("hydrations after %d unchanged ticks = %v, want the first tick's two and nothing more", ticks, hydrate.calls)
+	}
+}
+
+// TestBrowserIssueSourceHydratesOnlyNewIssues checks the O(new issues) half of
+// the budget: a list that grows by one costs exactly one fetch.
+func TestBrowserIssueSourceHydratesOnlyNewIssues(t *testing.T) {
+	page := &fakeBrowserPage{results: []browserIssueList{rowsResult(1, 2), rowsResult(1, 2, 3)}}
+	hydrate := &fakeIssueHydrator{}
+	source := hydratingTestSource(page, hydrate, nil)
+	for tick := 0; tick < 2; tick++ {
+		if _, err := source.ListIssues(context.Background(), "lsegal/glorp"); err != nil {
+			t.Fatalf("tick %d: ListIssues() error = %v", tick+1, err)
+		}
+	}
+	want := []string{"lsegal/glorp#1", "lsegal/glorp#2", "lsegal/glorp#3"}
+	if strings.Join(hydrate.calls, ",") != strings.Join(want, ",") {
+		t.Fatalf("hydrations = %v, want %v", hydrate.calls, want)
+	}
+}
+
+// TestBrowserIssueSourceSkipsHandledIssues covers the diff against the
+// handled-state file and the in-flight set: work this run already owns is not
+// a dispatch candidate, so it is never fetched.
+func TestBrowserIssueSourceSkipsHandledIssues(t *testing.T) {
+	page := &fakeBrowserPage{results: repeatResult(rowsResult(1, 2), 2)}
+	hydrate := &fakeIssueHydrator{}
+	source := hydratingTestSource(page, hydrate, func(issue Issue) bool { return issue.Number == 1 })
+	for tick := 0; tick < 2; tick++ {
+		if _, err := source.ListIssues(context.Background(), "lsegal/glorp"); err != nil {
+			t.Fatalf("tick %d: ListIssues() error = %v", tick+1, err)
+		}
+	}
+	if len(hydrate.calls) != 1 || hydrate.calls[0] != "lsegal/glorp#2" {
+		t.Fatalf("hydrations = %v, want only the unhandled issue fetched once", hydrate.calls)
+	}
+}
+
+// TestBrowserIssueSourceRehydratesOnCandidateReentry checks the one case the
+// memo is deliberately dropped for: an issue that stops being a candidate and
+// comes back must not be dispatched from a stale body.
+func TestBrowserIssueSourceRehydratesOnCandidateReentry(t *testing.T) {
+	page := &fakeBrowserPage{results: repeatResult(rowsResult(1), 3)}
+	hydrate := &fakeIssueHydrator{}
+	tick := 0
+	source := hydratingTestSource(page, hydrate, func(Issue) bool { return tick == 2 })
+	for tick = 1; tick <= 3; tick++ {
+		if _, err := source.ListIssues(context.Background(), "lsegal/glorp"); err != nil {
+			t.Fatalf("tick %d: ListIssues() error = %v", tick, err)
+		}
+	}
+	if len(hydrate.calls) != 2 {
+		t.Fatalf("hydrations = %v, want the issue fetched again after it re-entered the candidate set", hydrate.calls)
+	}
+}
+
+// TestBrowserIssueSourceAppliesHydratedFields checks the hydrated metadata
+// reaches the dispatch path, both on the fetching tick and on later cached
+// ones.
+func TestBrowserIssueSourceAppliesHydratedFields(t *testing.T) {
+	page := &fakeBrowserPage{results: repeatResult(rowsResult(7), 2)}
+	hydrate := &fakeIssueHydrator{body: "Depends on #4", dependsOn: []IssueDependency{{Number: 4, State: "open"}}, hasSubIssues: true}
+	source := hydratingTestSource(page, hydrate, nil)
+	for tick := 1; tick <= 2; tick++ {
+		issues, err := source.ListIssues(context.Background(), "lsegal/glorp")
+		if err != nil {
+			t.Fatalf("tick %d: ListIssues() error = %v", tick, err)
+		}
+		if len(issues) != 1 {
+			t.Fatalf("tick %d: issues = %#v", tick, issues)
+		}
+		if issues[0].Body != "Depends on #4" || issues[0].HasSubIssues != true || len(issues[0].DependsOn) != 1 {
+			t.Fatalf("tick %d: hydrated issue = %#v", tick, issues[0])
+		}
+		if blocked, _ := issueBlocked(issues[0]); !blocked {
+			t.Fatalf("tick %d: hydrated issue reported unblocked", tick)
+		}
+	}
+	if len(hydrate.calls) != 1 {
+		t.Fatalf("hydrations = %v, want the cached tick to fetch nothing", hydrate.calls)
+	}
+}
+
+// TestBrowserIssueSourceReportsHydrationFailure keeps a failed fetch visible
+// rather than dispatching an issue with no body.
+func TestBrowserIssueSourceReportsHydrationFailure(t *testing.T) {
+	page := &fakeBrowserPage{results: repeatResult(rowsResult(1), 1)}
+	hydrate := &fakeIssueHydrator{err: errors.New("boom")}
+	source := hydratingTestSource(page, hydrate, nil)
+	if _, err := source.ListIssues(context.Background(), "lsegal/glorp"); err == nil {
+		t.Fatal("ListIssues() error = nil, want the hydration failure")
+	}
+}
+
+// TestGHCLIHydrateIssueUsesTargetedRESTCalls pins the per-issue cost of a
+// hydration on a private repository: one issue read plus the two dependency
+// lookups, all REST, none of them GraphQL.
+func TestGHCLIHydrateIssueUsesTargetedRESTCalls(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		publicAPI: func(context.Context, string) ([]byte, http.Header, int, error) {
+			return []byte(`{"private":true}`), nil, http.StatusOK, nil
+		},
+		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string(nil), args...))
+			switch {
+			case len(args) >= 2 && args[0] == "api" && args[1] == "repos/owner/repo/issues/9":
+				return []byte(`{"title":"Real title","body":"the body","state":"OPEN","created_at":"2026-08-30T12:00:00Z"}`), nil
+			case len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "dependencies/blocked_by"):
+				return []byte(`[]`), nil
+			case len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "sub_issues"):
+				return []byte(`[{"number":10,"state":"open"}]`), nil
+			}
+			return nil, fmt.Errorf("unexpected gh call: %#v", args)
+		},
+	}
+	issue := &Issue{Number: 9, Title: "scraped title", State: "open"}
+	if err := gh.HydrateIssue(context.Background(), "owner/repo", issue); err != nil {
+		t.Fatalf("HydrateIssue() error = %v", err)
+	}
+	if issue.Body != "the body" || issue.Title != "Real title" || issue.State != "open" || issue.CreatedAt.IsZero() {
+		t.Fatalf("hydrated issue = %#v", issue)
+	}
+	if !issue.HasSubIssues {
+		t.Fatal("HasSubIssues = false, want true for an open sub-issue")
+	}
+	if len(calls) != 3 {
+		t.Fatalf("gh calls = %#v, want exactly the issue read and the two dependency lookups", calls)
+	}
+	for _, call := range calls {
+		if len(call) == 0 || call[0] != "api" {
+			t.Fatalf("gh calls = %#v, want only `gh api` REST calls", calls)
+		}
+		for _, arg := range call {
+			if strings.Contains(arg, "graphql") || strings.HasPrefix(arg, "query") {
+				t.Fatalf("gh calls = %#v, want no GraphQL query", calls)
+			}
+		}
+	}
+}
+
+// TestGHCLIHydrateIssuePrefersPublicAPI keeps a public repository's hydration
+// off the authenticated token's rate limit.
+func TestGHCLIHydrateIssuePrefersPublicAPI(t *testing.T) {
+	var requested []string
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		runCommand: func(context.Context, ...string) ([]byte, error) {
+			return nil, errors.New("should not run gh")
+		},
+		publicAPI: func(_ context.Context, requestURL string) ([]byte, http.Header, int, error) {
+			requested = append(requested, requestURL)
+			switch requestURL {
+			case "https://api.github.com/repos/owner/repo":
+				return []byte(`{"private":false}`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/9":
+				return []byte(`{"body":"body text"}`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/9/dependencies/blocked_by":
+				return []byte(`[]`), nil, http.StatusOK, nil
+			case "https://api.github.com/repos/owner/repo/issues/9/sub_issues":
+				return []byte(`[]`), nil, http.StatusOK, nil
+			}
+			t.Fatalf("unexpected request URL: %s", requestURL)
+			return nil, nil, 0, nil
+		},
+	}
+	issue := &Issue{Number: 9}
+	if err := gh.HydrateIssue(context.Background(), "owner/repo", issue); err != nil {
+		t.Fatalf("HydrateIssue() error = %v", err)
+	}
+	if issue.Body != "body text" {
+		t.Fatalf("Body = %q", issue.Body)
+	}
+	for _, requestURL := range requested {
+		if strings.Contains(requestURL, "graphql") {
+			t.Fatalf("requested %v, want no GraphQL", requested)
+		}
+	}
+}
+
+// TestGlorpIssueHandledSnapshot covers the predicate browser mode diffs
+// against: in-flight and completed work is handled, failed work is not,
+// because it gets dispatched again and still needs its metadata.
+func TestGlorpIssueHandledSnapshot(t *testing.T) {
+	w := &Glorp{}
+	issue := func(number int) Issue {
+		return Issue{Number: number, Target: "lsegal/glorp", Repository: "lsegal/glorp"}
+	}
+	if w.issueHandled(issue(1)) {
+		t.Fatal("issueHandled() = true before any snapshot was published")
+	}
+	w.publishHandledIssues(map[string]workState{
+		"lsegal/glorp#1": {Status: "completed"},
+		"lsegal/glorp#2": {Status: "failed"},
+		"lsegal/glorp#3": {Status: "active"},
+	}, map[string]string{"lsegal/glorp#4": "claude"})
+	for number, want := range map[int]bool{1: true, 2: false, 3: true, 4: true, 5: false} {
+		if got := w.issueHandled(issue(number)); got != want {
+			t.Fatalf("issueHandled(#%d) = %v, want %v", number, got, want)
+		}
+	}
+}

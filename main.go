@@ -59,6 +59,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.Bool("browser", false, "watch GitHub through a headless browser instead of the GitHub API (implies -poll)")
 	flags.String("browser-profile", "", "Chrome profile directory for browser mode (default: <config dir>/glorp/browser-data)")
 	flags.String("browser-binary", "", "Chrome/Chromium/Edge executable for browser mode")
+	flags.Bool("browser-vision", false, "in browser mode, let an agent read a screenshot of a page whose markup glorp no longer recognises (off by default, hard budget per run)")
 	return flags
 }
 
@@ -248,7 +249,7 @@ func runWatch(args []string) int {
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
-	applyBrowserSources(w, browser, gh.Filter, gh.AllIssues)
+	applyBrowserSources(w, browser, browserOptions, gh)
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
@@ -1122,6 +1123,48 @@ func projectItemListError(output []byte, err error) error {
 		return fmt.Errorf("list project items: %w: %s", err, detail)
 	}
 	return fmt.Errorf("list project items: %w", err)
+}
+
+// HydrateIssue fills in the dispatch-only fields a browser-mode extraction
+// cannot read off the rendered issues page: the issue body, its creation time,
+// and its dependency/sub-issue state. It is deliberately the smallest fetch
+// that answers those questions -- one REST `GET /repos/:repo/issues/:number`
+// plus the dependency lookup loadDependencies already performs -- and it goes
+// through apiGET, so a public repository is read on the unauthenticated API
+// and spends none of the token's rate limit. No GraphQL query is issued.
+//
+// Callers are responsible for the request budget: browserIssueSource calls
+// this once per newly seen dispatch candidate, never per tick and never for
+// the whole list.
+func (g GHCLI) HydrateIssue(ctx context.Context, repo string, issue *Issue) error {
+	if repo == "" || issue == nil || issue.Number <= 0 {
+		return nil
+	}
+	public := g.isPublicRepo(ctx, repo)
+	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(issue.Number))
+	if err != nil {
+		return fmt.Errorf("read issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
+	}
+	var detail struct {
+		Title     string    `json:"title"`
+		Body      string    `json:"body"`
+		State     string    `json:"state"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(output, &detail); err != nil {
+		return fmt.Errorf("decode issue #%d: %w", issue.Number, err)
+	}
+	issue.Body = detail.Body
+	if title := strings.TrimSpace(detail.Title); title != "" {
+		issue.Title = title
+	}
+	if detail.State != "" {
+		issue.State = strings.ToLower(detail.State)
+	}
+	if !detail.CreatedAt.IsZero() {
+		issue.CreatedAt = detail.CreatedAt
+	}
+	return g.loadDependencies(ctx, repo, issue)
 }
 
 var dependencyPattern = regexp.MustCompile(`(?i)\bdepends\s+on\s+#(\d+)`)

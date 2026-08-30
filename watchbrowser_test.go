@@ -148,14 +148,43 @@ func TestWatchHelpDocumentsBrowserMode(t *testing.T) {
 	}
 }
 
+// The screenshot fallback is off unless it is asked for, and it only means
+// anything in browser mode.
+func TestResolveBrowserWatchVision(t *testing.T) {
+	flags := parseWatchFlags(t, "--browser", "owner/repo")
+	options, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolveBrowserWatch: %v", err)
+	}
+	if options.Vision {
+		t.Fatal("the screenshot fallback is on without -browser-vision")
+	}
+
+	flags = parseWatchFlags(t, "--browser", "--browser-vision", "owner/repo")
+	options, _, _, err = resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolveBrowserWatch: %v", err)
+	}
+	if !options.Vision {
+		t.Fatal("-browser-vision did not enable the fallback")
+	}
+}
+
+func TestResolveBrowserWatchRejectsVisionWithoutBrowserMode(t *testing.T) {
+	flags := parseWatchFlags(t, "--browser-vision", "owner/repo")
+	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
+		t.Fatal("expected -browser-vision without -browser to be rejected")
+	}
+}
+
 // The acceptance test for browser mode's wiring: with -browser the sources
 // Glorp actually reads through must be the browser-backed ones, not merely a
 // parsed flag. Issues goes to the page readers and the push-mode project probe
 // goes to the board, while everything that still needs the API stays on GHCLI.
 func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
-	gh := GHCLI{Binary: "gh"}
+	gh := GHCLI{Binary: "gh", Filter: "is:issue state:open", AllIssues: true}
 	w := &Glorp{Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Out: io.Discard}
-	applyBrowserSources(w, &Browser{}, "is:issue state:open", true)
+	applyBrowserSources(w, &Browser{}, browserWatchOptions{Enabled: true}, gh)
 
 	issues, ok := w.Issues.(browserWatchIssues)
 	if !ok {
@@ -165,16 +194,23 @@ func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 	if !ok {
 		t.Fatalf("Issues.Repos = %T, want *browserIssueSource", issues.Repos)
 	}
-	if repos.filter != "is:issue state:open" || !repos.allIssues {
+	if repos.filter != gh.Filter || !repos.allIssues {
 		t.Fatalf("issue source filter = %q, allIssues = %v; want the run's -filter and -all-issues", repos.filter, repos.allIssues)
 	}
 	if repos.pageFor == nil {
 		t.Fatal("issue source has no tab opener, so it cannot read a page")
 	}
+	if repos.hydrate == nil || repos.handled == nil {
+		t.Fatal("issue source cannot hydrate dispatch metadata, so candidates would reach dispatch without a body")
+	}
+	// The screenshot fallback is opt-in: -browser alone must not attach it.
+	if repos.vision != nil {
+		t.Fatal("the screenshot fallback is attached without -browser-vision")
+	}
 	if issues.Board == nil {
 		t.Fatal("Issues.Board is nil, so project targets have no reader")
 	}
-	if issues.Board.Filter != "is:issue state:open" || !issues.Board.AllIssues {
+	if issues.Board.Filter != gh.Filter || !issues.Board.AllIssues {
 		t.Fatalf("board filter = %q, allIssues = %v; want the run's -filter and -all-issues", issues.Board.Filter, issues.Board.AllIssues)
 	}
 	if issues.Board.Page == nil {
@@ -198,12 +234,32 @@ func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 	}
 }
 
+// -browser-vision reaches the injected issue source, rather than stopping at
+// the resolved options.
+func TestApplyBrowserSourcesAttachesVisionFallback(t *testing.T) {
+	gh := GHCLI{Binary: "gh"}
+	w := &Glorp{Issues: gh, Projects: gh, Out: io.Discard}
+	applyBrowserSources(w, &Browser{}, browserWatchOptions{Enabled: true, Vision: true}, gh)
+
+	issues, ok := w.Issues.(browserWatchIssues)
+	if !ok {
+		t.Fatalf("Issues = %T, want browserWatchIssues", w.Issues)
+	}
+	repos, ok := issues.Repos.(*browserIssueSource)
+	if !ok {
+		t.Fatalf("Issues.Repos = %T, want *browserIssueSource", issues.Repos)
+	}
+	if repos.vision == nil {
+		t.Fatal("-browser-vision did not reach the injected issue source")
+	}
+}
+
 // Without -browser runWatch passes no browser, and nothing about the run may
 // change: every source stays the API-backed one it was built with.
 func TestApplyBrowserSourcesWithoutBrowserKeepsAPISources(t *testing.T) {
 	gh := GHCLI{Binary: "gh"}
 	w := &Glorp{Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Out: io.Discard}
-	applyBrowserSources(w, nil, "is:issue state:open", true)
+	applyBrowserSources(w, nil, browserWatchOptions{}, gh)
 
 	for name, source := range map[string]interface{}{
 		"Issues":      w.Issues,

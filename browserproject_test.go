@@ -196,6 +196,9 @@ func TestBrowserBoardFailsWhenBoardNeverRenders(t *testing.T) {
 	board, _ := newTestBoard(page)
 	board.settleAttempts = 3
 	_, err := board.ListIssues(context.Background(), "https://github.com/users/lsegal/projects/3")
+	if !errors.Is(err, errBrowserExtraction) {
+		t.Fatalf("a board that never rendered is not reported as an extraction failure: %v", err)
+	}
 	if err == nil || !strings.Contains(err.Error(), "did not render") {
 		t.Fatalf("error = %v, want a did-not-render failure", err)
 	}

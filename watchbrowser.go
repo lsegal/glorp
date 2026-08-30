@@ -14,6 +14,10 @@ type browserWatchOptions struct {
 	Enabled bool
 	Binary  string
 	Profile string
+	// Vision enables the bounded screenshot-to-agent fallback for pages the
+	// DOM extractor stops recognising. It is off unless -browser-vision is
+	// passed, and it changes nothing on the success path.
+	Vision bool
 }
 
 // config converts the flag values into the launcher's configuration.
@@ -44,11 +48,15 @@ func resolveBrowserWatch(flags *flag.FlagSet, interval time.Duration, poll bool)
 		Enabled: flagValue[bool](flags, "browser"),
 		Binary:  flagValue[string](flags, "browser-binary"),
 		Profile: flagValue[string](flags, "browser-profile"),
-	}
-	if !options.Enabled {
-		return options, interval, poll, nil
+		Vision:  flagValue[bool](flags, "browser-vision"),
 	}
 	explicit := explicitFlags(flags)
+	if !options.Enabled {
+		if explicit["browser-vision"] {
+			return options, interval, poll, fmt.Errorf("-browser-vision only applies to browser mode, so it cannot be used without -browser")
+		}
+		return options, interval, poll, nil
+	}
 	var conflicting []string
 	for _, name := range browserExclusiveFlags {
 		if explicit[name] {
@@ -86,14 +94,23 @@ func explicitFlags(flags *flag.FlagSet) map[string]bool {
 //
 // The board is built once and shared: it answers as the issue source for
 // project targets and as the push-mode ProjectState probe, and giving each of
-// those its own reader would open two tabs on the same board.
-func applyBrowserSources(w *Glorp, browser *Browser, filter string, allIssues bool) {
+// those its own reader would open two tabs on the same board. Dispatch needs
+// the body and dependency state the issues page does not render, so the
+// repository source hydrates newly seen candidates through gh (issue #381),
+// and the screenshot fallback is attached only when -browser-vision asked for
+// it (issue #384).
+func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions, gh GHCLI) {
 	if w == nil || browser == nil {
 		return
 	}
-	board := newBrowserBoard(browser, filter, allIssues)
+	var vision *browserVision
+	if options.Vision {
+		runner, _ := w.Runner.(CommandRunner)
+		vision = newBrowserVision(runner, w.logf)
+	}
+	board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
 	w.Issues = browserWatchIssues{
-		Repos: newBrowserIssueSource(browser, filter, allIssues, w.logf),
+		Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf),
 		Board: board,
 	}
 	w.Projects = board
