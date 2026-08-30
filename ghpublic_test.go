@@ -295,8 +295,8 @@ func TestListPublicIssuesResolvesSelfLoginAndFiltersPullRequests(t *testing.T) {
 	if len(issues) != 1 || issues[0].Number != 7 || issues[0].Title != "bug" || len(issues[0].Labels) != 1 || issues[0].Labels[0].Name != "bug" {
 		t.Fatalf("issues = %#v", issues)
 	}
-	if !strings.Contains(searchURL, "repo%3Aowner%2Frepo") || !strings.Contains(searchURL, "author%3Alsegal") {
-		t.Fatalf("search URL = %q, want it to encode repo and resolved author qualifiers", searchURL)
+	if !strings.Contains(searchURL, "repo%3Aowner%2Frepo") || !strings.Contains(searchURL, "assignee%3Alsegal") {
+		t.Fatalf("search URL = %q, want it to encode repo and resolved assignee qualifiers", searchURL)
 	}
 }
 
