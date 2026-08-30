@@ -15,9 +15,9 @@ package main
 const browserIssueRowsScript = `(function () {
   var rowPattern = /^(?:https:\/\/github\.com)?\/([^\/\s]+)\/([^\/\s]+)\/issues\/(\d+)(?:\?[^#]*)?$/;
   var container =
+    document.querySelector('[data-listview-component="items-list"]') ||
     document.querySelector('[data-testid="issue-list"]') ||
-    document.querySelector('[data-testid="results-list"]') ||
-    document.querySelector('[aria-label="Issues"]') ||
+    document.querySelector('section[aria-label*="issue" i]') ||
     document.querySelector('.js-navigation-container') ||
     document;
 
@@ -45,7 +45,7 @@ const browserIssueRowsScript = `(function () {
       anchor;
 
     var labels = [];
-    var chips = row.querySelectorAll('a[href*="/labels/"], [data-testid="issue-label"], .IssueLabel');
+    var chips = row.querySelectorAll('[class*="IssueLabelToken"], [class*="prc-Token-IssueLabel"], a[href*="/labels/"], [data-testid="issue-label"], .IssueLabel');
     for (var j = 0; j < chips.length; j++) {
       var name = (chips[j].getAttribute('data-name') || chips[j].textContent || '').trim();
       if (name && labels.indexOf(name) < 0) labels.push(name);
@@ -78,6 +78,7 @@ const browserIssueRowsScript = `(function () {
 
   var pager =
     document.querySelector('a[rel="next"]') ||
+    document.querySelector('a[data-testid="pagination-next"]') ||
     document.querySelector('a[aria-label="Next Page"]') ||
     document.querySelector('a[aria-label="Next"]');
   var next = pager && pager.getAttribute('aria-disabled') !== 'true' ? pager.href : '';

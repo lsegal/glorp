@@ -152,16 +152,18 @@ func runWatch(args []string) int {
 	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
 	// cleanup did not run before the daemon returns (issue #260).
 	defer reapChildProcesses()
+	var browser *Browser
 	if browserOptions.Enabled {
 		// One browser for the whole run: every target gets a tab on it rather
 		// than a browser of its own. A browser that cannot start is fatal, since
 		// quietly falling back to the API path would answer a request for
 		// browser mode with something else entirely.
-		browser, err := startBrowser(ctx, browserOptions.config())
+		started, err := startBrowser(ctx, browserOptions.config())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		browser = started
 		defer func() { _ = browser.Close() }()
 	}
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
@@ -244,6 +246,12 @@ func runWatch(args []string) int {
 		return 1
 	}
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
+	if browser != nil {
+		// Browser mode reads the issue list off GitHub's own issues page. Only
+		// the issue source changes: statuses, comments, and projects still go
+		// through gh, and the dispatch path downstream is untouched.
+		w.Issues = newBrowserIssueSource(browser, gh.Filter, gh.AllIssues, w.logf)
+	}
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
