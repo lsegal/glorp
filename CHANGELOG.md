@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.22 - 2026-08-30
+
 - Mark repository issues ready for an agent by assigning them to yourself instead of labelling them. The default `--filter` is now `is:issue state:open assignee:@me`, glorp no longer creates or manages the `agent-ready` label on watched repositories, and the `gh-fix` skill assigns follow-up issues to the authenticated user rather than labelling them.
 
 ## v1.2.21 - 2026-08-29
