@@ -145,6 +145,10 @@ type browserProcess struct {
 	cmd   *exec.Cmd
 	port  int
 	wsURL string
+	// profile is the user-data directory the browser was launched against, so
+	// a page that turns out to have been read by a signed-out session can name
+	// the directory to sign in.
+	profile string
 }
 
 // launchBrowser starts a headless browser against glorp's own profile and waits
@@ -179,7 +183,7 @@ func launchBrowser(ctx context.Context, config browserConfig) (*browserProcess, 
 		_ = stopChildProcess(cmd)
 		return nil, err
 	}
-	return &browserProcess{cmd: cmd, port: port, wsURL: wsURL}, nil
+	return &browserProcess{cmd: cmd, port: port, wsURL: wsURL, profile: profile}, nil
 }
 
 // browserVersionInfo is the part of the DevTools /json/version response glorp

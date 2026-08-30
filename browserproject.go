@@ -42,6 +42,9 @@ type BrowserBoard struct {
 	// (issue #395). Nil leaves board items unhydrated, which is what the
 	// extraction-only tests want.
 	hydration *browserHydration
+	// Profile is the browser profile directory, named in the signed-out error
+	// the same way the repository issues page names it.
+	Profile string
 
 	// maxItems caps how many rows are read from one board, matching the cap
 	// the GraphQL path applies. maxScrolls caps how many times a virtualized
@@ -77,6 +80,7 @@ func newBrowserBoard(browser *Browser, filter string, allIssues bool, vision *br
 		AllIssues: allIssues,
 		Vision:    vision,
 		hydration: hydration,
+		Profile:   browser.Profile(),
 	}
 }
 
@@ -247,6 +251,15 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 		if !b.pause(ctx) {
 			return nil, ctx.Err()
 		}
+	}
+	// A board that showed nothing is the other face of issue #402: a
+	// signed-out profile makes an "@me" filter match nobody, and a board that
+	// renders an honestly empty result is indistinguishable from a board with
+	// no ready work. Checking before the vision fallback matters as much as
+	// checking at all, because no screenshot of a signed-out page can be read
+	// into issues.
+	if (!rendered || len(rows) == 0) && browserSignedOut(page) {
+		return nil, &browserSignedOutError{URL: boardURL(parsed, b.Filter, b.AllIssues), Profile: b.Profile}
 	}
 	if !rendered {
 		// A board that loaded but never drew its own markup is the same

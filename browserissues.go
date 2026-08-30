@@ -45,6 +45,10 @@ type browserIssueSource struct {
 	filter    string
 	allIssues bool
 	logf      func(string, ...interface{})
+	// profile is the browser profile directory, named in the signed-out error
+	// so the user is told which profile to sign in rather than being left to
+	// guess whether -browser-profile was in play.
+	profile string
 	// browserHydration is the shared candidate/memo hydration helper. It is
 	// embedded so the source's own hydrate, handled, and hydrated fields read
 	// and write the one memo the project board reader shares (issue #395).
@@ -132,6 +136,7 @@ func newBrowserIssueSource(browser *Browser, hydrate browserIssueHydrator, handl
 		allIssues:        allIssues,
 		vision:           vision,
 		logf:             logf,
+		profile:          browser.Profile(),
 		browserHydration: newBrowserHydration(hydrate, handled),
 		reported:         map[string]bool{},
 		lastURL:          map[string]string{},
@@ -368,8 +373,16 @@ func (s *browserIssueSource) readPage(target string, page browserPage, pageURL s
 	if err := page.Eval(browserIssueRowsScript, &list); err != nil {
 		return browserIssueList{}, fmt.Errorf("read issue list at %s: %w", pageURL, err)
 	}
+	// A page that yielded no rows is where a signed-out profile hides: with
+	// "@me" in the filter GitHub renders a genuine, correctly-empty result, so
+	// the extraction succeeds and the run reports "0 issues" on every poll
+	// forever instead of saying the one thing that would fix it (issue #402).
+	// The probe runs only here, so a read that found issues costs nothing.
+	if len(list.Rows) == 0 && browserSignedOut(page) {
+		return browserIssueList{}, &browserSignedOutError{URL: pageURL, Profile: s.profile}
+	}
 	if !list.Recognized {
-		return browserIssueList{}, s.extractionFailed(pageURL, "no issue rows and no empty-list marker were found on the page (the browser profile may be signed out of GitHub, or the page's markup has changed)")
+		return browserIssueList{}, s.extractionFailed(pageURL, "no issue rows and no empty-list marker were found on the page (the page's markup may have changed)")
 	}
 	return list, nil
 }

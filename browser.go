@@ -44,6 +44,15 @@ func startBrowser(ctx context.Context, config browserConfig) (*Browser, error) {
 	}, nil
 }
 
+// Profile reports the profile directory the browser was launched against, or
+// an empty string when there is no launched process to ask (the tests' fakes).
+func (b *Browser) Profile() string {
+	if b == nil || b.cmd == nil {
+		return ""
+	}
+	return b.cmd.profile
+}
+
 // Tab returns the tab glorp drives for a target, opening it on first use and
 // reusing it afterwards. Names are the caller's own: one per watched target.
 func (b *Browser) Tab(name string) (*BrowserTab, error) {
