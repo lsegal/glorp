@@ -246,18 +246,9 @@ func runWatch(args []string) int {
 		return 1
 	}
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
-	if browser != nil {
-		// Browser mode reads the issue list off GitHub's own issues page and a
-		// project board off its Projects v2 page. Only the reads change:
-		// statuses and comments still go through gh, and the dispatch path
-		// downstream is untouched.
-		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
-		w.Issues = browserWatchIssues{
-			Repos: newBrowserIssueSource(browser, gh.Filter, gh.AllIssues, w.logf),
-			Board: board,
-		}
-		w.Projects = board
-	}
+	// Browser mode reads issues and boards off GitHub's rendered pages instead
+	// of the API. A nil browser leaves the GHCLI sources above in place.
+	applyBrowserSources(w, browser, gh.Filter, gh.AllIssues)
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)

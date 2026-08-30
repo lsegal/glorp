@@ -73,3 +73,28 @@ func explicitFlags(flags *flag.FlagSet) map[string]bool {
 	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	return set
 }
+
+// applyBrowserSources swaps the reads a run does for their browser-backed
+// equivalents. Browser mode reads the issue list off GitHub's own issues page
+// (issue #377) and a project board off its Projects v2 page (issue #378), both
+// through tabs on the one shared browser the run launched.
+//
+// Only reads move. Discussions has no REST API to trade for a page read,
+// comments drive the handoff handshake, and status writes have no stable page
+// affordance, so those stay on GHCLI. A nil browser means -browser was not
+// passed, and the run is left exactly as the API path built it.
+//
+// The board is built once and shared: it answers as the issue source for
+// project targets and as the push-mode ProjectState probe, and giving each of
+// those its own reader would open two tabs on the same board.
+func applyBrowserSources(w *Glorp, browser *Browser, filter string, allIssues bool) {
+	if w == nil || browser == nil {
+		return
+	}
+	board := newBrowserBoard(browser, filter, allIssues)
+	w.Issues = browserWatchIssues{
+		Repos: newBrowserIssueSource(browser, filter, allIssues, w.logf),
+		Board: board,
+	}
+	w.Projects = board
+}
