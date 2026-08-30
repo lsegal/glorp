@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Dispatch open issues you opened as well as ones assigned to you. The default `--filter` now also covers `author:@me`: because GitHub issue search has no `OR`, glorp runs the `assignee:@me` and `author:@me` searches separately for repository targets and unions the results by issue number. An explicit `--filter`, `--all-issues`, and Project targets are unaffected.
+
 ## v1.2.22 - 2026-08-30
 
 - Mark repository issues ready for an agent by assigning them to yourself instead of labelling them. The default `--filter` is now `is:issue state:open assignee:@me`, glorp no longer creates or manages the `agent-ready` label on watched repositories, and the `gh-fix` skill assigns follow-up issues to the authenticated user rather than labelling them.
