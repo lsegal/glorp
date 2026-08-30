@@ -7,25 +7,29 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 // The screenshot fallback exists for one situation only: GitHub changed its
-// markup and the DOM extractor in browserissues.go no longer recognises a page
-// that plainly does contain items. It is a bridge until extraction is fixed in
-// code, not a strategy, so every part of it is bounded. In the steady state a
-// watch run makes zero vision calls no matter how long it polls.
+// markup and the DOM extractor in browserissues.go (or browserproject.go) no
+// longer recognises a page that plainly does contain items. It is a bridge
+// until extraction is fixed in code, not a strategy, so every part of it is
+// bounded. In the steady state a watch run makes zero vision calls no matter
+// how long it polls, for issue pages and project boards alike.
 const (
 	// browserVisionCooldown is the minimum time between screenshots of the
 	// same target. A five-second poll loop hitting a permanently broken page
 	// would otherwise queue an agent call every tick.
 	browserVisionCooldown = 10 * time.Minute
 	// browserVisionRunLimit is how many vision calls a single run may make
-	// before the fallback switches itself off for the rest of the run. If
-	// three screenshots did not recover the list, a fourth will not either;
-	// the extractor needs fixing.
+	// before the fallback switches itself off for the rest of the run. The cap
+	// is shared across every target and every page kind: if three screenshots
+	// did not recover a list, a fourth will not either; the extractor needs
+	// fixing.
 	browserVisionRunLimit = 3
 	// browserVisionTimeout bounds one agent invocation, so a wedged agent
 	// cannot stall the poll loop it was called from.
@@ -39,17 +43,29 @@ type browserScreenshotter interface {
 	Screenshot() ([]byte, error)
 }
 
+// browserVisionRef is one issue the agent read off a screenshot. Repository is
+// empty for a repository target, where the page itself fixes the repository
+// and a bare number is unambiguous; it is always set for a project board,
+// which spans repositories and where a bare number cannot be turned back into
+// an addressable issue.
+type browserVisionRef struct {
+	Repository string
+	Number     int
+}
+
 // browserVision is the budget around the screenshot-to-agent fallback. It owns
-// the accounting (per-target cooldown, per-run cap) so the issue source cannot
-// spend the budget by accident, and it logs every call it does make with the
-// reason and the running count so a runaway is obvious in the dashboard.
+// the accounting (per-target cooldown, per-run cap) so the issue and board
+// sources cannot spend the budget by accident, and it logs every call it does
+// make with the reason and the running count so a runaway is obvious in the
+// dashboard. One instance is shared by every target, so the per-run cap is a
+// budget for the whole run rather than per page kind.
 type browserVision struct {
 	cooldown time.Duration
 	limit    int
-	// ask performs one vision call and returns the issue numbers the agent
-	// read off the screenshot. Tests replace it; production wires it to an
-	// agent invocation.
-	ask  func(ctx context.Context, screenshot []byte, pageURL string) ([]int, error)
+	// ask performs one vision call and returns the issues the agent read off
+	// the screenshot. qualified selects the answer shape it must ask for and
+	// accept. Tests replace it; production wires it to an agent invocation.
+	ask  func(ctx context.Context, screenshot []byte, pageURL string, qualified bool) ([]browserVisionRef, error)
 	logf func(string, ...interface{})
 	now  func() time.Time
 
@@ -77,13 +93,16 @@ func newBrowserVision(runner CommandRunner, logf func(string, ...interface{})) *
 	}
 }
 
-// Recover spends one unit of budget, if any is left, to read the issue numbers
-// off a screenshot of a page the DOM extractor could not read. It returns nil
-// whenever the budget forbids the call, the screenshot fails, or the agent's
-// answer is not the strict JSON list it was asked for; nothing is ever retried.
+// Recover spends one unit of budget, if any is left, to read the issues off a
+// screenshot of a page the DOM extractor could not read. qualified asks the
+// agent for OWNER/REPO#NUMBER strings, which is what a project board needs;
+// without it the agent is asked for bare numbers, which is what an issues page
+// needs. It returns nil whenever the budget forbids the call, the screenshot
+// fails, or the agent's answer is not the strict shape it was asked for;
+// nothing is ever retried.
 //
 // A nil receiver means the fallback is off, which is the default.
-func (v *browserVision) Recover(ctx context.Context, target, pageURL, reason string, screenshot func() ([]byte, error)) []int {
+func (v *browserVision) Recover(ctx context.Context, target, pageURL, reason string, screenshot func() ([]byte, error), qualified bool) []browserVisionRef {
 	if v == nil || screenshot == nil {
 		return nil
 	}
@@ -102,17 +121,17 @@ func (v *browserVision) Recover(ctx context.Context, target, pageURL, reason str
 	}
 	callCtx, cancel := context.WithTimeout(ctx, browserVisionTimeout)
 	defer cancel()
-	numbers, err := v.ask(callCtx, image, pageURL)
+	refs, err := v.ask(callCtx, image, pageURL, qualified)
 	if err != nil {
 		v.log("browser vision: discarded the agent's answer for %s: %v", pageURL, err)
 		return nil
 	}
-	if len(numbers) == 0 {
+	if len(refs) == 0 {
 		v.log("browser vision: the agent found no issue numbers on %s", pageURL)
 		return nil
 	}
-	v.log("browser vision: recovered %d issue number(s) from %s; fix the page extractor rather than relying on this", len(numbers), pageURL)
-	return numbers
+	v.log("browser vision: recovered %d issue number(s) from %s; fix the page extractor rather than relying on this", len(refs), pageURL)
+	return refs
 }
 
 // reserve applies the budget and, when a call is allowed, records it before it
@@ -144,16 +163,25 @@ func (v *browserVision) log(format string, args ...interface{}) {
 	}
 }
 
-// browserVisionAgent turns one screenshot into a list of issue numbers by
-// invoking the run's configured agent on it.
+// browserVisionAgent turns one screenshot into a list of issues by invoking the
+// run's configured agent on it.
 type browserVisionAgent struct {
 	Runner CommandRunner
 }
 
 // browserVisionPrompt asks for a bare JSON array and nothing else. Anything
 // else the agent says is discarded rather than re-prompted, so the instruction
-// is deliberately narrow.
-func browserVisionPrompt(imagePath, pageURL string) string {
+// is deliberately narrow. A project board is asked for OWNER/REPO#NUMBER
+// strings because its rows come from several repositories and a bare number
+// there names no particular issue.
+func browserVisionPrompt(imagePath, pageURL string, qualified bool) string {
+	if qualified {
+		return fmt.Sprintf(`The image at %s is a screenshot of the GitHub project board at %s.
+
+The board's items come from several repositories, so a bare issue number is not enough. Reply with a strict JSON array of strings, each one "OWNER/REPO#NUMBER" for an issue listed on that page, and absolutely nothing else: no prose, no explanation, no markdown code fence. For example: ["octocat/hello-world#412","octocat/spoon-knife#398"]
+
+If the board shows no issues, reply with []. Do not open a browser, run commands, or read anything other than the image.`, imagePath, pageURL)
+	}
 	return fmt.Sprintf(`The image at %s is a screenshot of the GitHub issue list at %s.
 
 Reply with a strict JSON array of the issue numbers listed on that page, and absolutely nothing else: no prose, no explanation, no markdown code fence. For example: [412,398,377]
@@ -165,7 +193,7 @@ If the page shows no issues, reply with []. Do not open a browser, run commands,
 // and parses its answer. The agent's spec (model and reasoning level) is the
 // run's configured one, read without advancing the round-robin cursor that
 // load balances real issue dispatch.
-func (a browserVisionAgent) Ask(ctx context.Context, screenshot []byte, pageURL string) ([]int, error) {
+func (a browserVisionAgent) Ask(ctx context.Context, screenshot []byte, pageURL string, qualified bool) ([]browserVisionRef, error) {
 	dir, err := os.MkdirTemp("", "glorp-vision-")
 	if err != nil {
 		return nil, fmt.Errorf("write screenshot: %w", err)
@@ -176,7 +204,7 @@ func (a browserVisionAgent) Ask(ctx context.Context, screenshot []byte, pageURL 
 		return nil, fmt.Errorf("write screenshot: %w", err)
 	}
 	spec := a.Runner.specForSession(AgentSession{})
-	args := browserVisionArgs(spec, a.Runner.Yolo, path, pageURL)
+	args := browserVisionArgs(spec, a.Runner.Yolo, path, pageURL, qualified)
 	cmd := newAgentCommand(ctx, a.Runner.binary(spec.Name), args...)
 	cmd.Dir = os.TempDir()
 	var output bytes.Buffer
@@ -184,14 +212,14 @@ func (a browserVisionAgent) Ask(ctx context.Context, screenshot []byte, pageURL 
 	if err := runChildProcess(cmd); err != nil {
 		return nil, fmt.Errorf("agent failed: %w", err)
 	}
-	return parseBrowserVisionNumbers(output.String())
+	return parseBrowserVisionRefs(output.String(), qualified)
 }
 
 // browserVisionArgs builds the one-shot agent invocation. Codex takes the image
 // as a flag; Claude reads the path named in the prompt. Neither is asked for
 // structured streaming output, because the answer is expected to be one line.
-func browserVisionArgs(spec agentSpec, yolo bool, imagePath, pageURL string) []string {
-	prompt := browserVisionPrompt(imagePath, pageURL)
+func browserVisionArgs(spec agentSpec, yolo bool, imagePath, pageURL string, qualified bool) []string {
+	prompt := browserVisionPrompt(imagePath, pageURL, qualified)
 	if spec.Name == "codex" {
 		args := []string{"exec", "--image", imagePath}
 		if yolo {
@@ -220,28 +248,57 @@ func browserVisionArgs(spec agentSpec, yolo bool, imagePath, pageURL string) []s
 	return append(args, prompt)
 }
 
-// parseBrowserVisionNumbers reads the JSON array the agent was asked for. Only
-// the last non-empty line is considered, and it has to be a plain array of
-// positive integers on its own: a model that thinks out loud before answering
-// is still understood, but an array buried inside some other structure is not
-// the answer that was requested. Anything else is an error, and the caller
-// discards it rather than re-prompting.
-func parseBrowserVisionNumbers(output string) ([]int, error) {
+// browserVisionRefPattern is the only qualified answer shape accepted: an
+// owner, a repository, and a number, with nothing around them. It is as strict
+// as the bare-number parser, so a board answer that drops the repository (or
+// buries it in prose) is discarded rather than guessed at.
+var browserVisionRefPattern = regexp.MustCompile(`^([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)#(\d+)$`)
+
+// parseBrowserVisionRefs reads the JSON array the agent was asked for. Only the
+// last non-empty line is considered, and it has to be a plain array on its own:
+// a model that thinks out loud before answering is still understood, but an
+// array buried inside some other structure is not the answer that was
+// requested. qualified selects which element shape is accepted, and the two are
+// mutually exclusive: a bare-number answer to a board is an error, because the
+// numbers it names cannot be resolved to repositories. Anything else is an
+// error too, and the caller discards it rather than re-prompting.
+func parseBrowserVisionRefs(output string, qualified bool) ([]browserVisionRef, error) {
 	answer := lastNonEmptyLine(output)
 	answer = strings.TrimSpace(strings.Trim(answer, "`"))
 	if !strings.HasPrefix(answer, "[") || !strings.HasSuffix(answer, "]") {
 		return nil, fmt.Errorf("the agent answered with something other than a JSON array")
 	}
-	var numbers []int
-	if err := json.Unmarshal([]byte(answer), &numbers); err != nil {
-		return nil, fmt.Errorf("the agent's answer is not a JSON array of issue numbers: %w", err)
-	}
-	for _, number := range numbers {
-		if number <= 0 {
-			return nil, fmt.Errorf("the agent reported %d, which is not an issue number", number)
+	if !qualified {
+		var numbers []int
+		if err := json.Unmarshal([]byte(answer), &numbers); err != nil {
+			return nil, fmt.Errorf("the agent's answer is not a JSON array of issue numbers: %w", err)
 		}
+		refs := make([]browserVisionRef, 0, len(numbers))
+		for _, number := range numbers {
+			if number <= 0 {
+				return nil, fmt.Errorf("the agent reported %d, which is not an issue number", number)
+			}
+			refs = append(refs, browserVisionRef{Number: number})
+		}
+		return refs, nil
 	}
-	return numbers, nil
+	var names []string
+	if err := json.Unmarshal([]byte(answer), &names); err != nil {
+		return nil, fmt.Errorf(`the agent's answer is not a JSON array of "OWNER/REPO#NUMBER" strings: %w`, err)
+	}
+	refs := make([]browserVisionRef, 0, len(names))
+	for _, name := range names {
+		match := browserVisionRefPattern.FindStringSubmatch(strings.TrimSpace(name))
+		if match == nil {
+			return nil, fmt.Errorf("the agent reported %q, which is not an OWNER/REPO#NUMBER issue reference", name)
+		}
+		number, err := strconv.Atoi(match[3])
+		if err != nil || number <= 0 {
+			return nil, fmt.Errorf("the agent reported %q, which is not an issue number", name)
+		}
+		refs = append(refs, browserVisionRef{Repository: match[1] + "/" + match[2], Number: number})
+	}
+	return refs, nil
 }
 
 // lastNonEmptyLine returns the final line of text an agent printed, which is

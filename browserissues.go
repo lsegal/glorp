@@ -199,13 +199,13 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 			if len(recovered) == 0 {
 				return nil, err
 			}
-			for _, number := range recovered {
-				key := parsed.repo + "#" + strconv.Itoa(number)
+			for _, ref := range recovered {
+				key := parsed.repo + "#" + strconv.Itoa(ref.Number)
 				if seen[key] {
 					continue
 				}
 				seen[key] = true
-				issues = append(issues, issueFromBrowserRow(browserIssueRow{Number: number}, parsed.repo))
+				issues = append(issues, issueFromBrowserRow(browserIssueRow{Number: ref.Number}, parsed.repo))
 			}
 			break
 		}
@@ -374,10 +374,12 @@ func (s *browserIssueSource) extractionFailed(pageURL, reason string) error {
 // recoverWithVision asks the screenshot fallback to read the page the DOM
 // extractor could not. Only the distinguishable extraction failure qualifies: a
 // navigation error, an HTTP error, or an empty-but-recognised list is never
-// worth a screenshot. The fallback answers with issue numbers alone, so the
-// issues it recovers carry no title or labels; the dispatch path hydrates them
-// from the API, and the extractor is still expected to be fixed in code.
-func (s *browserIssueSource) recoverWithVision(ctx context.Context, target string, page browserPage, pageURL string, cause error) []int {
+// worth a screenshot. A repository's issues page names one repository, so the
+// agent is asked for bare numbers here; the board source asks for qualified
+// ones. The fallback answers with issue numbers alone, so the issues it
+// recovers carry no title or labels; the dispatch path hydrates them from the
+// API, and the extractor is still expected to be fixed in code.
+func (s *browserIssueSource) recoverWithVision(ctx context.Context, target string, page browserPage, pageURL string, cause error) []browserVisionRef {
 	if s.vision == nil || !errors.Is(cause, errBrowserExtraction) {
 		return nil
 	}
@@ -385,7 +387,7 @@ func (s *browserIssueSource) recoverWithVision(ctx context.Context, target strin
 	if !ok {
 		return nil
 	}
-	return s.vision.Recover(ctx, target, pageURL, cause.Error(), shooter.Screenshot)
+	return s.vision.Recover(ctx, target, pageURL, cause.Error(), shooter.Screenshot, false)
 }
 
 // logChange emits one line when a target's issue list differs from the previous

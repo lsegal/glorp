@@ -32,6 +32,11 @@ type BrowserBoard struct {
 	// board page is asked for the same items the GraphQL query selects.
 	Filter    string
 	AllIssues bool
+	// Vision is the bounded screenshot-to-agent fallback, shared with the
+	// repository issue source so the per-run cap is one budget for the whole
+	// run. Nil (the default, without -browser-vision) means a board that never
+	// renders is simply reported as an extraction failure.
+	Vision *browserVision
 
 	// maxItems caps how many rows are read from one board, matching the cap
 	// the GraphQL path applies. maxScrolls caps how many times a virtualized
@@ -54,7 +59,7 @@ const (
 
 // newBrowserBoard builds the board reader for a run's browser, giving each
 // target its own tab so boards are reloaded rather than reopened.
-func newBrowserBoard(browser *Browser, filter string, allIssues bool) *BrowserBoard {
+func newBrowserBoard(browser *Browser, filter string, allIssues bool, vision *browserVision) *BrowserBoard {
 	return &BrowserBoard{
 		Page: func(name string) (browserPage, error) {
 			tab, err := browser.Tab(name)
@@ -65,6 +70,7 @@ func newBrowserBoard(browser *Browser, filter string, allIssues bool) *BrowserBo
 		},
 		Filter:    filter,
 		AllIssues: allIssues,
+		Vision:    vision,
 	}
 }
 
@@ -234,10 +240,14 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 		// something, and glorp could not read it. Reporting it as
 		// errBrowserExtraction lets callers tell it apart from a navigation or
 		// HTTP failure the way they already can for the issues page.
-		return nil, &browserExtractionError{
+		failure := &browserExtractionError{
 			URL:    boardURL(parsed, b.Filter, b.AllIssues),
 			Reason: fmt.Sprintf("the board did not render within %s", time.Duration(b.attempts())*b.delay()),
 		}
+		if recovered := b.recoverWithVision(ctx, target, page, failure); len(recovered) > 0 {
+			return recovered, nil
+		}
+		return nil, failure
 	}
 
 	seen := map[string]bool{}
@@ -260,6 +270,38 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 		}
 	}
 	return collected, nil
+}
+
+// recoverWithVision asks the screenshot fallback to read a board the DOM
+// extractor could not, and turns its answer into rows. A board spans
+// repositories, so the agent is asked for qualified OWNER/REPO#NUMBER
+// references: a bare number could not be turned back into an addressable
+// issue. The recovered rows carry no title and no Status, because neither can
+// be trusted off a screenshot; the extractor is still expected to be fixed in
+// code.
+func (b *BrowserBoard) recoverWithVision(ctx context.Context, target string, page browserPage, cause *browserExtractionError) []boardRow {
+	if b.Vision == nil {
+		return nil
+	}
+	shooter, ok := page.(browserScreenshotter)
+	if !ok {
+		return nil
+	}
+	refs := b.Vision.Recover(ctx, target, cause.URL, cause.Error(), shooter.Screenshot, true)
+	rows := make([]boardRow, 0, len(refs))
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if ref.Repository == "" || ref.Number <= 0 {
+			continue
+		}
+		key := fmt.Sprintf("%s#%d", ref.Repository, ref.Number)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		rows = append(rows, boardRow{Number: ref.Number, Repository: ref.Repository})
+	}
+	return rows
 }
 
 // harvest reads the page once, reporting the items it shows and whether the

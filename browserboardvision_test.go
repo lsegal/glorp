@@ -1,0 +1,209 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+)
+
+// boardTarget is the project target every test in this file polls. A board is
+// the interesting case for the fallback precisely because its items come from
+// more than one repository.
+const boardTarget = "https://github.com/users/lsegal/projects/3"
+
+// visionBoardPage is a board page that can also be screenshotted, so the
+// fallback has something to photograph. It counts captures so a test can prove
+// none were taken.
+type visionBoardPage struct {
+	fakeBoardPage
+	screenshots int
+	shotErr     error
+}
+
+func (p *visionBoardPage) Screenshot() ([]byte, error) {
+	p.screenshots++
+	if p.shotErr != nil {
+		return nil, p.shotErr
+	}
+	return []byte("png"), nil
+}
+
+// newVisionBoard wires a board to a screenshot-capable page and a fallback,
+// with the settle wait made free so a poll loop costs no real time.
+func newVisionBoard(page *visionBoardPage, vision *browserVision) *BrowserBoard {
+	return &BrowserBoard{
+		Page:           func(string) (browserPage, error) { return page, nil },
+		sleep:          func(context.Context, time.Duration) bool { return true },
+		settleAttempts: 2,
+		Vision:         vision,
+	}
+}
+
+// pollBoardTicks runs the board the way the watch loop does: one ListIssues per
+// tick, with the fallback's clock advancing by the browser-mode poll interval.
+func pollBoardTicks(board *BrowserBoard, ticks int) {
+	for i := 0; i < ticks; i++ {
+		board.ListIssues(context.Background(), boardTarget)
+	}
+}
+
+// A board that renders normally must never reach for the camera, no matter how
+// long it is polled: zero AI calls in the steady state is the design target for
+// project targets exactly as it is for issue pages.
+func TestBrowserBoardVisionNeverCalledWhileTheBoardRenders(t *testing.T) {
+	clock := &visionClock{step: browserWatchInterval}
+	vision, asks, _ := testVisionRefs(t, browserVisionRunLimit, browserVisionCooldown, clock, nil, true)
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-table.html")}}}
+	board := newVisionBoard(page, vision)
+
+	// Twenty minutes of a five-second loop, which is twice the cooldown.
+	pollBoardTicks(board, 240)
+	if issues := boardIssues(t, board, boardTarget); len(issues) != 4 {
+		t.Fatalf("extracted %d issues from a healthy board, want 4", len(issues))
+	}
+	if page.screenshots != 0 || *asks != 0 {
+		t.Fatalf("a healthy board used the vision fallback: %d screenshot(s), %d agent call(s)", page.screenshots, *asks)
+	}
+}
+
+// A board that never renders spends at most one screenshot per cooldown window,
+// and the per-run cap that stops it is the same budget the issues page spends
+// from: three calls for the run, not three per page kind.
+func TestBrowserBoardVisionSpendsOneScreenshotPerCooldownAndStopsAtTheSharedCap(t *testing.T) {
+	clock := &visionClock{step: browserWatchInterval}
+	// The cap is raised out of the way first, so this half measures the
+	// cooldown alone: 240 ticks of 5s is 20 minutes, which spans two windows.
+	vision, asks, _ := testVisionRefs(t, 1000, browserVisionCooldown, clock, nil, true)
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	board := newVisionBoard(page, vision)
+
+	pollBoardTicks(board, 240)
+	if *asks != 2 || page.screenshots != 2 {
+		t.Fatalf("expected 2 calls across 20 minutes of a broken board, got %d screenshot(s) and %d agent call(s)", page.screenshots, *asks)
+	}
+
+	// Now the cap, with one budget shared by a broken board and a broken
+	// issues page: between them they may spend three calls for the whole run.
+	clock = &visionClock{step: time.Hour}
+	shared, sharedAsks, logs := testVisionRefs(t, browserVisionRunLimit, browserVisionCooldown, clock, nil, false)
+	boardPage := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	// The board asks for the qualified shape and the issues page for the bare
+	// one, so the shared asker checks the shape per call rather than up front.
+	inner := shared.ask
+	shared.ask = func(ctx context.Context, image []byte, url string, qualified bool) ([]browserVisionRef, error) {
+		if wantQualified := strings.Contains(url, "/projects/"); qualified != wantQualified {
+			t.Errorf("%s asked with qualified=%v, want %v", url, qualified, wantQualified)
+		}
+		return inner(ctx, image, url, false)
+	}
+	sharedBoard := newVisionBoard(boardPage, shared)
+	issuePage := &visionPage{}
+	issues := newTestIssueSource(&fakeBrowserPage{}, "", false, nil)
+	issues.pageFor = func(string) (browserPage, error) { return issuePage, nil }
+	issues.vision = shared
+
+	for i := 0; i < 50; i++ {
+		sharedBoard.ListIssues(context.Background(), boardTarget)
+		issues.ListIssues(context.Background(), "owner/repo")
+	}
+	if *sharedAsks != browserVisionRunLimit {
+		t.Fatalf("the run cap is not shared: %d call(s), want %d", *sharedAsks, browserVisionRunLimit)
+	}
+	if total := boardPage.screenshots + issuePage.screenshots; total != browserVisionRunLimit {
+		t.Fatalf("board and issues page took %d screenshot(s) between them, want %d", total, browserVisionRunLimit)
+	}
+	if boardPage.screenshots == 0 {
+		t.Fatal("the board never got to spend from the shared budget")
+	}
+	if joined := strings.Join(*logs, "\n"); !strings.Contains(joined, "off for the rest of this run") {
+		t.Fatalf("the shared run cap was not reported to the user:\n%s", joined)
+	}
+}
+
+// The point of asking a board for OWNER/REPO#NUMBER: the answer comes back as
+// issues the dispatch path can address, each carrying the repository it lives
+// in rather than a number with no home.
+func TestBrowserBoardVisionRecoveredReferencesBecomeAddressableIssues(t *testing.T) {
+	clock := &visionClock{step: browserWatchInterval}
+	answer := []browserVisionRef{
+		{Repository: "lsegal/glorp", Number: 412},
+		{Repository: "lsegal/yard", Number: 398},
+		// The same item twice is what a scrolled screenshot can look like.
+		{Repository: "lsegal/glorp", Number: 412},
+	}
+	vision, asks, _ := testVisionRefs(t, browserVisionRunLimit, browserVisionCooldown, clock, answer, true)
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	board := newVisionBoard(page, vision)
+
+	issues, err := board.ListIssues(context.Background(), boardTarget)
+	if err != nil {
+		t.Fatalf("expected the fallback to recover the board: %v", err)
+	}
+	if *asks != 1 {
+		t.Fatalf("expected exactly one vision call, got %d", *asks)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("recovered %d issues, want 2 de-duplicated: %+v", len(issues), issues)
+	}
+	want := []string{"lsegal/glorp#412", "lsegal/yard#398"}
+	for i, issue := range issues {
+		if got := fmt.Sprintf("%s#%d", issue.Repository, issue.Number); got != want[i] {
+			t.Fatalf("issue %d is %q, want %q", i, got, want[i])
+		}
+	}
+	// The recovery is not free for the rest of the window: the push-mode probe
+	// that follows on the same tick is inside the cooldown, so it reports the
+	// extraction failure rather than spending a second screenshot.
+	if _, err := board.ProjectState(context.Background(), boardTarget); !errors.Is(err, errBrowserExtraction) {
+		t.Fatalf("ProjectState inside the cooldown: %v, want the extraction error", err)
+	}
+	if *asks != 1 || page.screenshots != 1 {
+		t.Fatalf("the cooldown did not hold: %d screenshot(s), %d agent call(s)", page.screenshots, *asks)
+	}
+}
+
+// A bare-number answer names no repository, so for a project target it is
+// discarded and the original extraction failure is what the caller sees. The
+// real parser is used here rather than a canned answer, because rejecting that
+// shape is the parser's job.
+func TestBrowserBoardVisionRejectsABareNumberAnswer(t *testing.T) {
+	clock := &visionClock{step: browserWatchInterval}
+	asks := 0
+	vision := &browserVision{
+		cooldown: browserVisionCooldown,
+		limit:    browserVisionRunLimit,
+		now:      clock.Now,
+		lastCall: map[string]time.Time{},
+		ask: func(_ context.Context, _ []byte, _ string, qualified bool) ([]browserVisionRef, error) {
+			asks++
+			return parseBrowserVisionRefs("[412,398]", qualified)
+		},
+	}
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	board := newVisionBoard(page, vision)
+
+	_, err := board.ListIssues(context.Background(), boardTarget)
+	if !errors.Is(err, errBrowserExtraction) {
+		t.Fatalf("expected the original extraction error, got %v", err)
+	}
+	if asks != 1 {
+		t.Fatalf("expected the rejected answer to be discarded, not retried; got %d call(s)", asks)
+	}
+}
+
+// Without -browser-vision the board has no fallback at all, which is the
+// default build.
+func TestBrowserBoardWithoutVisionNeverScreenshots(t *testing.T) {
+	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
+	board := newVisionBoard(page, nil)
+
+	if _, err := board.ListIssues(context.Background(), boardTarget); !errors.Is(err, errBrowserExtraction) {
+		t.Fatalf("expected the extraction error, got %v", err)
+	}
+	if page.screenshots != 0 {
+		t.Fatalf("the default build took %d screenshot(s)", page.screenshots)
+	}
+}
