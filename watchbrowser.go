@@ -95,9 +95,10 @@ func explicitFlags(flags *flag.FlagSet) map[string]bool {
 // The board is built once and shared: it answers as the issue source for
 // project targets and as the push-mode ProjectState probe, and giving each of
 // those its own reader would open two tabs on the same board. Dispatch needs
-// the body and dependency state the issues page does not render, so the
-// repository source hydrates newly seen candidates through gh (issue #381),
-// and the screenshot fallback is attached only when -browser-vision asked for
+// the body and dependency state neither rendered page carries, so both readers
+// hydrate newly seen candidates through gh, sharing one memo so an issue costs
+// its REST calls once for the run whichever page found it (issues #381 and
+// #395), and the screenshot fallback is attached only when -browser-vision asked for
 // it (issue #384). One browserVision is built and shared by the repository
 // source and the board, so its per-run cap is a single budget for the run
 // rather than one per page kind (issue #393).
@@ -110,9 +111,10 @@ func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions
 		runner, _ := w.Runner.(CommandRunner)
 		vision = newBrowserVision(runner, w.logf)
 	}
-	board := newBrowserBoard(browser, gh.Filter, gh.AllIssues, vision)
+	repos := newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf)
+	board := newBrowserBoard(browser, gh.Filter, gh.AllIssues, vision, repos.browserHydration)
 	w.Issues = browserWatchIssues{
-		Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf),
+		Repos: repos,
 		Board: board,
 	}
 	w.Projects = board

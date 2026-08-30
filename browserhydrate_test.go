@@ -36,9 +36,7 @@ func (h *fakeIssueHydrator) HydrateIssue(_ context.Context, repo string, issue *
 // and hydrates through one fake hydrator.
 func hydratingTestSource(page *fakeBrowserPage, hydrate browserIssueHydrator, handled func(Issue) bool) *browserIssueSource {
 	source := newTestIssueSource(page, "", false, nil)
-	source.hydrate = hydrate
-	source.handled = handled
-	source.hydrated = map[string]map[string]browserHydratedIssue{}
+	source.browserHydration = newBrowserHydration(hydrate, handled)
 	return source
 }
 
@@ -277,5 +275,164 @@ func TestGlorpIssueHandledSnapshot(t *testing.T) {
 		if got := w.issueHandled(issue(number)); got != want {
 			t.Fatalf("issueHandled(#%d) = %v, want %v", number, got, want)
 		}
+	}
+}
+
+// boardTestItem is one row of a generated board document, so a test can model
+// a board changing between ticks instead of needing a fixture per state.
+type boardTestItem struct {
+	Number int
+	Repo   string
+	Title  string
+	Status string
+}
+
+// boardDocument renders the table layout the board extractor reads, with one
+// row per item.
+func boardDocument(items ...boardTestItem) string {
+	var rows strings.Builder
+	for i, item := range items {
+		fmt.Fprintf(&rows, `
+        <div role="row" data-testid="TableRow" data-row-id="PVTI_%d">
+          <div role="gridcell" data-testid="TableCell-Title">
+            <a href="/%s/issues/%d">%s</a>
+          </div>
+          <div role="gridcell" data-testid="TableCell-Status">
+            <span class="Truncate-text">%s</span>
+          </div>
+        </div>`, i+1, item.Repo, item.Number, item.Title, item.Status)
+	}
+	return `<!DOCTYPE html><html lang="en"><body><div data-testid="memex-app">
+      <div role="grid" aria-label="Board">
+        <div role="row" data-testid="TableHeader">
+          <div role="columnheader" data-testid="TableHeader-Title">Title</div>
+          <div role="columnheader" data-testid="TableHeader-Status">Status</div>
+        </div>` + rows.String() + `
+      </div></div></body></html>`
+}
+
+// hydratingTestBoard builds a board reader that reads through one fake page and
+// hydrates through one fake hydrator.
+func hydratingTestBoard(page *fakeBoardPage, hydrate browserIssueHydrator, handled func(Issue) bool) *BrowserBoard {
+	board, _ := newTestBoard(page)
+	board.hydration = newBrowserHydration(hydrate, handled)
+	return board
+}
+
+const boardTestTarget = "https://github.com/users/lsegal/projects/3"
+
+var twoBoardItems = []boardTestItem{
+	{Number: 1, Repo: "lsegal/glorp", Title: "first", Status: "Todo"},
+	{Number: 2, Repo: "lsegal/zvidlib", Title: "second", Status: "Todo"},
+}
+
+// TestBrowserBoardSteadyStateTickMakesNoRequests is the budget assertion for
+// the board reader, matching the one the issues page keeps: once the items on
+// a board have been hydrated, re-reading the same unchanged board any number
+// of times costs nothing at all.
+func TestBrowserBoardSteadyStateTickMakesNoRequests(t *testing.T) {
+	const ticks = 6
+	page := &fakeBoardPage{documents: []string{boardDocument(twoBoardItems...)}}
+	hydrate := &fakeIssueHydrator{body: "hydrated"}
+	board := hydratingTestBoard(page, hydrate, nil)
+	for tick := 0; tick < ticks; tick++ {
+		issues := boardIssues(t, board, boardTestTarget)
+		if len(issues) != 2 || issues[0].Body != "hydrated" {
+			t.Fatalf("tick %d: issues = %+v, want both items hydrated", tick+1, issues)
+		}
+		if tick == 0 && len(hydrate.calls) != 2 {
+			t.Fatalf("first tick hydrated %v, want one fetch per board item", hydrate.calls)
+		}
+	}
+	if len(hydrate.calls) != 2 {
+		t.Fatalf("hydrations after %d unchanged ticks = %v, want the first tick's two and nothing more", ticks, hydrate.calls)
+	}
+}
+
+// TestBrowserBoardHydratesOnlyNewItems covers the O(new items) half of the
+// budget and the field the board owns: a board that grows by one costs exactly
+// one more fetch, and hydration never overwrites an item's Status column.
+func TestBrowserBoardHydratesOnlyNewItems(t *testing.T) {
+	grown := append(append([]boardTestItem{}, twoBoardItems...), boardTestItem{Number: 3, Repo: "lsegal/glorp", Title: "third", Status: "In Progress"})
+	page := &fakeBoardPage{documents: []string{boardDocument(twoBoardItems...), boardDocument(grown...)}}
+	hydrate := &fakeIssueHydrator{body: "hydrated"}
+	board := hydratingTestBoard(page, hydrate, nil)
+	var issues []Issue
+	for tick := 0; tick < 2; tick++ {
+		issues = boardIssues(t, board, boardTestTarget)
+	}
+	want := []string{"lsegal/glorp#1", "lsegal/zvidlib#2", "lsegal/glorp#3"}
+	if strings.Join(hydrate.calls, ",") != strings.Join(want, ",") {
+		t.Fatalf("hydrations = %v, want %v", hydrate.calls, want)
+	}
+	if len(issues) != 3 {
+		t.Fatalf("second tick issues = %+v, want three", issues)
+	}
+	for i, issue := range issues {
+		if issue.ProjectStatus != grown[i].Status {
+			t.Errorf("issue #%d ProjectStatus = %q, want %q (hydration must not overwrite the board's own column)", issue.Number, issue.ProjectStatus, grown[i].Status)
+		}
+		if issue.Body != "hydrated" {
+			t.Errorf("issue #%d body = %q, want the hydrated body", issue.Number, issue.Body)
+		}
+	}
+}
+
+// TestBrowserBoardSkipsHandledItems keeps the board on the same candidate rule
+// the issues page uses: work this run already owns is never fetched.
+func TestBrowserBoardSkipsHandledItems(t *testing.T) {
+	page := &fakeBoardPage{documents: []string{boardDocument(twoBoardItems...)}}
+	hydrate := &fakeIssueHydrator{}
+	board := hydratingTestBoard(page, hydrate, func(issue Issue) bool { return issue.Number == 1 })
+	for tick := 0; tick < 2; tick++ {
+		boardIssues(t, board, boardTestTarget)
+	}
+	if len(hydrate.calls) != 1 || hydrate.calls[0] != "lsegal/zvidlib#2" {
+		t.Fatalf("hydrations = %v, want only the unhandled item fetched once", hydrate.calls)
+	}
+}
+
+// TestBrowserBoardItemsReportBlocked is the behaviour the whole change exists
+// for: a board item with an open dependency, or with open sub-issues, must
+// reach the dispatch gate as blocked instead of arriving with an empty body.
+func TestBrowserBoardItemsReportBlocked(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		hydrate *fakeIssueHydrator
+		want    string
+	}{
+		{
+			name:    "open dependency",
+			hydrate: &fakeIssueHydrator{body: "Depends on #4", dependsOn: []IssueDependency{{Number: 4, State: "open"}}},
+			want:    "depends on #4 (open)",
+		},
+		{
+			name:    "open sub-issues",
+			hydrate: &fakeIssueHydrator{body: "parent", hasSubIssues: true},
+			want:    "has sub-issues",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			page := &fakeBoardPage{documents: []string{boardDocument(twoBoardItems[:1]...)}}
+			board := hydratingTestBoard(page, test.hydrate, nil)
+			issues := boardIssues(t, board, boardTestTarget)
+			if len(issues) != 1 {
+				t.Fatalf("issues = %+v, want one", issues)
+			}
+			blocked, reason := issueBlocked(issues[0])
+			if !blocked || reason != test.want {
+				t.Fatalf("issueBlocked() = %v, %q, want true, %q", blocked, reason, test.want)
+			}
+		})
+	}
+}
+
+// TestBrowserBoardHydrationFailureIsReported keeps a failed fetch from
+// silently dispatching a board item with no body.
+func TestBrowserBoardHydrationFailureIsReported(t *testing.T) {
+	page := &fakeBoardPage{documents: []string{boardDocument(twoBoardItems...)}}
+	board := hydratingTestBoard(page, &fakeIssueHydrator{err: errors.New("boom")}, nil)
+	if _, err := board.ListIssues(context.Background(), boardTestTarget); err == nil {
+		t.Fatal("ListIssues() error = nil, want the hydration failure")
 	}
 }
