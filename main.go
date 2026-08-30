@@ -247,14 +247,19 @@ func runWatch(args []string) int {
 	}
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	if browser != nil {
-		// Browser mode reads the issue list off GitHub's own issues page. Only
-		// the issue source changes: statuses, comments, and projects still go
-		// through gh, and the dispatch path downstream is untouched.
-		// Dispatch still needs the body and dependency state the page does
-		// not render, so the source hydrates newly seen candidates through
-		// gh's REST helpers; issues already in flight or completed are
-		// skipped (issue #381).
-		w.Issues = newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, w.logf)
+		// Browser mode reads the issue list off GitHub's own issues page and a
+		// project board off its Projects v2 page. Only the reads change:
+		// statuses and comments still go through gh, and the dispatch path
+		// downstream is untouched. Dispatch still needs the body and
+		// dependency state the issues page does not render, so the repository
+		// source hydrates newly seen candidates through gh's REST helpers;
+		// issues already in flight or completed are skipped (issue #381).
+		board := newBrowserBoard(browser, gh.Filter, gh.AllIssues)
+		w.Issues = browserWatchIssues{
+			Repos: newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, w.logf),
+			Board: board,
+		}
+		w.Projects = board
 	}
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
