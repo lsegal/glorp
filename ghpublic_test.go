@@ -584,3 +584,86 @@ func TestListCommentsUsesPublicAPIForPublicRepo(t *testing.T) {
 		t.Fatal("ListComments() ran the gh CLI for a public repo")
 	}
 }
+
+func TestIssueSearchFiltersExpandsDefaultToAssignedAndAuthored(t *testing.T) {
+	got := issueSearchFilters(defaultIssueFilter, false)
+	want := []string{defaultIssueFilter, defaultAuthoredIssueFilter}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("issueSearchFilters(default) = %#v, want %#v", got, want)
+	}
+	if got := issueSearchFilters("label:bug", false); !reflect.DeepEqual(got, []string{"label:bug"}) {
+		t.Fatalf("issueSearchFilters(explicit) = %#v, want the filter taken literally", got)
+	}
+	if got := issueSearchFilters(defaultIssueFilter, true); !reflect.DeepEqual(got, []string{defaultIssueFilter}) {
+		t.Fatalf("issueSearchFilters(allIssues) = %#v, want a single unexpanded filter", got)
+	}
+}
+
+func TestListIssuesUnionsAssignedAndAuthoredIssuesForDefaultFilter(t *testing.T) {
+	var queries []string
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+			t.Fatalf("gh CLI should not run for a public repo's issue list, got %#v", args)
+			return nil, nil
+		},
+		publicAPI: func(_ context.Context, requestURL string) ([]byte, http.Header, int, error) {
+			switch {
+			case requestURL == "https://api.github.com/repos/owner/repo":
+				return []byte(`{"private":false}`), nil, http.StatusOK, nil
+			case strings.Contains(requestURL, "/dependencies/blocked_by"), strings.Contains(requestURL, "/sub_issues"):
+				return []byte(`[]`), nil, http.StatusOK, nil
+			}
+			queries = append(queries, requestURL)
+			if strings.Contains(requestURL, "author%3Alsegal") {
+				// Issue 7 is both assigned to and opened by the user.
+				return []byte(`{"items":[{"number":7,"title":"assigned and opened"},{"number":9,"title":"only opened"}]}`), nil, http.StatusOK, nil
+			}
+			return []byte(`{"items":[{"number":7,"title":"assigned and opened"},{"number":8,"title":"only assigned"}]}`), nil, http.StatusOK, nil
+		},
+	}
+	gh.Filter = defaultIssueFilter
+	gh.selfLoginCache = &sync.Map{}
+	gh.selfLoginCache.Store("login", "lsegal")
+	issues, err := gh.ListIssues(context.Background(), "owner/repo")
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	var numbers []int
+	for _, issue := range issues {
+		numbers = append(numbers, issue.Number)
+	}
+	if !reflect.DeepEqual(numbers, []int{7, 8, 9}) {
+		t.Fatalf("issue numbers = %#v, want the deduplicated union [7 8 9]", numbers)
+	}
+	if len(queries) != 2 || !strings.Contains(queries[0], "assignee%3Alsegal") || !strings.Contains(queries[1], "author%3Alsegal") {
+		t.Fatalf("search queries = %#v, want one assignee search and one author search", queries)
+	}
+}
+
+func TestListIssuesSkipsAuthorSearchForExplicitFilter(t *testing.T) {
+	searches := 0
+	gh := GHCLI{
+		publicRepoCache: &sync.Map{},
+		publicAPI: func(_ context.Context, requestURL string) ([]byte, http.Header, int, error) {
+			switch {
+			case requestURL == "https://api.github.com/repos/owner/repo":
+				return []byte(`{"private":false}`), nil, http.StatusOK, nil
+			case strings.Contains(requestURL, "/dependencies/blocked_by"), strings.Contains(requestURL, "/sub_issues"):
+				return []byte(`[]`), nil, http.StatusOK, nil
+			}
+			searches++
+			if strings.Contains(requestURL, "author") {
+				t.Fatalf("explicit filter should not trigger an author search, got %q", requestURL)
+			}
+			return []byte(`{"items":[{"number":7,"title":"bug"}]}`), nil, http.StatusOK, nil
+		},
+	}
+	gh.Filter = "label:bug"
+	if _, err := gh.ListIssues(context.Background(), "owner/repo"); err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if searches != 1 {
+		t.Fatalf("issue searches = %d, want 1", searches)
+	}
+}

@@ -53,7 +53,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("codex-binary", "codex", "Codex executable")
 	flags.String("claude-binary", "claude", "Claude executable")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
-	flags.Var(filter, "filter", "GitHub issue search filter (repeatable)")
+	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues assigned to or opened by you")
 	flags.Bool("all-issues", false, "disable the default issue filter")
 	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
 	return flags
@@ -472,7 +472,25 @@ func closesIssue(body, repo string, number int) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
-const defaultIssueFilter = "is:issue state:open assignee:@me"
+const (
+	defaultIssueFilter = "is:issue state:open assignee:@me"
+	// defaultAuthoredIssueFilter is the second half of the default filter.
+	// GitHub issue search has no OR operator, so "issues assigned to me or
+	// opened by me" cannot be one query: adding author:@me to
+	// defaultIssueFilter would require both qualifiers to match. The default
+	// therefore runs as two searches whose results are unioned.
+	defaultAuthoredIssueFilter = "is:issue state:open author:@me"
+)
+
+// issueSearchFilters expands one --filter value into the searches to run.
+// Only the untouched default expands; an explicit --filter is always taken
+// literally, and --all-issues drops filtering entirely.
+func issueSearchFilters(filter string, allIssues bool) []string {
+	if !allIssues && filter == defaultIssueFilter {
+		return []string{defaultIssueFilter, defaultAuthoredIssueFilter}
+	}
+	return []string{filter}
+}
 
 type filterFlag struct {
 	values []string
@@ -718,18 +736,19 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 	}
 
 	var issues []Issue
-	usedPublicAPI := false
-	if g.isPublicRepo(ctx, target.repo) {
-		if got, ok := g.listPublicIssues(ctx, target.repo, g.Filter, g.AllIssues); ok {
-			issues, usedPublicAPI = got, true
-		}
-	}
-	if !usedPublicAPI {
-		got, err := g.listAuthenticatedIssues(ctx, target.repo, g.Filter, g.AllIssues)
+	seen := map[int]bool{}
+	for _, filter := range issueSearchFilters(g.Filter, g.AllIssues) {
+		got, err := g.listRepoIssues(ctx, target.repo, filter)
 		if err != nil {
 			return nil, err
 		}
-		issues = got
+		for _, issue := range got {
+			if seen[issue.Number] {
+				continue
+			}
+			seen[issue.Number] = true
+			issues = append(issues, issue)
+		}
 	}
 	for i := range issues {
 		if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
@@ -737,6 +756,17 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 		}
 	}
 	return issues, nil
+}
+
+// listRepoIssues runs one issue search against repo, preferring the
+// unauthenticated public API and falling back to the authenticated one.
+func (g GHCLI) listRepoIssues(ctx context.Context, repo, filter string) ([]Issue, error) {
+	if g.isPublicRepo(ctx, repo) {
+		if issues, ok := g.listPublicIssues(ctx, repo, filter, g.AllIssues); ok {
+			return issues, nil
+		}
+	}
+	return g.listAuthenticatedIssues(ctx, repo, filter, g.AllIssues)
 }
 
 type discussionsGraphQLResponse struct {
