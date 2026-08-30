@@ -31,6 +31,12 @@ func (p *visionPage) HTTPStatus() int {
 }
 
 func (p *visionPage) Eval(_ string, out any) error {
+	// The sign-in probe must answer "no evidence" here, so the vision tests
+	// keep exercising the extraction failure they are about.
+	if state, ok := out.(*browserSignInState); ok {
+		*state = browserSignInState{}
+		return nil
+	}
 	encoded, err := json.Marshal(p.result)
 	if err != nil {
 		return err

@@ -25,6 +25,9 @@ type fakeBoardPage struct {
 	navigated []string
 	reads     int
 	scrolled  int
+	// signIn answers the sign-in probe. The zero value reports no evidence
+	// either way, which leaves every board test that predates it unchanged.
+	signIn browserSignInState
 }
 
 func (p *fakeBoardPage) Navigate(url string) error {
@@ -47,6 +50,8 @@ func (p *fakeBoardPage) Eval(_ string, out any) error {
 		return p.evalErr
 	}
 	switch target := out.(type) {
+	case *browserSignInState:
+		*target = p.signIn
 	case *string:
 		index := p.reads
 		if index >= len(p.documents) {

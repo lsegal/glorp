@@ -133,3 +133,52 @@ func TestExtractorScriptAgainstFixtures(t *testing.T) {
 		}
 	})
 }
+
+// TestSignInScriptAgainstFixtures runs the sign-in probe in a real browser
+// against the captured markup, which is the only thing that can show the
+// signal is read the way GitHub actually emits it. The signed-out issues page
+// is the one that matters: it is a successful, correctly-empty extraction, so
+// nothing else on the page distinguishes it from a repository with no ready
+// work (issue #402).
+func TestSignInScriptAgainstFixtures(t *testing.T) {
+	tab, baseURL := browserFixtureTab(t)
+
+	signIn := func(fixture string) browserSignInState {
+		t.Helper()
+		if err := tab.Navigate(baseURL + "/" + fixture); err != nil {
+			t.Fatalf("navigate to %s: %v", fixture, err)
+		}
+		var state browserSignInState
+		if err := tab.Eval(browserSignInScript, &state); err != nil {
+			t.Fatalf("evaluate sign-in probe on %s: %v", fixture, err)
+		}
+		return state
+	}
+
+	t.Run("signed-out empty issues page", func(t *testing.T) {
+		// The extractor is right about this page, which is the whole problem.
+		list := extractFixture(t, tab, baseURL, "github-issues-signed-out-empty.html")
+		if !list.Recognized || !list.Empty || len(list.Rows) != 0 {
+			t.Fatalf("recognized=%v empty=%v rows=%d, want a recognised empty list", list.Recognized, list.Empty, len(list.Rows))
+		}
+		state := signIn("github-issues-signed-out-empty.html")
+		if !state.SignedOut || state.SignedIn {
+			t.Fatalf("signIn=%+v, want signed out", state)
+		}
+		// GitHub emits the meta tag with empty content when there is no
+		// viewer, so an empty login must not read as a signed-in session.
+		if state.Login != "" {
+			t.Fatalf("login %q, want empty", state.Login)
+		}
+	})
+
+	t.Run("issue list is not called signed out", func(t *testing.T) {
+		// A page with no evidence either way must not be blamed on the
+		// profile, or every markup change would report the wrong cause.
+		for _, fixture := range []string{"github-issues-list.html", "github-issues-empty.html", "project-board-table.html"} {
+			if state := signIn(fixture); state.SignedOut {
+				t.Fatalf("%s reported as signed out: %+v", fixture, state)
+			}
+		}
+	})
+}

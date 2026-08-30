@@ -19,6 +19,11 @@ type fakeBrowserPage struct {
 	reloads   int
 	status    int
 	evals     int
+	// signIn is the answer the sign-in probe gets. The zero value reports a
+	// page that is neither signed in nor signed out, which is what every test
+	// that predates the probe wants: the diagnosis stays out of the way.
+	signIn      browserSignInState
+	signInEvals int
 }
 
 func (p *fakeBrowserPage) Navigate(url string) error {
@@ -36,6 +41,14 @@ func (p *fakeBrowserPage) HTTPStatus() int { return p.status }
 func (p *fakeBrowserPage) Eval(_ string, out any) error {
 	if p.evalErr != nil {
 		return p.evalErr
+	}
+	// The sign-in probe is a separate evaluation with its own result type, and
+	// it is deliberately not counted as a page read: the page counters below
+	// measure how many pages of the list were walked.
+	if state, ok := out.(*browserSignInState); ok {
+		p.signInEvals++
+		*state = p.signIn
+		return nil
 	}
 	if p.evals >= len(p.results) {
 		return fmt.Errorf("unexpected evaluation %d", p.evals+1)
