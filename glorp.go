@@ -227,6 +227,42 @@ type Glorp struct {
 	// is read from goroutines the Run loop spawns, so it is a pointer stored
 	// atomically rather than a plain field owned by the loop's goroutine.
 	agentOverride atomic.Pointer[string]
+	// handledIssues snapshots the issue keys this instance already has in
+	// flight or has finished, taken from .glorp.json and the active set at
+	// the top of every poll. Browser mode reads it through issueHandled to
+	// decide which extracted issues still need a metadata fetch (issue
+	// #381); the issue source runs on the poll's own goroutine but the
+	// snapshot is published under workMu, so it is stored atomically.
+	handledIssues atomic.Pointer[map[string]bool]
+}
+
+// publishHandledIssues records which issues are no longer dispatch candidates:
+// anything with a run in flight, and anything this instance already completed.
+// Failed work is deliberately absent, because it is dispatched again and so
+// still needs its metadata. Callers hold the lock guarding work and active.
+func (w *Glorp) publishHandledIssues(work map[string]workState, active map[string]string) {
+	handled := make(map[string]bool, len(work)+len(active))
+	for key := range active {
+		handled[key] = true
+	}
+	for key, state := range work {
+		if state.Status == "active" || state.Status == "completed" {
+			handled[key] = true
+		}
+	}
+	w.handledIssues.Store(&handled)
+}
+
+// issueHandled reports whether the most recent snapshot already accounts for
+// issue, so a transport that pays per issue for metadata can skip it. An
+// unpublished snapshot treats every issue as unhandled, which is correct for
+// the first poll: nothing is in flight yet.
+func (w *Glorp) issueHandled(issue Issue) bool {
+	handled := w.handledIssues.Load()
+	if handled == nil {
+		return false
+	}
+	return (*handled)[issueKey(issue)]
 }
 
 // acquireSlot blocks until sem has a free slot. Unlike sem.acquire, it also
@@ -809,6 +845,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 		n := pollNumber
 		running, queued, completed, failed := tasks.snapshot()
 		w.logf("poll #%d started (tasks: %d running, %d queued, %d completed, %d failed)", n, running, queued, completed, failed)
+		// Publish before listing: browser mode consults this snapshot while
+		// extracting, to avoid fetching metadata for work already in flight
+		// or already finished.
+		workMu.Lock()
+		w.publishHandledIssues(work, active)
+		workMu.Unlock()
 		issues := make([]Issue, 0)
 		for _, target := range targets {
 			if isDiscussionTarget(target) {

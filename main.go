@@ -250,7 +250,11 @@ func runWatch(args []string) int {
 		// Browser mode reads the issue list off GitHub's own issues page. Only
 		// the issue source changes: statuses, comments, and projects still go
 		// through gh, and the dispatch path downstream is untouched.
-		w.Issues = newBrowserIssueSource(browser, gh.Filter, gh.AllIssues, w.logf)
+		// Dispatch still needs the body and dependency state the page does
+		// not render, so the source hydrates newly seen candidates through
+		// gh's REST helpers; issues already in flight or completed are
+		// skipped (issue #381).
+		w.Issues = newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, w.logf)
 	}
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
@@ -1125,6 +1129,48 @@ func projectItemListError(output []byte, err error) error {
 		return fmt.Errorf("list project items: %w: %s", err, detail)
 	}
 	return fmt.Errorf("list project items: %w", err)
+}
+
+// HydrateIssue fills in the dispatch-only fields a browser-mode extraction
+// cannot read off the rendered issues page: the issue body, its creation time,
+// and its dependency/sub-issue state. It is deliberately the smallest fetch
+// that answers those questions -- one REST `GET /repos/:repo/issues/:number`
+// plus the dependency lookup loadDependencies already performs -- and it goes
+// through apiGET, so a public repository is read on the unauthenticated API
+// and spends none of the token's rate limit. No GraphQL query is issued.
+//
+// Callers are responsible for the request budget: browserIssueSource calls
+// this once per newly seen dispatch candidate, never per tick and never for
+// the whole list.
+func (g GHCLI) HydrateIssue(ctx context.Context, repo string, issue *Issue) error {
+	if repo == "" || issue == nil || issue.Number <= 0 {
+		return nil
+	}
+	public := g.isPublicRepo(ctx, repo)
+	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(issue.Number))
+	if err != nil {
+		return fmt.Errorf("read issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
+	}
+	var detail struct {
+		Title     string    `json:"title"`
+		Body      string    `json:"body"`
+		State     string    `json:"state"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(output, &detail); err != nil {
+		return fmt.Errorf("decode issue #%d: %w", issue.Number, err)
+	}
+	issue.Body = detail.Body
+	if title := strings.TrimSpace(detail.Title); title != "" {
+		issue.Title = title
+	}
+	if detail.State != "" {
+		issue.State = strings.ToLower(detail.State)
+	}
+	if !detail.CreatedAt.IsZero() {
+		issue.CreatedAt = detail.CreatedAt
+	}
+	return g.loadDependencies(ctx, repo, issue)
 }
 
 var dependencyPattern = regexp.MustCompile(`(?i)\bdepends\s+on\s+#(\d+)`)
