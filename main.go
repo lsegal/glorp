@@ -71,6 +71,8 @@ func commandFlags(name string) *flag.FlagSet {
 		return watchFlagSet(&agentFlag{values: []agentSpec{{Name: "codex"}}}, &filterFlag{values: []string{defaultIssueFilter}})
 	case "ui":
 		return uiFlagSet()
+	case "auth":
+		return authFlagSet()
 	}
 	return nil
 }
