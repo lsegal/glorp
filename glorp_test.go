@@ -1099,8 +1099,89 @@ func TestGlorpInitialPollFailureIsNotFatal(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logs.String(), "initial poll error") {
+	if !strings.Contains(logs.String(), "initial poll #1 error") {
 		t.Fatalf("logs = %q, want an initial poll error message", logs.String())
+	}
+}
+
+// TestPollLoggingIsQuietWhileNothingChanges covers issue #413: a five-second
+// poll loop wrote a start line, a count, and a completion line on every tick,
+// so a repository with no ready work filled the log with the same three lines
+// forever. Only a change in what the poll found is worth a line.
+func TestPollLoggingIsQuietWhileNothingChanges(t *testing.T) {
+	src := &fakeSource{batches: [][]Issue{{}}}
+	var logs bytes.Buffer
+	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, Out: &logs}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("only %d poll(s) ran", calls)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if got := strings.Count(out, "found 0 open issue(s)"); got != 1 {
+		t.Fatalf("logged the same empty result %d times, want once: %q", got, out)
+	}
+	for _, unwanted := range []string{"poll #1 started", "no new issues"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("logs still contain %q on an unchanged poll: %q", unwanted, out)
+		}
+	}
+}
+
+// TestRepeatedPollFailureIsLoggedOnce covers the other half of issue #413: a
+// failing poll logged the failure where it was raised and again where it was
+// returned, on every tick, so one broken listing produced two lines every five
+// seconds. The failure is now reported once, by the caller, and the recovery
+// says the reported failure is over.
+func TestRepeatedPollFailureIsLoggedOnce(t *testing.T) {
+	src := &erroringThenSucceedingSource{failN: 3, batches: [][]Issue{{}}}
+	var logs bytes.Buffer
+	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, Out: &logs}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(logs.String(), "the failure reported above is resolved") {
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("the poll never recovered: %q", logs.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if got := strings.Count(out, "poll #1 error"); got != 1 {
+		t.Fatalf("logged the initial failure %d times, want once: %q", got, out)
+	}
+	if got := strings.Count(out, " error: "); got != 1 {
+		t.Fatalf("logged %d failure lines for one repeating failure, want one: %q", got, out)
+	}
+	if strings.Contains(out, "failed while listing") {
+		t.Fatalf("the listing failure is still logged where it is raised as well: %q", out)
+	}
+	if !strings.Contains(out, "listing o/r: transient listing failure") {
+		t.Fatalf("the reported failure lost the target it was raised for: %q", out)
 	}
 }
 

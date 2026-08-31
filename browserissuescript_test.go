@@ -113,6 +113,19 @@ func TestExtractorScriptAgainstFixtures(t *testing.T) {
 		}
 	})
 
+	// An issues page whose list renders no rows is empty even when the
+	// blankslate beside it carries none of the markers the extractor knows, and
+	// an empty list is not a read failure to report on every poll (issue #413).
+	t.Run("empty list with an unrecognized blankslate", func(t *testing.T) {
+		list := extractFixture(t, tab, baseURL, "github-issues-empty-unmarked.html")
+		if !list.Recognized || !list.Empty {
+			t.Fatalf("recognized=%v empty=%v, want a recognized empty list", list.Recognized, list.Empty)
+		}
+		if len(list.Rows) != 0 {
+			t.Fatalf("got %d rows, want none: %+v", len(list.Rows), list.Rows)
+		}
+	})
+
 	t.Run("closed row", func(t *testing.T) {
 		list := extractFixture(t, tab, baseURL, "github-issues-closed.html")
 		if len(list.Rows) != 1 {
