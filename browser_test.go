@@ -113,3 +113,43 @@ func TestBrowserTabRejectedAfterClose(t *testing.T) {
 		t.Fatal("expected an error opening a tab on a closed browser")
 	}
 }
+
+// TestBrowserAdoptsHeadedWindowOnce checks only the first tab of a headed
+// browser attaches to the window Chrome opened by itself. Creating a target on
+// top of that window is what left `glorp auth` showing an empty "New Tab"
+// window beside the login window (issue #412), and a headless run has no window
+// to adopt at all.
+func TestBrowserAdoptsHeadedWindowOnce(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		browser *Browser
+		want    bool
+	}{
+		{
+			name:    "headed first tab",
+			browser: &Browser{config: browserConfig{Headed: true}, cmd: &browserProcess{}, tabs: map[string]*BrowserTab{}},
+			want:    true,
+		},
+		{
+			name:    "headed later tab",
+			browser: &Browser{config: browserConfig{Headed: true}, cmd: &browserProcess{}, tabs: map[string]*BrowserTab{"owner/repo": {}}},
+			want:    false,
+		},
+		{
+			name:    "headless",
+			browser: &Browser{config: browserConfig{}, cmd: &browserProcess{}, tabs: map[string]*BrowserTab{}},
+			want:    false,
+		},
+		{
+			name:    "no launched process",
+			browser: &Browser{config: browserConfig{Headed: true}, tabs: map[string]*BrowserTab{}},
+			want:    false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.browser.adoptsExistingWindow(); got != test.want {
+				t.Fatalf("adoptsExistingWindow() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}

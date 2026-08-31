@@ -280,3 +280,72 @@ func TestBrowserWebSocketURLRejectsEmptyEndpointReply(t *testing.T) {
 		t.Fatal("expected an error when the endpoint reports no WebSocket URL")
 	}
 }
+
+// TestBrowserOpenPageTargetFindsTheWindowChromeOpened checks the window a
+// headed browser puts on screen by itself is discovered, so `glorp auth` drives
+// it instead of opening a second one (issue #412).
+func TestBrowserOpenPageTargetFindsTheWindowChromeOpened(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/list" {
+			t.Errorf("requested %s, want /json/list", r.URL.Path)
+		}
+		fmt.Fprint(w, `[{"id":"devtools-1","type":"other"},{"id":"page-1","type":"page"},{"id":"page-2","type":"page"}]`)
+	}))
+	defer server.Close()
+	id, err := browserOpenPageTarget(context.Background(), server.URL, time.Second)
+	if err != nil {
+		t.Fatalf("browserOpenPageTarget: %v", err)
+	}
+	if id != "page-1" {
+		t.Fatalf("target %q, want the first page target", id)
+	}
+}
+
+// TestBrowserOpenPageTargetPollsUntilTheWindowAppears checks the initial window
+// is waited for rather than read once: it is created alongside the DevTools
+// endpoint, not before it.
+func TestBrowserOpenPageTargetPollsUntilTheWindowAppears(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls < 3 {
+			fmt.Fprint(w, `[]`)
+			return
+		}
+		fmt.Fprint(w, `[{"id":"page-1","type":"page"}]`)
+	}))
+	defer server.Close()
+	id, err := browserOpenPageTarget(context.Background(), server.URL, 5*time.Second)
+	if err != nil {
+		t.Fatalf("browserOpenPageTarget: %v", err)
+	}
+	if id != "page-1" {
+		t.Fatalf("target %q, want page-1", id)
+	}
+	if calls < 3 {
+		t.Fatalf("endpoint polled %d time(s), want it retried until a page appeared", calls)
+	}
+}
+
+// TestBrowserOpenPageTargetFailsWithNoPage checks a browser reporting no window
+// is an error, so the caller falls back to opening its own tab instead of
+// attaching to a target that does not exist.
+func TestBrowserOpenPageTargetFailsWithNoPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[{"id":"worker-1","type":"service_worker"}]`)
+	}))
+	defer server.Close()
+	if _, err := browserOpenPageTarget(context.Background(), server.URL, 200*time.Millisecond); err == nil {
+		t.Fatal("expected an error when the browser reports no open page")
+	}
+}
+
+func TestBrowserOpenPageTargetRejectsUnreadableReply(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `not json`)
+	}))
+	defer server.Close()
+	if _, err := browserOpenPageTarget(context.Background(), server.URL, 200*time.Millisecond); err == nil {
+		t.Fatal("expected an error for a reply that is not a target list")
+	}
+}
