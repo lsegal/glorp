@@ -1003,6 +1003,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 	workFinished := make(chan struct{}, 1)
 	jobs := make(map[string]JobSnapshot)
 	issueCounts := make(map[string]int)
+	// lastPoll is when the most recent poll of GitHub finished, which the UIs
+	// report so a run that has stopped logging every tick (issue #413) can
+	// still be seen checking (issue #447). Guarded by jobMu, since publish
+	// reads it from whichever goroutine reports a job change.
+	var lastPoll time.Time
 	var jobMu sync.Mutex
 	publish := func() {
 		if w.UI == nil {
@@ -1018,6 +1023,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		for target, count := range issueCounts {
 			counts[target] = count
 		}
+		polled := lastPoll
 		jobMu.Unlock()
 		slices.SortFunc(list, func(a, b JobSnapshot) int { return b.Started.Compare(a.Started) })
 		if len(list) > maxVisibleJobs {
@@ -1027,7 +1033,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if w.Quota != nil {
 			quotas = w.Quota(ctx)
 		}
-		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, Quotas: quotas, Jobs: list})
+		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, LastPoll: polled, Quotas: quotas, Jobs: list})
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent
@@ -1405,8 +1411,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// from were only reported once (issue #413).
 	poll := func(sweep map[string]bool) error {
 		err := pollOnce(sweep)
-		if err == nil && w.forgetLogged("poll-error") {
-			w.logf("poll #%d succeeded; the failure reported above is resolved", pollNumber)
+		if err == nil {
+			// Record and publish the check itself, not just what it dispatched:
+			// a poll that finds nothing new logs nothing, so this timestamp is
+			// what tells the user the run is still alive (issue #447).
+			jobMu.Lock()
+			lastPoll = time.Now()
+			jobMu.Unlock()
+			publish()
+			if w.forgetLogged("poll-error") {
+				w.logf("poll #%d succeeded; the failure reported above is resolved", pollNumber)
+			}
 		}
 		return err
 	}

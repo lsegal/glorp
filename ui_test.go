@@ -562,3 +562,34 @@ func TestFormatTargets(t *testing.T) {
 		t.Fatalf("targets = %v", got)
 	}
 }
+
+func TestDashboardShowsLastPollTime(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(dashboard)
+	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{
+		Targets: []string{"o/one"}, Interval: 30 * time.Second,
+		LastPoll: time.Date(2026, 8, 30, 14, 5, 9, 0, time.Local),
+	}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "checked 14:05:09") {
+		t.Errorf("dashboard missing last poll time in %q", view)
+	}
+}
+
+func TestDeliveryTextOmitsLastPollBeforeFirstPoll(t *testing.T) {
+	text := deliveryText(GlorpSnapshot{Interval: 30 * time.Second})
+	if text != "polling every 30s" {
+		t.Errorf("delivery text = %q, want no last poll time", text)
+	}
+}
+
+func TestDeliveryTextReportsLastPollInPushMode(t *testing.T) {
+	text := deliveryText(GlorpSnapshot{
+		UseWebhooks: true, WebhookOnline: true,
+		LastPoll: time.Date(2026, 8, 30, 9, 0, 1, 0, time.Local),
+	})
+	if text != "push; checked 09:00:01" {
+		t.Errorf("delivery text = %q, want push mode last poll time", text)
+	}
+}
