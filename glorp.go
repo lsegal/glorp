@@ -919,9 +919,9 @@ func (w *Glorp) logf(format string, args ...interface{}) {
 }
 
 // logChanged logs a line only when the state it reports differs from the state
-// last logged under the same key, and reports whether it logged. Polling every
-// five seconds otherwise repeats an unchanged summary, and an unchanged
-// failure, on every tick (issue #413).
+// last logged under the same key, and reports whether it logged. Polling
+// otherwise repeats an unchanged summary, and an unchanged failure, on every
+// tick (issue #413).
 func (w *Glorp) logChanged(key, state, format string, args ...interface{}) bool {
 	w.repeatMu.Lock()
 	if previous, ok := w.lastLogged[key]; ok && previous == state {
@@ -1411,7 +1411,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		return err
 	}
 	// reportPollError reports a failed poll once. Every poll that fails does so
-	// through here, so the same failure repeating on a five-second tick is
+	// through here, so the same failure repeating on every tick is
 	// reported when it starts rather than on every tick, and the listing or
 	// state error that caused it is reported by this line alone instead of
 	// being logged a second time where it was raised (issue #413).
