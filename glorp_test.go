@@ -176,9 +176,9 @@ func TestGlorpRunsUnseenIssuesWithLimit(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 1}, {Number: 2}}, {{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4}}}}
 	r := &fakeRunner{release: make(chan struct{})}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: &logs}
+	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: logs}
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 	time.Sleep(20 * time.Millisecond)
@@ -217,9 +217,9 @@ func TestGlorpDispatchesUnansweredDiscussions(t *testing.T) {
 	ds := &fakeDiscussionSource{batches: [][]Discussion{{{Number: 9, Title: "Q"}}}}
 	src := &fakeSource{batches: [][]Issue{{}}}
 	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Glorp{Repo: target, Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Discussions: ds, Runner: r, Out: &logs}
+	w := &Glorp{Repo: target, Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Discussions: ds, Runner: r, Out: logs}
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 	select {
@@ -538,10 +538,10 @@ func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
 	statePath := filepath.Join(dir, "state.json")
 	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
 	runner := &fakeRunner{release: make(chan struct{})}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
-		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -587,10 +587,10 @@ func TestGlorpDoesNotCancelRunWithoutCompetingClaim(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
 	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1)}
 	comments := newFakeCommentClient()
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
-		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
 		Comments: comments, Identity: "SELF",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -620,10 +620,10 @@ func TestGlorpWebUIRetriesActiveWork(t *testing.T) {
 	statePath := filepath.Join(dir, "state.json")
 	src := &fakeSource{batches: [][]Issue{{{Number: 7, Title: "Retry me"}}}}
 	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 2), reported: AgentSession{ID: "session-7"}}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
-		Issues: src, Runner: runner, Out: &logs,
+		Issues: src, Runner: runner, Out: logs,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -664,10 +664,10 @@ func TestGlorpCancelsRunAndRemovesCheckoutWhenAnotherInstanceClaimsIssue(t *test
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
 	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1), reported: AgentSession{CheckoutDirectory: checkoutDir}}
 	comments := newFakeCommentClient()
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
-		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
 		Comments: comments, Identity: "SELF",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -708,10 +708,10 @@ func TestGlorpIgnoresCompetingClaimFromSameIdentity(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
 	runner := &fakeSessionRunner{agent: "codex", sessions: make(chan AgentSession, 1)}
 	comments := newFakeCommentClient()
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
-		Issues: src, Runner: runner, Out: &logs, closureInterval: time.Millisecond,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
 		Comments: comments, Identity: "SELF",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1021,10 +1021,10 @@ func (f *statusFailingOnce) SetIssueStatus(_ context.Context, _ string, issue Is
 func TestGlorpDispatchSkipsIssueOnStatusUpdateFailureWithoutAbortingOthers(t *testing.T) {
 	r := &fakeRunner{release: make(chan struct{})}
 	status := &statusFailingOnce{}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 2,
-		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}, {Number: 8}}}}, Runner: r, Status: status, Out: &logs,
+		Issues: &fakeSource{batches: [][]Issue{{{Number: 7}, {Number: 8}}}}, Runner: r, Status: status, Out: logs,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -1074,8 +1074,8 @@ func (f *erroringThenSucceedingSource) ListIssues(_ context.Context, _ string) (
 func TestGlorpInitialPollFailureIsNotFatal(t *testing.T) {
 	src := &erroringThenSucceedingSource{failN: 1, batches: [][]Issue{{{Number: 7}}}}
 	r := &fakeRunner{release: make(chan struct{})}
-	var logs bytes.Buffer
-	w := &Glorp{Repo: "o/r", Interval: 10 * time.Millisecond, Concurrency: 1, Issues: src, Runner: r, Out: &logs}
+	logs := &syncBuffer{}
+	w := &Glorp{Repo: "o/r", Interval: 10 * time.Millisecond, Concurrency: 1, Issues: src, Runner: r, Out: logs}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -1110,8 +1110,8 @@ func TestGlorpInitialPollFailureIsNotFatal(t *testing.T) {
 // forever. Only a change in what the poll found is worth a line.
 func TestPollLoggingIsQuietWhileNothingChanges(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{}}}
-	var logs bytes.Buffer
-	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, Out: &logs}
+	logs := &syncBuffer{}
+	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, Out: logs}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -1152,8 +1152,8 @@ func TestPollLoggingIsQuietWhileNothingChanges(t *testing.T) {
 // says the reported failure is over.
 func TestRepeatedPollFailureIsLoggedOnce(t *testing.T) {
 	src := &erroringThenSucceedingSource{failN: 3, batches: [][]Issue{{}}}
-	var logs bytes.Buffer
-	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, Out: &logs}
+	logs := &syncBuffer{}
+	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, Issues: src, Runner: &fakeRunner{release: make(chan struct{})}, Out: logs}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -1248,10 +1248,10 @@ func TestGlorpReclaimsStrandedInProgressProjectItem(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
 	comments := newFakeCommentClient()
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
-		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: logs,
 		Comments: comments, Identity: "SELF", ownershipWait: func(context.Context) bool { return true },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1298,10 +1298,10 @@ func TestGlorpStandsDownOnStrandedProjectItemStillOwned(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
 	comments := newFakeCommentClient()
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
-		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: logs,
 		Comments: comments, Identity: "SELF", ownershipWait: func(context.Context) bool {
 			comments.inject("o/r", 7, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: time.Now()})
 			return true
@@ -2547,10 +2547,10 @@ func TestGlorpRequeuesStaleRepositoryWorkState(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := &fakeRunner{release: make(chan struct{})}
-			var logs bytes.Buffer
+			logs := &syncBuffer{}
 			w := &Glorp{
 				Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
-				Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Out: &logs,
+				Issues: &fakeSource{batches: [][]Issue{{{Number: 7}}}}, Runner: r, Out: logs,
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)
@@ -2592,10 +2592,10 @@ func TestGlorpRedispatchesProjectItemMovedBackToTodoAfterCompletion(t *testing.T
 	// dispatch as it happens instead of requiring the test to poll r.got
 	// against a wall-clock deadline.
 	r := &fakeRunner{release: make(chan struct{}), allow: make(chan struct{}), dispatched: make(chan int, 1)}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "https://github.com/users/o/projects/3", Interval: time.Millisecond, Concurrency: 1, StatePath: statePath,
-		Issues: src, Runner: r, Out: &logs,
+		Issues: src, Runner: r, Out: logs,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2671,10 +2671,10 @@ func TestGlorpDoesNotDispatchBlockedIssue(t *testing.T) {
 		{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "open"}}},
 	}}}
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
-		Issues: src, Runner: runner, Out: &logs,
+		Issues: src, Runner: runner, Out: logs,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2715,10 +2715,10 @@ func TestGlorpDoesNotDispatchIssueWithSubIssues(t *testing.T) {
 		{Number: 7, Repository: "o/r", HasSubIssues: true},
 	}}}
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
-		Issues: src, Runner: runner, Out: &logs,
+		Issues: src, Runner: runner, Out: logs,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3174,10 +3174,10 @@ func TestGlorpReleasesClaimWhenDispatchIsSkippedAfterHandshake(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
 	comments := newFakeCommentClient()
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 	w := &Glorp{
 		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
-		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: logs,
 		Status: alwaysFailingStatuser{}, Comments: comments, Identity: "SELF",
 		ownershipWait: func(context.Context) bool { return true },
 	}

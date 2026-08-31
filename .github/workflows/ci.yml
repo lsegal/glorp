@@ -46,7 +46,10 @@ jobs:
         working-directory: web
       - run: pnpm test
         working-directory: web
-      - run: go test ./...
+      # The race detector runs here rather than in a second step so the suite
+      # stays race-clean without paying for the same tests twice. Windows keeps
+      # the plain run below, where the detector needs a C toolchain.
+      - run: go test -race ./...
       - run: go vet ./...
       # macOS has no runner here, so cross-compile its process handling to keep
       # it from breaking unnoticed. Windows has its own job below.
