@@ -174,6 +174,14 @@ func (b *Browser) tabFor(name string) (*BrowserTab, []retiredTab, error) {
 	if b.closed {
 		return nil, nil, fmt.Errorf("browser is closed")
 	}
+	// A Browser built without its bookkeeping maps -- as the tests that only
+	// exercise tab reuse do -- fills them in on first use rather than panicking.
+	if b.used == nil {
+		b.used = map[string]time.Time{}
+	}
+	if b.resume == nil {
+		b.resume = map[string]string{}
+	}
 	now := b.clock()
 	if tab, ok := b.tabs[name]; ok {
 		b.used[name] = now
@@ -509,18 +517,25 @@ func (t *BrowserTab) Reload() error {
 	// A tab that has never navigated but knows where it belongs is one that
 	// replaced a retired tab: reloading it would load nothing, so the page it
 	// is standing in for is opened instead (issue #461).
-	t.statusMu.Lock()
-	resumeURL := ""
-	if !t.navigated && t.loadURL != "" {
-		resumeURL = t.loadURL
-	}
-	t.statusMu.Unlock()
-	if resumeURL != "" {
+	if resumeURL := t.resumeTarget(); resumeURL != "" {
 		return t.Navigate(resumeURL)
 	}
 	t.awaitLoadSlot("")
 	t.clearStatus()
 	return t.run(chromedp.Reload())
+}
+
+// resumeTarget is the page a reload has to navigate to rather than reload: the
+// one a tab that replaced a retired tab is standing in for. It is empty for a
+// tab that has loaded its current URL itself, which is every tab that has not
+// been reopened.
+func (t *BrowserTab) resumeTarget() string {
+	t.statusMu.Lock()
+	defer t.statusMu.Unlock()
+	if t.navigated {
+		return ""
+	}
+	return t.loadURL
 }
 
 // Eval evaluates a JavaScript expression in the tab and decodes its result into

@@ -405,3 +405,23 @@ func TestApplyBrowserSourcesWithoutBrowserKeepsAPISources(t *testing.T) {
 		}
 	}
 }
+
+// TestBrowserTabIdleTimeout checks how long a tab may go unread is measured in
+// poll intervals, with a floor so a fast poll does not close and reopen tabs on
+// work that is merely between reads (issue #461).
+func TestBrowserTabIdleTimeout(t *testing.T) {
+	cases := []struct {
+		interval time.Duration
+		want     time.Duration
+	}{
+		{interval: 20 * time.Second, want: time.Minute},
+		{interval: 5 * time.Second, want: time.Minute},
+		{interval: time.Minute, want: 3 * time.Minute},
+		{interval: 0, want: time.Minute},
+	}
+	for _, c := range cases {
+		if got := browserTabIdleTimeout(c.interval); got != c.want {
+			t.Errorf("browserTabIdleTimeout(%s) = %s, want %s", c.interval, got, c.want)
+		}
+	}
+}
