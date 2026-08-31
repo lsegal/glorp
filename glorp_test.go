@@ -3156,3 +3156,78 @@ func TestGlorpIgnoresOwnershipAskOnAnotherInstancesPullRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The reap's grace window used to run on the poll loop, so a single contested
+// ticket froze the whole watch for two minutes: poll #1 in the log of issue
+// #437 started at 21:12:21 and completed at 21:14:25, and nothing was read or
+// dispatched in between. Polling must continue while a handshake waits.
+func TestGlorpKeepsPollingWhileAHandoffWaitsOutItsGraceWindow(t *testing.T) {
+	dir := t.TempDir()
+	// Issue #7 is stranded at "In Progress", so it is negotiated; issue #8
+	// appears on the next poll and needs no handshake at all.
+	src := &fakeSource{batches: [][]Issue{
+		{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}},
+		{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}, {Number: 8, Repository: "o/r", ProjectStatus: "Todo"}},
+	}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
+	comments := newFakeCommentClient()
+	release := make(chan struct{})
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "https://github.com/o/r/projects/3", Interval: 20 * time.Millisecond, Concurrency: 2,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: logs,
+		Comments: comments, Identity: "SELF", ownershipWait: func(ctx context.Context) bool {
+			select {
+			case <-release:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	// Issue #8 is discovered and dispatched while #7's handshake is still
+	// blocked inside its grace window.
+	select {
+	case got := <-runner.dispatched:
+		if got != 8 {
+			t.Fatalf("dispatched issue #%d first, want #8 while #7 is still negotiating", got)
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatalf("polling stopped while the handoff waited out its grace window:\n%s", logs.String())
+	}
+
+	// Every poll in that window leaves the in-flight handshake alone.
+	posted, err := comments.ListComments(context.Background(), "o/r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 1 {
+		t.Fatalf("posted = %v, want only the single ask while the handshake waits", posted)
+	}
+
+	// Once it settles, the won ticket is dispatched without waiting for a tick.
+	close(release)
+	select {
+	case got := <-runner.dispatched:
+		if got != 7 {
+			t.Fatalf("dispatched issue #%d, want #7 once its handshake settled", got)
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatalf("the reclaimed issue was never dispatched:\n%s", logs.String())
+	}
+
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
