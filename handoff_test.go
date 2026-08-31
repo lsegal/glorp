@@ -298,22 +298,76 @@ func TestLatestClaimByOtherPicksNewestForeignClaim(t *testing.T) {
 	}
 }
 
-func TestClaimIsFreshHonoursStaleClaimAge(t *testing.T) {
+func TestClaimStandingHonoursStaleClaimAge(t *testing.T) {
 	comments := newFakeCommentClient()
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
 	target := ownershipTarget{Repo: "o/r", Number: 1}
 
-	if fresh, owner, _, err := w.claimIsFresh(context.Background(), target); err != nil || fresh || owner != "" {
-		t.Fatalf("unclaimed work should never look fresh, got fresh=%v owner=%q err=%v", fresh, owner, err)
+	if standing, err := w.claimStanding(context.Background(), target); err != nil || standing.OwnerFresh || standing.OwnerClaimed || standing.SelfHolds {
+		t.Fatalf("unclaimed work should never look claimed, got %+v err=%v", standing, err)
 	}
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Hour)})
-	if fresh, owner, age, err := w.claimIsFresh(context.Background(), target); err != nil || !fresh || owner != "OTHER" || age < time.Hour {
-		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got fresh=%v owner=%q age=%v err=%v", fresh, owner, age, err)
+	if standing, err := w.claimStanding(context.Background(), target); err != nil || !standing.OwnerFresh || standing.Owner != "OTHER" || standing.OwnerAge < time.Hour {
+		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got %+v err=%v", standing, err)
 	}
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
 	w.staleClaim = 30 * time.Minute
-	if fresh, owner, _, err := w.claimIsFresh(context.Background(), target); err != nil || fresh || owner != "OTHER" {
-		t.Fatalf("claims older than the staleness window should be reapable, got fresh=%v owner=%q err=%v", fresh, owner, err)
+	if standing, err := w.claimStanding(context.Background(), target); err != nil || standing.OwnerFresh || standing.Owner != "OTHER" {
+		t.Fatalf("claims older than the staleness window should be reapable, got %+v err=%v", standing, err)
+	}
+}
+
+func TestClaimStandingReportsThisInstanceAsHolderOfItsOwnNewestClaim(t *testing.T) {
+	comments := newFakeCommentClient()
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	target := ownershipTarget{Repo: "o/r", Number: 1}
+
+	comments.inject("o/r", 1, Comment{Body: signComment(askClaimBody, "SELF"), CreatedAt: time.Now().Add(-7 * time.Minute)})
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-5 * time.Minute)})
+	standing, err := w.claimStanding(context.Background(), target)
+	if err != nil || !standing.SelfHolds || standing.OwnerClaimed || standing.SelfAge < 5*time.Minute {
+		t.Fatalf("this instance's own recent claim should be reported as held by it, got %+v err=%v", standing, err)
+	}
+
+	// A foreign claim posted after this instance's own one wins: the last
+	// claim always takes the work.
+	comments.inject("o/r", 1, Comment{Body: signComment(continuingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	if standing, err := w.claimStanding(context.Background(), target); err != nil || standing.SelfHolds || !standing.OwnerFresh || standing.Owner != "OTHER" {
+		t.Fatalf("a newer foreign claim should take ownership away, got %+v err=%v", standing, err)
+	}
+
+	// So does age: a claim of this instance's own older than the staleness
+	// window no longer holds the work.
+	stale := newFakeCommentClient()
+	stale.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-3 * time.Hour)})
+	w.Comments = stale
+	if standing, err := w.claimStanding(context.Background(), target); err != nil || standing.SelfHolds {
+		t.Fatalf("an expired claim of this instance's own should not hold the work, got %+v err=%v", standing, err)
+	}
+}
+
+// A reap that finds this instance's own claim standing on the target must
+// dispatch it without re-running the handshake. Before issue #425 the reap
+// only looked at foreign claims, so it re-asked "Does anyone have this?" and
+// re-claimed the same ticket on every pass.
+func TestNegotiateContestedIssuesDoesNotReAskWorkThisInstanceAlreadyClaimed(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: signComment(askClaimBody, "SELF"), CreatedAt: time.Now().Add(-7 * time.Minute)})
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-5 * time.Minute)})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
+	seen := map[string]bool{issueKey(pending[0].issue): true}
+
+	result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, false)
+	if len(result) != 1 || result[0].issue.Number != 1 {
+		t.Fatalf("work this instance already claimed should stay in the batch, got %+v", result)
+	}
+	posted, err := comments.ListComments(context.Background(), "o/r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 2 {
+		t.Fatalf("expected no new handoff comments, got %d: %v", len(posted), posted)
 	}
 }
 

@@ -182,16 +182,16 @@ func claimedByOther(comments []Comment, after time.Time, self Identity) (Identit
 	return "", false
 }
 
-// latestClaimByOther returns the creation time and signing identity of the
-// most recent starting, continuing, or presence claim signed by an identity
-// other than self.
-func latestClaimByOther(comments []Comment, self Identity) (time.Time, Identity, bool) {
+// latestClaimMatching returns the creation time and signing identity of the
+// most recent starting, continuing, or presence claim whose signer satisfies
+// match.
+func latestClaimMatching(comments []Comment, match func(Identity) bool) (time.Time, Identity, bool) {
 	var latest time.Time
 	var owner Identity
 	found := false
 	for _, comment := range comments {
 		kind, id, ok := parseClaim(comment.Body)
-		if !ok || id == self {
+		if !ok || !match(id) {
 			continue
 		}
 		switch kind {
@@ -206,26 +206,64 @@ func latestClaimByOther(comments []Comment, self Identity) (time.Time, Identity,
 	return latest, owner, found
 }
 
-// claimIsFresh reports whether another instance has claimed the target
-// recently enough that a periodic reap should leave it alone. Work with no
-// foreign claim at all, or one older than staleClaimDuration, is fair game
-// for the "does anyone have this?" handshake.
-// It also reports who holds that claim and how old it is, so callers can say
-// in the log why a reap was skipped or why work was treated as abandoned.
-func (w *Glorp) claimIsFresh(ctx context.Context, target ownershipTarget) (fresh bool, owner Identity, age time.Duration, err error) {
+// latestClaimByOther returns the creation time and signing identity of the
+// most recent starting, continuing, or presence claim signed by an identity
+// other than self.
+func latestClaimByOther(comments []Comment, self Identity) (time.Time, Identity, bool) {
+	return latestClaimMatching(comments, func(id Identity) bool { return id != self })
+}
+
+// latestClaimBySelf returns the creation time of the most recent starting,
+// continuing, or presence claim this instance signed itself.
+func latestClaimBySelf(comments []Comment, self Identity) (time.Time, bool) {
+	at, _, ok := latestClaimMatching(comments, func(id Identity) bool { return self != "" && id == self })
+	return at, ok
+}
+
+// claimStanding summarizes the ownership claims standing on a target: the
+// newest one signed by another instance, and the newest one this instance
+// signed itself. A reap needs both, because the last claim posted wins and an
+// instance that only looked at foreign claims would be blind to work it had
+// already claimed and re-open the handshake on it (issue #425).
+type claimStanding struct {
+	// Owner is the newest foreign claimant, when there is one.
+	Owner        Identity
+	OwnerAge     time.Duration
+	OwnerClaimed bool
+	// OwnerFresh reports that a foreign claim is recent enough that a
+	// periodic reap should leave the work alone.
+	OwnerFresh bool
+	SelfAge    time.Duration
+	// SelfHolds reports that this instance posted the newest claim on the
+	// target and did so recently enough to still own the work.
+	SelfHolds bool
+}
+
+// claimStanding reads the target's comments once and reports who currently
+// holds it. Work with no claim at all, or one older than staleClaimDuration,
+// is fair game for the "does anyone have this?" handshake.
+func (w *Glorp) claimStanding(ctx context.Context, target ownershipTarget) (claimStanding, error) {
+	var standing claimStanding
 	if w.Comments == nil {
-		return false, "", 0, nil
+		return standing, nil
 	}
 	comments, err := w.Comments.ListComments(ctx, target.Repo, target.Number)
 	if err != nil {
-		return false, "", 0, err
+		return standing, err
 	}
-	claimedAt, owner, ok := latestClaimByOther(comments, w.Identity)
-	if !ok {
-		return false, "", 0, nil
+	stale := w.staleClaimAfter()
+	if claimedAt, owner, ok := latestClaimByOther(comments, w.Identity); ok {
+		standing.Owner = owner
+		standing.OwnerAge = time.Since(claimedAt)
+		standing.OwnerClaimed = true
+		standing.OwnerFresh = standing.OwnerAge < stale
 	}
-	age = time.Since(claimedAt)
-	return age < w.staleClaimAfter(), owner, age, nil
+	if claimedAt, ok := latestClaimBySelf(comments, w.Identity); ok {
+		standing.SelfAge = time.Since(claimedAt)
+		standing.SelfHolds = standing.SelfAge < stale &&
+			(!standing.OwnerClaimed || standing.SelfAge < standing.OwnerAge)
+	}
+	return standing, nil
 }
 
 // ownershipTarget identifies where a handoff negotiation should take place:

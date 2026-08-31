@@ -465,19 +465,28 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 			}
 			w.logf("issue #%d looks claimed: %s; negotiating on %s", issue.Number, reason, target.describe())
 			if !aggressive {
-				fresh, owner, age, err := w.claimIsFresh(ctx, target)
+				standing, err := w.claimStanding(ctx, target)
 				if err != nil {
 					w.logf("issue #%d reap check failed: %v", issue.Number, err)
 					return
 				}
-				if fresh {
-					w.logf("issue #%d claimed by instance %s %s ago (within %s); skipping reap", issue.Number, owner, age.Round(time.Second), w.staleClaimAfter())
+				// This instance already holds the newest claim, so the
+				// handshake it would run has already been run and won. Asking
+				// again would spam the ticket with an ask/claim pair on every
+				// pass and stall each one for the grace period (issue #425).
+				if standing.SelfHolds {
+					w.logf("issue #%d already claimed by this instance %s ago; dispatching without re-asking", issue.Number, standing.SelfAge.Round(time.Second))
+					keep[i] = true
 					return
 				}
-				if owner == "" {
+				if standing.OwnerFresh {
+					w.logf("issue #%d claimed by instance %s %s ago (within %s); skipping reap", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter())
+					return
+				}
+				if !standing.OwnerClaimed {
 					w.logf("issue #%d has no claim from another instance; treating it as abandoned", issue.Number)
 				} else {
-					w.logf("issue #%d last claimed by instance %s %s ago (older than %s); treating it as abandoned", issue.Number, owner, age.Round(time.Second), w.staleClaimAfter())
+					w.logf("issue #%d last claimed by instance %s %s ago (older than %s); treating it as abandoned", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter())
 				}
 			}
 			claimed, err := w.negotiateOwnership(ctx, target)
