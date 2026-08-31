@@ -1,9 +1,26 @@
+// lastPollLabel renders the time the run last finished a poll of GitHub. A run
+// that has not completed one yet reports nothing rather than Go's zero clock,
+// which serialises as year 1.
+export function lastPollLabel(lastPoll) {
+	if (!lastPoll) return "";
+	const checked = new Date(lastPoll);
+	if (Number.isNaN(checked.getTime()) || checked.getFullYear() <= 1) return "";
+	const pad = (value) => String(value).padStart(2, "0");
+	return `${pad(checked.getHours())}:${pad(checked.getMinutes())}:${pad(checked.getSeconds())}`;
+}
+
+// deliveryLabel describes how work is picked up, and when GitHub was last
+// checked. A poll that finds nothing new logs nothing (issue #413), so the
+// last-checked time is the only standing sign the run is still polling
+// (issue #447). Push mode shows it too, since it still reconciles periodically.
 export function deliveryLabel(snapshot) {
-	if (snapshot.UseWebhooks) return "push";
 	const interval = snapshot.Interval
 		? `${snapshot.Interval / 1_000_000_000}s`
 		: "—";
-	return `polling every ${interval}`;
+	let label = snapshot.UseWebhooks ? "push" : `polling every ${interval}`;
+	const checked = lastPollLabel(snapshot.LastPoll);
+	if (checked) label += `; checked ${checked}`;
+	return label;
 }
 
 export function jobAgentSummary(job) {

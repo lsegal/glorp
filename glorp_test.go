@@ -3302,3 +3302,32 @@ func TestGlorpKeepsPollingWhileAHandoffWaitsOutItsGraceWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGlorpPublishesLastPollTime(t *testing.T) {
+	reporter := &snapshotReporter{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		Issues: &fakeSource{batches: [][]Issue{{}}},
+		Runner: fakeOutputRunner{}, UI: reporter,
+	}
+
+	before := time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	if len(reporter.snapshots) == 0 {
+		t.Fatal("no snapshots were published")
+	}
+	last := reporter.snapshots[len(reporter.snapshots)-1]
+	if last.LastPoll.Before(before) {
+		t.Fatalf("last poll time %v was not recorded after the poll ran (started %v)", last.LastPoll, before)
+	}
+}

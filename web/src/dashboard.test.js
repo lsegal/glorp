@@ -5,6 +5,7 @@ import {
 	fetchSettings,
 	jobActionAvailability,
 	jobAgentSummary,
+	lastPollLabel,
 	parseAllowedCommenters,
 	submitJobAction,
 	submitSettings,
@@ -21,6 +22,39 @@ describe("deliveryLabel", () => {
 		expect(deliveryLabel({ Interval: 30_000_000_000 })).toBe(
 			"polling every 30s",
 		);
+	});
+
+	it("reports when GitHub was last checked", () => {
+		const checked = new Date(2026, 7, 30, 14, 5, 9);
+		expect(
+			deliveryLabel({
+				Interval: 30_000_000_000,
+				LastPoll: checked.toISOString(),
+			}),
+		).toBe("polling every 30s; checked 14:05:09");
+		expect(
+			deliveryLabel({ UseWebhooks: true, LastPoll: checked.toISOString() }),
+		).toBe("push; checked 14:05:09");
+	});
+
+	it("omits the last check before the first poll finishes", () => {
+		expect(deliveryLabel({ Interval: 30_000_000_000 })).toBe(
+			"polling every 30s",
+		);
+		expect(
+			deliveryLabel({
+				Interval: 30_000_000_000,
+				LastPoll: "0001-01-01T00:00:00Z",
+			}),
+		).toBe("polling every 30s");
+	});
+});
+
+describe("lastPollLabel", () => {
+	it("ignores a missing or unparsable timestamp", () => {
+		expect(lastPollLabel(undefined)).toBe("");
+		expect(lastPollLabel("")).toBe("");
+		expect(lastPollLabel("not a time")).toBe("");
 	});
 });
 

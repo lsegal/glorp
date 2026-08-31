@@ -35,14 +35,18 @@ type JobSnapshot struct {
 }
 
 type GlorpSnapshot struct {
-	Targets       []string
-	IssueCounts   map[string]int
-	Running       int
-	Queued        int
-	Completed     int
-	Failed        int
-	Concurrency   int
-	NextPoll      time.Time
+	Targets     []string
+	IssueCounts map[string]int
+	Running     int
+	Queued      int
+	Completed   int
+	Failed      int
+	Concurrency int
+	NextPoll    time.Time
+	// LastPoll is when the most recent poll of GitHub finished. The poll loop
+	// only logs what it found when that changes (issue #413), so this is the
+	// run's standing evidence that it is still checking (issue #447).
+	LastPoll      time.Time
 	Interval      time.Duration
 	UseWebhooks   bool
 	WebhookURL    string
@@ -341,16 +345,7 @@ func (m dashboard) View() string {
 	logs := logPanel.Copy().Width(max(1, m.width-2)).Height(max(1, logHeight-2)).Render(muted.Render("Logs") + "\n" + renderViewport(m.viewport))
 	counts := renderJobCounts(m.snapshot)
 	tokens := quotaText(m.snapshot)
-	push := "polling every " + m.snapshot.Interval.String()
-	if m.snapshot.UseWebhooks {
-		push = "push"
-		if m.snapshot.WebhookURL != "" {
-			push += " " + m.snapshot.WebhookURL
-		}
-		if !m.snapshot.WebhookOnline {
-			push += " (offline)"
-		}
-	}
+	push := deliveryText(m.snapshot)
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
 	footer := renderStatusBar([]string{counts, tokens, push, targets})
 	sections := []string{logs, footer}
@@ -395,6 +390,29 @@ func renderScrollbar(view viewport.Model) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// deliveryText describes how the run is picking work up, and when it last
+// checked GitHub. The last-checked time is the only sign a quiet poll loop is
+// still running, since a poll that finds nothing new no longer logs anything
+// (issue #447); it is shown for push mode too, which still reconciles on a
+// periodic poll. A run that has not completed a poll yet reports no time
+// rather than the zero clock.
+func deliveryText(snapshot GlorpSnapshot) string {
+	text := "polling every " + snapshot.Interval.String()
+	if snapshot.UseWebhooks {
+		text = "push"
+		if snapshot.WebhookURL != "" {
+			text += " " + snapshot.WebhookURL
+		}
+		if !snapshot.WebhookOnline {
+			text += " (offline)"
+		}
+	}
+	if !snapshot.LastPoll.IsZero() {
+		text += "; checked " + snapshot.LastPoll.Format("15:04:05")
+	}
+	return text
 }
 
 func renderJobCounts(snapshot GlorpSnapshot) string {
