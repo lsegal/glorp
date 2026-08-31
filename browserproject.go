@@ -99,23 +99,32 @@ func newBrowserBoard(browser *Browser, filter string, allIssues bool, vision *br
 // only ever be exercised against a live board.
 const boardDocumentScript = "document.documentElement.outerHTML"
 
-// boardScrollScript scrolls the board's own scroller to the bottom and reports
-// whether it actually moved. Projects v2 virtualizes its rows, so the rows past
-// the viewport are not in the DOM until they are scrolled into it. The largest
-// element that has more content than it can show is the list; falling back to
-// the document covers the layouts that scroll the page itself.
+// boardScrollScript scrolls the board to the bottom and reports whether
+// anything actually moved. Projects v2 virtualizes its items, so the ones past
+// the viewport are not in the DOM until they are scrolled into it. Every
+// element that has more content than it can show is scrolled rather than only
+// the largest one: the table layout has a single list, but the board layout
+// gives each column a scroller of its own, and scrolling only the biggest of
+// them left every other column stuck on the handful of cards that happened to
+// fit (issue #457). Falling back to the document covers the layouts that
+// scroll the page itself.
 const boardScrollScript = `(function(){
-  var best = null, area = 0;
+  var moved = false, scrolled = 0;
   document.querySelectorAll('*').forEach(function(el){
-    if (el.scrollHeight - el.clientHeight > 40) {
-      var size = el.clientWidth * el.clientHeight;
-      if (size > area) { area = size; best = el; }
-    }
+    if (el.scrollHeight - el.clientHeight <= 40) { return; }
+    if (el.clientWidth * el.clientHeight < 2000) { return; }
+    scrolled++;
+    var before = el.scrollTop;
+    el.scrollTop = el.scrollHeight;
+    if (el.scrollTop > before) { moved = true; }
   });
-  var scroller = best || document.scrollingElement || document.documentElement;
-  var before = scroller.scrollTop;
-  scroller.scrollTop = scroller.scrollHeight;
-  return scroller.scrollTop > before;
+  if (scrolled === 0) {
+    var page = document.scrollingElement || document.documentElement;
+    var before = page.scrollTop;
+    page.scrollTop = page.scrollHeight;
+    moved = page.scrollTop > before;
+  }
+  return moved;
 })()`
 
 // boardRow is one item as the board page shows it.
@@ -423,11 +432,23 @@ func parseBoardDocument(document string) ([]boardRow, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("parse project board page: %w", err)
 	}
-	if rows, ok := tableBoardRows(root); ok {
-		return rows, true, nil
+	// A layout is only preferred over the other when it actually produced
+	// items. GitHub's board layout ships unrelated <table> markup of its own
+	// (the project's own side panels render one), and taking the first
+	// recognised layout meant a board view whose cards were sitting right
+	// there was read as an empty table (issue #457).
+	tableRows, tableFound := tableBoardRows(root)
+	if tableFound && len(tableRows) > 0 {
+		return tableRows, true, nil
 	}
-	if rows, ok := columnBoardRows(root); ok {
-		return rows, true, nil
+	columnRows, columnFound := columnBoardRows(root)
+	if columnFound && len(columnRows) > 0 {
+		return columnRows, true, nil
+	}
+	if tableFound || columnFound {
+		// A board that recognised itself and showed nothing is an empty
+		// board, which is reported immediately rather than waited out.
+		return nil, true, nil
 	}
 	return nil, false, nil
 }
@@ -458,7 +479,17 @@ func tableBoardRows(root *html.Node) ([]boardRow, bool) {
 // columnBoardRows reads the board layout, where an item's status is the column
 // it sits in rather than a field on the card.
 func columnBoardRows(root *html.Node) ([]boardRow, bool) {
-	columns := collectNodes(root, isBoardColumn)
+	// GitHub names each column with the status it stands for, in
+	// data-board-column. That is preferred over the generic shapes below
+	// because a board is wrapped in labelled groups of its own: matching one
+	// of those instead would put every card in one column and give them all
+	// the wrapper's label as their status (issue #457).
+	columns := collectNodes(root, func(n *html.Node) bool {
+		return strings.TrimSpace(attrValue(n, "data-board-column")) != ""
+	})
+	if len(columns) == 0 {
+		columns = collectNodes(root, isBoardColumn)
+	}
 	if len(columns) == 0 {
 		return nil, false
 	}
@@ -480,6 +511,9 @@ func columnBoardRows(root *html.Node) ([]boardRow, bool) {
 }
 
 func isBoardColumn(n *html.Node) bool {
+	if strings.TrimSpace(attrValue(n, "data-board-column")) != "" {
+		return true
+	}
 	if containsFold(attrValue(n, "data-testid"), "column") {
 		return true
 	}
@@ -488,6 +522,9 @@ func isBoardColumn(n *html.Node) bool {
 
 // columnStatus names the board column, which is the status of every card in it.
 func columnStatus(column *html.Node) string {
+	if name := strings.TrimSpace(attrValue(column, "data-board-column")); name != "" {
+		return normalizeStatus(name)
+	}
 	if label := strings.TrimSpace(attrValue(column, "aria-label")); label != "" {
 		return normalizeStatus(label)
 	}
@@ -549,6 +586,18 @@ func linkPath(href string) string {
 // match wins: an outer container that merely mentions the field would otherwise
 // contribute the whole row's text.
 func statusFromRow(row *html.Node) string {
+	// GitHub sizes every table cell from a CSS custom property named after
+	// the field it holds, and that is the only place the field's name still
+	// appears on a row: the cell's classes are hashed CSS-module names and it
+	// carries no test id or label of its own. Reading the property is what
+	// tells the Status cell apart from the rest (issue #457).
+	if cell := findNode(row, func(n *html.Node) bool {
+		return strings.EqualFold(cellFieldName(n), "status")
+	}); cell != nil {
+		// An item with no status has an empty Status cell, which is the
+		// answer rather than a reason to keep guessing.
+		return statusText(cell)
+	}
 	best, bestDepth := "", -1
 	var walk func(n *html.Node, depth int)
 	walk = func(n *html.Node, depth int) {
@@ -569,7 +618,35 @@ func statusFromRow(row *html.Node) string {
 // name appears in at least one of them on the cell that holds its value.
 var statusAttributes = []string{"data-testid", "data-field-name", "data-field", "aria-label", "class", "id"}
 
+// columnWidthPattern pulls a field's name out of the CSS custom property a
+// project table sizes its column with (--column-Status-width), which both the
+// header cell and every body cell of that column carry.
+var columnWidthPattern = regexp.MustCompile(`--column-(.+?)-width`)
+
+// cellFieldName is the board field a table cell holds, or "" for a cell that
+// names none.
+func cellFieldName(n *html.Node) string {
+	match := columnWidthPattern.FindStringSubmatch(attrValue(n, "style"))
+	if match == nil {
+		return ""
+	}
+	return strings.ReplaceAll(match[1], "-", " ")
+}
+
 func identifiesStatus(n *html.Node) bool {
+	if field := cellFieldName(n); field != "" {
+		return strings.EqualFold(field, "status")
+	}
+	if findNode(n, func(c *html.Node) bool {
+		return c.Data == "a" && issueLinkPattern.MatchString(linkPath(attrValue(c, "href")))
+	}) != nil {
+		// The cell holding the item's own link is its title cell, and GitHub
+		// labels that cell with the issue's own open/closed state
+		// ("<title>, status: open"). That is the issue's state, not the
+		// board's Status field, and reading it as one made every row on a
+		// real board fail the ready-state gate (issue #457).
+		return false
+	}
 	for _, name := range statusAttributes {
 		if containsFold(attrValue(n, name), "status") {
 			return true
