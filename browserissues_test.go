@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeBrowserPage stands in for a tab: it records what it was asked to load and
@@ -71,7 +72,10 @@ func newTestIssueSource(page *fakeBrowserPage, filter string, allIssues bool, lo
 		page.status = 200
 	}
 	return &browserIssueSource{
-		pageFor:          func(string) (browserPage, error) { return page, nil },
+		pageFor: func(string) (browserPage, error) { return page, nil },
+		// One attempt per page load keeps the canned results below matching
+		// evaluations one for one; the settle wait has its own tests.
+		settleAttempts:   1,
 		filter:           filter,
 		allIssues:        allIssues,
 		logf:             logf,
@@ -359,4 +363,91 @@ func TestNextBrowserIssuesURL(t *testing.T) {
 func TestBrowserIssueSourceImplementsIssueSource(t *testing.T) {
 	var _ IssueSource = (*browserIssueSource)(nil)
 	var _ browserPage = (*BrowserTab)(nil)
+}
+
+// TestBrowserIssueSourceWaitsForClientRender checks the extractor is retried
+// while GitHub's React issues page has not drawn yet, so a poll that lands
+// before hydration reports the issues the page went on to render instead of an
+// extraction failure (issue #415).
+func TestBrowserIssueSourceWaitsForClientRender(t *testing.T) {
+	page := &fakeBrowserPage{results: []browserIssueList{
+		{},
+		{},
+		{Recognized: true, Rows: []browserIssueRow{{Number: 415, Repository: "lsegal/glorp", Title: "bug", State: "open"}}},
+	}}
+	source := newTestIssueSource(page, defaultIssueFilter, false, nil)
+	source.settleAttempts = 5
+	waits := 0
+	source.sleep = func(context.Context, time.Duration) bool { waits++; return true }
+	issues, err := source.ListIssues(context.Background(), "lsegal/glorp")
+	if err != nil {
+		t.Fatalf("ListIssues: %v", err)
+	}
+	if len(issues) != 1 || issues[0].Number != 415 {
+		t.Fatalf("got %+v, want the one issue the page rendered", issues)
+	}
+	if waits != 2 {
+		t.Fatalf("waited %d time(s) for the page to render, want 2", waits)
+	}
+}
+
+// TestBrowserIssueSourceRendersImmediatelyWithoutWaiting checks a page that has
+// already drawn costs a single evaluation and no wait at all, so the settle
+// budget is only ever spent by a page that has not rendered.
+func TestBrowserIssueSourceRendersImmediatelyWithoutWaiting(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		list browserIssueList
+	}{
+		{name: "list with rows", list: browserIssueList{Recognized: true, Rows: []browserIssueRow{{Number: 1, Repository: "lsegal/glorp", Title: "one", State: "open"}}}},
+		{name: "honestly empty list", list: browserIssueList{Recognized: true, Empty: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			page := &fakeBrowserPage{results: []browserIssueList{test.list}}
+			source := newTestIssueSource(page, defaultIssueFilter, false, nil)
+			source.settleAttempts = 5
+			waits := 0
+			source.sleep = func(context.Context, time.Duration) bool { waits++; return true }
+			if _, err := source.ListIssues(context.Background(), "lsegal/glorp"); err != nil {
+				t.Fatalf("ListIssues: %v", err)
+			}
+			if page.evals != 1 || waits != 0 {
+				t.Fatalf("evaluated %d time(s) with %d wait(s), want 1 and 0", page.evals, waits)
+			}
+		})
+	}
+}
+
+// TestBrowserIssueSourceReportsPageThatNeverRenders checks the settle wait is
+// bounded: a page that never draws is still reported once as the
+// distinguishable extraction failure the vision fallback keys on.
+func TestBrowserIssueSourceReportsPageThatNeverRenders(t *testing.T) {
+	page := &fakeBrowserPage{results: []browserIssueList{{}, {}, {}}}
+	source := newTestIssueSource(page, defaultIssueFilter, false, nil)
+	source.settleAttempts = 3
+	source.sleep = func(context.Context, time.Duration) bool { return true }
+	_, err := source.ListIssues(context.Background(), "lsegal/glorp")
+	if !errors.Is(err, errBrowserExtraction) {
+		t.Fatalf("error %v, want an extraction failure", err)
+	}
+	if page.evals != 3 {
+		t.Fatalf("evaluated %d time(s), want the 3 attempts the budget allows", page.evals)
+	}
+}
+
+// TestBrowserIssueSourceStopsWaitingWhenCancelled checks a run being shut down
+// mid-wait stops instead of sitting out the whole settle budget.
+func TestBrowserIssueSourceStopsWaitingWhenCancelled(t *testing.T) {
+	page := &fakeBrowserPage{results: []browserIssueList{{}, {}, {}}}
+	source := newTestIssueSource(page, defaultIssueFilter, false, nil)
+	source.settleAttempts = 3
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source.sleep = func(context.Context, time.Duration) bool { cancel(); return false }
+	if _, err := source.ListIssues(ctx, "lsegal/glorp"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error %v, want context.Canceled", err)
+	}
+	if page.evals != 1 {
+		t.Fatalf("evaluated %d time(s) after cancellation, want 1", page.evals)
+	}
 }
