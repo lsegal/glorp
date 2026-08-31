@@ -234,7 +234,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--agent AGENT[/MODEL][:LEVEL]` | `codex` | Agent to run, with an optional model and reasoning level, such as `claude`, `claude/opus`, or `codex/gpt-5.6:high`. Supported agents are `codex` and `claude`; supported levels are `low`, `medium`, and `high`. Repeatable; when given more than once, new issues are load balanced evenly across the listed agents, each using its own model and level. |
-| `--all-issues` | `false` | Disable the default issue-search filter and consider all open issues. |
+| `--all-issues` | `false` | Disable the default issue-search filter and consider all open issues. The `is:issue state:open` qualifiers glorp always adds still apply. |
 | `--allowed-commenters LOGINS` | the authenticated `gh` user | Comma-separated GitHub logins allowed to trigger a direct `@/glorp:ID` mention run. |
 | `--browser` | `false` | Read GitHub through a headless Chromium-based browser instead of the GitHub API. Implies `--poll`, so no webhook server and no ngrok tunnel are started, and it cannot be combined with `--listen`, `--webhook-path`, `--webhook-secret`, or `--ngrok-binary`. Unless `--interval` is given explicitly it also shortens the interval to `20s`. |
 | `--browser-binary PATH` | auto-detected | Chromium-based browser executable for `--browser`. Resolved through `PATH`, so a bare name works as well as a full path. By default glorp looks for `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`, or `msedge`, then the usual per-platform install locations. |
@@ -244,7 +244,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--claude-binary PATH` | `claude` | Claude Code executable name or path. |
 | `--codex-binary PATH` | `codex` | Codex executable name or path. |
 | `--concurrency N` | `0` | Maximum concurrent agents across all targets. `0` is normalized to `3`; negative values are invalid. |
-| `--filter QUERY` | `is:issue state:open assignee:@me author:@me` | GitHub issue-search filter. Repeat the option to combine terms. The default requires that you both opened the issue and assigned it to yourself, so another user cannot trigger a run by assigning you an issue they filed. It applies to repository targets; Project targets default to all open project issues. |
+| `--filter QUERY` | `assignee:@me author:@me` | GitHub issue-search filter. Repeat the option to combine terms. glorp always searches for open issues, so `is:issue state:open` (`is:issue is:open` on a Project board) is added to every query and is not part of the default: a filter of your own does not have to repeat it, and a kind or state it names of its own is dropped rather than dispatching a closed issue or a pull request. The default requires that you both opened the issue and assigned it to yourself, so another user cannot trigger a run by assigning you an issue they filed. It applies to repository targets; Project targets default to all open project issues. |
 | `--interval DURATION` | `30s` | Periodic GitHub synchronization interval. Uses Go duration syntax such as `10s`, `2m`, or `1h30m`; must be positive. |
 | `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | Deprecated and ignored. The public tunnel URL is read from the log of the ngrok process glorp starts. |

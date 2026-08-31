@@ -348,22 +348,22 @@ func TestBoardURL(t *testing.T) {
 			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen+label%3Aready&layout=table",
 		},
 		{
-			name:   "filter naming its own kind is not contradicted",
+			name:   "filter naming its own kind cannot ask the board for pull requests",
 			target: "https://github.com/users/lsegal/projects/3",
 			filter: "is:pr state:open label:bug",
-			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Apr+is%3Aopen+label%3Abug&layout=table",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen+label%3Abug&layout=table",
 		},
 		{
-			name:   "filter naming its own state keeps the kind default",
+			name:   "filter naming its own state cannot ask the board for closed items",
 			target: "https://github.com/users/lsegal/projects/3",
 			filter: "state:closed label:bug",
-			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aclosed+label%3Abug&layout=table",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen+label%3Abug&layout=table",
 		},
 		{
-			name:   "is:closed counts as a state rather than a kind",
+			name:   "is:closed is dropped rather than reaching the board",
 			target: "https://github.com/users/lsegal/projects/3",
 			filter: "is:closed",
-			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aclosed&layout=table",
+			want:   "https://github.com/users/lsegal/projects/3?filterQuery=is%3Aissue+is%3Aopen&layout=table",
 		},
 		{
 			name:      "all issues drops a filter that named its own kind",

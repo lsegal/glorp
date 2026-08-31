@@ -176,48 +176,41 @@ func (g GHCLI) resolveSelfLogin(ctx context.Context) (string, error) {
 	return login, nil
 }
 
-// issueSearchQualifiers reports whether filter already says what to search for,
-// so a caller knows which of its own defaults would merely repeat it. It is
-// shared with projectItemQuery, which supplies a project board's defaults in
-// the board's own narrower vocabulary.
-func issueSearchQualifiers(filter string) (kind, state bool) {
+// issueFilterTerms splits filter into the terms a search is actually built
+// from, dropping every qualifier that names the kind or the state of what to
+// look for.
+//
+// glorp only ever dispatches an open issue: a closed one has nothing left to
+// do and a pull request is not work it can pick up, so "is:issue" and the open
+// state are appended to every query rather than being defaults a --filter can
+// displace. They are therefore not part of the filter a user is shown or
+// overrides, and a filter that names its own kind or state has that term
+// dropped here instead of contradicting the qualifiers glorp adds.
+//
+// It is shared with projectItemQuery, which appends the same two qualifiers in
+// a project board's own narrower vocabulary.
+func issueFilterTerms(filter string) []string {
+	var terms []string
 	for _, term := range strings.Fields(filter) {
 		switch {
-		case strings.HasPrefix(term, "state:"), term == "is:open", term == "is:closed", term == "is:merged":
-			state = true
-		case strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
-			kind = true
+		case strings.HasPrefix(term, "state:"), strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
+			continue
 		}
+		terms = append(terms, term)
 	}
-	return kind, state
+	return terms
 }
 
 // issueSearchTerms builds the search terms for filter, the query body shared by
-// the API path and the browser mode's page URL.
+// the API path and the browser mode's page URL. "is:issue" and "state:open"
+// always open the query; see issueFilterTerms.
 //
-// "is:issue" and "state:open" are supplied only as defaults for a filter that
-// does not already say what to search for: the default filter opens with both
-// qualifiers itself, and repeating them would make the logged query harder to
-// read and would contradict a filter that deliberately asked for something else
-// (a "--filter is:pr ..." must not become "is:issue ... is:pr").
-//
-// allIssues drops the filter entirely, leaving the bare defaults.
+// allIssues drops the filter entirely, leaving the bare qualifiers.
 func issueSearchTerms(filter string, allIssues bool) []string {
 	if allIssues {
 		filter = ""
 	}
-	kind, state := issueSearchQualifiers(filter)
-	var terms []string
-	if !kind {
-		terms = append(terms, "is:issue")
-	}
-	if !state {
-		terms = append(terms, "state:open")
-	}
-	if filter = strings.TrimSpace(filter); filter != "" {
-		terms = append(terms, filter)
-	}
-	return terms
+	return append([]string{"is:issue", "state:open"}, issueFilterTerms(filter)...)
 }
 
 // publicIssueSearchQuery builds the GitHub search-syntax query equivalent to
