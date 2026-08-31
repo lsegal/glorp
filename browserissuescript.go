@@ -14,12 +14,12 @@ package main
 // title link.
 const browserIssueRowsScript = `(function () {
   var rowPattern = /^(?:https:\/\/github\.com)?\/([^\/\s]+)\/([^\/\s]+)\/issues\/(\d+)(?:\?[^#]*)?$/;
-  var container =
+  var list =
     document.querySelector('[data-listview-component="items-list"]') ||
     document.querySelector('[data-testid="issue-list"]') ||
     document.querySelector('section[aria-label*="issue" i]') ||
-    document.querySelector('.js-navigation-container') ||
-    document;
+    document.querySelector('.js-navigation-container');
+  var container = list || document;
 
   var rows = [];
   var seen = {};
@@ -69,6 +69,12 @@ const browserIssueRowsScript = `(function () {
   }
 
   var text = document.body ? document.body.innerText || '' : '';
+  // A list container holding no rows is an empty list whether or not the
+  // blankslate GitHub renders beside it is recognised: reporting it as markup
+  // the extractor could not read turned a repository with no ready issues into
+  // a failure on every five-second tick (issue #413). The fallback container is
+  // the document itself, which says nothing about a list, so only a container
+  // the page actually named counts as that evidence.
   var empty = !!(
     document.querySelector('[data-testid="issue-list-empty-state"]') ||
     document.querySelector('[data-testid="list-view-no-results"]') ||
@@ -83,5 +89,10 @@ const browserIssueRowsScript = `(function () {
     document.querySelector('a[aria-label="Next"]');
   var next = pager && pager.getAttribute('aria-disabled') !== 'true' ? pager.href : '';
 
-  return { rows: rows, recognized: rows.length > 0 || empty, empty: empty, next: next };
+  // container reports whether the page named a list at all. A named list that
+  // drew no rows is an empty list rather than markup the extractor could not
+  // read, but only once the caller's render wait is over, so the decision is
+  // left to it (issue #413). The fallback container is the document itself,
+  // which says nothing about a list, so it does not count.
+  return { rows: rows, recognized: rows.length > 0 || empty, empty: empty, container: !!list, next: next };
 })()`

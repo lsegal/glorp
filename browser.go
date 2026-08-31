@@ -8,6 +8,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
+	cdptarget "github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
@@ -118,12 +119,38 @@ func (b *Browser) Tab(name string) (*BrowserTab, error) {
 	if tab, ok := b.tabs[name]; ok {
 		return tab, nil
 	}
-	tab, err := newBrowserTab(b.allocCtx)
+	tab, err := b.openTab()
 	if err != nil {
 		return nil, fmt.Errorf("open browser tab for %s: %w", name, err)
 	}
 	b.tabs[name] = tab
 	return tab, nil
+}
+
+// adoptsExistingWindow reports whether the next tab should attach to a window
+// the browser already has open instead of creating one. Only the first tab of a
+// headed browser qualifies: Chrome opens a window of its own as soon as it
+// starts, so creating a target on top of it is what put a second, empty window
+// on screen during `glorp auth` (issue #412). Headless runs have no window to
+// adopt, and every later tab is a genuinely new one.
+func (b *Browser) adoptsExistingWindow() bool {
+	return b.config.Headed && len(b.tabs) == 0 && b.cmd != nil
+}
+
+// openTab opens the tab a target is read through, adopting the browser's own
+// window when there is one to adopt. Adoption is best effort: a browser that
+// reports no page, or a window that cannot be attached to, falls back to a
+// freshly created tab, because showing an extra window is a far better outcome
+// than failing to sign in at all.
+func (b *Browser) openTab() (*BrowserTab, error) {
+	if b.adoptsExistingWindow() {
+		if id, err := browserOpenPageTarget(b.ctx, browserDebugURL(b.cmd.port), browserTargetTimeout); err == nil {
+			if tab, err := newBrowserTab(b.allocCtx, chromedp.WithTargetID(cdptarget.ID(id))); err == nil {
+				return tab, nil
+			}
+		}
+	}
+	return newBrowserTab(b.allocCtx)
 }
 
 // Close shuts the browser down: the tabs are closed, the connection is dropped,
@@ -169,8 +196,8 @@ type BrowserTab struct {
 
 // newBrowserTab opens a tab and starts watching it for the status of its
 // main-frame navigations.
-func newBrowserTab(allocCtx context.Context) (*BrowserTab, error) {
-	ctx, cancel := chromedp.NewContext(allocCtx)
+func newBrowserTab(allocCtx context.Context, opts ...chromedp.ContextOption) (*BrowserTab, error) {
+	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
 	tab := &BrowserTab{ctx: ctx, cancel: cancel}
 	// Network events carry the status code, and the frame tree identifies which
 	// of them belong to the tab itself rather than to an embedded frame.
