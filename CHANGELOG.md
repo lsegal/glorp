@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.25 - 2026-08-31
+
 - Carry an issue's labels, milestone, and assignees onto the follow-up issues `gh-fix` files for it. The skill already copied project membership and, under Glorp, assigned the follow-up to the authenticated user, but everything else the original ticket was triaged with was dropped: a follow-up filed from a labelled, milestoned, assigned issue arrived bare, so it fell out of every label-based view, out of the release it belongs to, and off the plate of whoever owned the work. Each new follow-up now inherits those three fields from the issue it came from, skipping only a value the repository will not accept (a label that no longer exists, a closed or missing milestone, a user who cannot be assigned) and saying which one it skipped. An existing open issue reused as the follow-up is filled in only where it carries nothing of its own for a field, so triage someone has already done is never overwritten, and the existing project `Todo` routing and `.glorp.json` assignment are unchanged.
 
 ## v1.2.24 - 2026-08-31
