@@ -93,8 +93,8 @@ func TestGlorpApplySettingsConcurrencyTakesEffectLive(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 1}, {Number: 2}}}}
 	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
-	var logs bytes.Buffer
-	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: &logs}
+	logs := &syncBuffer{}
+	w := &Glorp{Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: logs}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -133,8 +133,8 @@ func TestGlorpApplySettingsReadyStateAndAllowedCommenters(t *testing.T) {
 	src := &fakeSource{batches: [][]Issue{{}}}
 	r := &fakeRunner{release: make(chan struct{})}
 	defer close(r.release)
-	var logs bytes.Buffer
-	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: &logs, ReadyState: "Ready"}
+	logs := &syncBuffer{}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: logs, ReadyState: "Ready"}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
@@ -160,8 +160,8 @@ func TestGlorpApplySettingsReadyStateDefaultReflectsUnsetFallback(t *testing.T) 
 	src := &fakeSource{batches: [][]Issue{{}}}
 	r := &fakeRunner{release: make(chan struct{})}
 	defer close(r.release)
-	var logs bytes.Buffer
-	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: &logs}
+	logs := &syncBuffer{}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: logs}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()

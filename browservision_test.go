@@ -80,6 +80,9 @@ func testVision(t *testing.T, limit int, cooldown time.Duration, clock *visionCl
 // shape the source under test is expected to ask for.
 func testVisionRefs(t *testing.T, limit int, cooldown time.Duration, clock *visionClock, answer []browserVisionRef, wantQualified bool) (*browserVision, *int, *[]string) {
 	t.Helper()
+	// Recover can run for several targets at once, so the counters this helper
+	// hands back are written from more than one goroutine.
+	var mu sync.Mutex
 	asks := 0
 	var logs []string
 	vision := &browserVision{
@@ -88,13 +91,17 @@ func testVisionRefs(t *testing.T, limit int, cooldown time.Duration, clock *visi
 		now:      clock.Now,
 		lastCall: map[string]time.Time{},
 		ask: func(_ context.Context, _ []byte, _ string, qualified bool) ([]browserVisionRef, error) {
+			mu.Lock()
 			asks++
+			mu.Unlock()
 			if qualified != wantQualified {
 				t.Errorf("vision asked with qualified=%v, want %v", qualified, wantQualified)
 			}
 			return answer, nil
 		},
 		logf: func(format string, args ...interface{}) {
+			mu.Lock()
+			defer mu.Unlock()
 			logs = append(logs, fmt.Sprintf(format, args...))
 		},
 	}

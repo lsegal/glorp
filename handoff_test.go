@@ -726,8 +726,9 @@ func TestSettledHandshakeExpiresWithTheStalenessWindow(t *testing.T) {
 	}
 }
 
-// syncBuffer is a bytes.Buffer that a background handshake and the test
-// reading its log output can share.
+// syncBuffer is a bytes.Buffer that a goroutine writing log output and the
+// test reading that output can share. Tests that pass it as Glorp.Out while
+// Run works in the background need it to stay race-free.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
