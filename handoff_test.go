@@ -249,6 +249,17 @@ func TestOwnershipTargetForFallsBackToIssueWithoutOpenPullRequest(t *testing.T) 
 	}
 }
 
+// settleNegotiation runs a reap, waits for the background handshake it hands
+// off, then runs the reap again the way the next poll would. The grace window
+// no longer runs on the poll loop (issue #437), so an issue whose handshake is
+// won is dispatched by the following poll rather than by the reap that started
+// it. pending is a constructor because the reap filters its batch in place.
+func settleNegotiation(w *Glorp, checker WorkClosureChecker, pending func() []pendingIssue, seen map[string]bool, aggressive bool) []pendingIssue {
+	w.negotiateContestedIssues(context.Background(), checker, pending(), seen, aggressive)
+	w.awaitNegotiations()
+	return w.negotiateContestedIssues(context.Background(), checker, pending(), seen, false)
+}
+
 func TestNegotiateContestedIssuesFiltersDeclinedClaims(t *testing.T) {
 	comments := newFakeCommentClient()
 	// Issue #1 is contested and another instance answers; issue #2 is
@@ -265,6 +276,7 @@ func TestNegotiateContestedIssuesFiltersDeclinedClaims(t *testing.T) {
 	declinedKey := issueKey(pending[0].issue)
 	seen := map[string]bool{declinedKey: true, issueKey(pending[1].issue): true}
 	result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, true)
+	w.awaitNegotiations()
 	if len(result) != 1 || result[0].issue.Number != 2 {
 		t.Fatalf("result = %+v, want only issue #2 to survive", result)
 	}
@@ -389,7 +401,12 @@ func TestNegotiateContestedIssuesSkipsFreshlyClaimedWorkWhenNotAggressive(t *tes
 		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
 	}
 	seen := map[string]bool{issueKey(pending[0].issue): true, issueKey(pending[1].issue): true}
-	result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, false)
+	result := settleNegotiation(w, nil, func() []pendingIssue {
+		return []pendingIssue{
+			{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true},
+			{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
+		}
+	}, seen, false)
 	if len(result) != 1 || result[0].issue.Number != 2 {
 		t.Fatalf("result = %+v, want only the staled issue #2 to be reaped", result)
 	}
@@ -406,8 +423,10 @@ func TestNegotiateContestedIssuesAggressiveIgnoresFreshClaims(t *testing.T) {
 	comments := newFakeCommentClient()
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
-	pending := []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
-	result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true)
+	pending := func() []pendingIssue {
+		return []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
+	}
+	result := settleNegotiation(w, nil, pending, map[string]bool{}, true)
 	if len(result) != 1 {
 		t.Fatalf("the first reap after startup should ask regardless of claim age, got %+v", result)
 	}
@@ -447,16 +466,19 @@ func TestNegotiateContestedIssuesLogsReapAskAndPickup(t *testing.T) {
 	comments := newFakeCommentClient()
 	var logs bytes.Buffer
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
-	pending := []pendingIssue{{issue: Issue{Number: 7, Repository: "o/r", Target: "o/r"}, contested: true}}
-	if result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true); len(result) != 1 {
-		t.Fatalf("uncontested handshake should keep the issue, got %+v", result)
+	pending := func() []pendingIssue {
+		return []pendingIssue{{issue: Issue{Number: 7, Repository: "o/r", Target: "o/r"}, contested: true}}
+	}
+	if result := settleNegotiation(w, nil, pending, map[string]bool{}, true); len(result) != 1 {
+		t.Fatalf("a won handshake should be dispatched by the following poll, got %+v", result)
 	}
 	requireLogged(t, logs.String(),
 		"reaping 1 contested issue(s) as SELF (first reap after startup",
 		"issue #7 looks claimed: it reappeared with no local record",
+		"issue #7 negotiating ownership in the background; polling continues while it waits",
 		"issue o/r#7 asking \"Does anyone have this?\" as SELF",
 		"issue o/r#7 unanswered",
-		"issue #7 picked up after handoff; dispatching",
+		"issue #7 picked up after handoff; dispatching on the next poll",
 	)
 }
 
@@ -472,6 +494,7 @@ func TestNegotiateContestedIssuesLogsStandDownWithClaimingIdentity(t *testing.T)
 	if result := w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true); len(result) != 0 {
 		t.Fatalf("an answered ask must drop the issue, got %+v", result)
 	}
+	w.awaitNegotiations()
 	requireLogged(t, logs.String(),
 		"issue o/r#8 answered by instance OTHER during the handoff window; letting it go",
 		"issue #8 ownership claimed by another instance; standing down",
@@ -489,7 +512,7 @@ func TestNegotiateContestedIssuesLogsStaleAndFreshClaimAges(t *testing.T) {
 		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
 	}
 	seen := map[string]bool{}
-	if result := w.negotiateContestedIssues(context.Background(), nil, pending, seen, false); len(result) != 1 {
+	if result := settleNegotiation(w, nil, func() []pendingIssue { return pending }, seen, false); len(result) != 1 {
 		t.Fatalf("only the stale issue should be reaped, got %+v", result)
 	}
 	requireLogged(t, logs.String(),
@@ -551,8 +574,8 @@ func TestNegotiateContestedIssuesLogsProjectItemReasonAndPullRequestTarget(t *te
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
 	checker := &fakeClosureSource{state: OriginatingWorkState{PullRequests: []PullRequestWorkState{{Number: 42, State: "open"}}}}
 	issue := Issue{Number: 9, Repository: "o/r", Target: "https://github.com/users/o/projects/1", ProjectStatus: "In Progress"}
-	pending := []pendingIssue{{issue: issue, contested: true}}
-	if result := w.negotiateContestedIssues(context.Background(), checker, pending, map[string]bool{}, true); len(result) != 1 {
+	pending := func() []pendingIssue { return []pendingIssue{{issue: issue, contested: true}} }
+	if result := settleNegotiation(w, checker, pending, map[string]bool{}, true); len(result) != 1 {
 		t.Fatalf("the stranded project item should be reclaimed, got %+v", result)
 	}
 	requireLogged(t, logs.String(),
@@ -621,7 +644,7 @@ func TestNegotiateContestedIssuesDoesNotReAskAfterItsOwnHandshake(t *testing.T) 
 	}
 	seen := map[string]bool{issueKey(pending()[0].issue): true}
 
-	if result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false); len(result) != 1 {
+	if result := settleNegotiation(w, nil, pending, seen, false); len(result) != 1 {
 		t.Fatalf("the first handshake should claim the issue, got %+v", result)
 	}
 	posted, err := comments.ListComments(context.Background(), "o/r", 1)
@@ -666,6 +689,7 @@ func TestNegotiateContestedIssuesRemembersStandingDown(t *testing.T) {
 	if result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false); len(result) != 0 {
 		t.Fatalf("an answered ask must drop the issue, got %+v", result)
 	}
+	w.awaitNegotiations()
 	comments.reset("o/r", 3)
 	if result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false); len(result) != 0 {
 		t.Fatalf("work this instance stood down for must stay dropped, got %+v", result)
@@ -695,5 +719,113 @@ func TestSettledHandshakeExpiresWithTheStalenessWindow(t *testing.T) {
 	w.recordHandshake(target, true)
 	if _, _, ok := w.settledHandshake(ownershipTarget{Repo: "o/r", Number: 6, Continue: true}); ok {
 		t.Fatalf("a record for one target must not settle another")
+	}
+}
+
+// syncBuffer is a bytes.Buffer that a background handshake and the test
+// reading its log output can share.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitForComments blocks until a ticket carries at least want comments, so a
+// test does not race a handshake running in the background.
+func waitForComments(t *testing.T, comments CommentClient, repo string, number, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		posted, err := comments.ListComments(context.Background(), repo, number)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(posted) >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d comment(s) on %s#%d, got %v", want, repo, number, posted)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The handshake's grace window lasts minutes. Running it on the poll loop
+// stopped the whole watch for that long -- no repository re-read, no issue
+// discovered, nothing dispatched -- which is what issue #437 reported as
+// browser mode not refreshing. The reap must hand the wait off and return.
+func TestNegotiateContestedIssuesDoesNotBlockThePollOnTheGraceWindow(t *testing.T) {
+	comments := newFakeCommentClient()
+	release := make(chan struct{})
+	logs := &syncBuffer{}
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: logs, ownershipWait: func(ctx context.Context) bool {
+		select {
+		case <-release:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}}
+	pending := func() []pendingIssue {
+		return []pendingIssue{{issue: Issue{Number: 5, Repository: "o/r", Target: "o/r"}, contested: true}}
+	}
+	seen := map[string]bool{}
+
+	// The reap returns while the handshake is still inside its grace window.
+	done := make(chan []pendingIssue, 1)
+	go func() { done <- w.negotiateContestedIssues(context.Background(), nil, pending(), seen, true) }()
+	select {
+	case result := <-done:
+		if len(result) != 0 {
+			t.Fatalf("an unsettled handshake must not dispatch yet, got %+v", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reap blocked on the handshake's grace window instead of handing it off")
+	}
+	if !seen[issueKey(pending()[0].issue)] {
+		t.Fatal("an issue being negotiated must stay marked as seen so the next poll renegotiates it")
+	}
+
+	// Wait for the handed-off handshake to reach its grace window, which it
+	// enters only after posting the ask this test counts.
+	waitForComments(t, comments, "o/r", 5, 1)
+
+	// Polls keep running during that window, and none of them re-asks.
+	for pass := 0; pass < 3; pass++ {
+		if result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false); len(result) != 0 {
+			t.Fatalf("pass %d: an in-flight handshake must not dispatch, got %+v", pass, result)
+		}
+	}
+	posted, err := comments.ListComments(context.Background(), "o/r", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 1 {
+		t.Fatalf("expected only the single ask while the handshake waits, got %v", posted)
+	}
+	if strings.Count(logs.String(), `asking "Does anyone have this?"`) != 1 {
+		t.Fatalf("expected exactly one ask to be logged, got:\n%s", logs.String())
+	}
+
+	// Once it settles, the following poll dispatches the work it won.
+	close(release)
+	w.awaitNegotiations()
+	result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false)
+	if len(result) != 1 || result[0].issue.Number != 5 {
+		t.Fatalf("the poll after a won handshake should dispatch the issue, got %+v", result)
+	}
+	if posted, _ = comments.ListComments(context.Background(), "o/r", 5); len(posted) != 2 {
+		t.Fatalf("expected the ask and one starting claim, got %v", posted)
 	}
 }
