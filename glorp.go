@@ -220,7 +220,23 @@ type Glorp struct {
 	// ownership negotiations it has already run (issue #432).
 	handshakeMu sync.Mutex
 	handshakes  map[string]handshakeRecord
-	logMu       sync.Mutex
+	// negotiateMu guards negotiating, the set of issues whose ownership
+	// handshake is waiting out its grace window in the background. The wait
+	// lasts minutes, so it must not run on the poll loop (issue #437); later
+	// polls skip an issue that already has a handshake in flight instead of
+	// posting a duplicate ask.
+	negotiateMu sync.Mutex
+	negotiating map[string]bool
+	// negotiateWG tracks those background handshakes so a caller can wait
+	// for them to drain.
+	negotiateWG sync.WaitGroup
+	// negotiatedOnce/negotiated nudge the Run loop to poll again as soon as a
+	// background handshake wins its ticket, mirroring the
+	// jobActionOnce/jobActions pattern above, so reclaimed work is dispatched
+	// then rather than waiting out a slow tick or the next reap.
+	negotiatedOnce sync.Once
+	negotiated     chan struct{}
+	logMu          sync.Mutex
 	// repeatMu guards lastLogged, the state last reported under each
 	// logChanged key. A poll loop ticking every few seconds must report a
 	// summary, or a failure, once rather than on every tick (issue #413).
@@ -412,6 +428,63 @@ func (w *Glorp) activeWorkClosureInterval() time.Duration {
 	return workClosureInterval
 }
 
+// negotiatedNudges is the channel a settled background handshake signals the
+// Run loop on. It is buffered so a handshake never blocks on a loop that is
+// busy, and depth one because the nudge only asks for one more poll however
+// many handshakes settled.
+func (w *Glorp) negotiatedNudges() chan struct{} {
+	w.negotiatedOnce.Do(func() { w.negotiated = make(chan struct{}, 1) })
+	return w.negotiated
+}
+
+// nudgePoll asks the Run loop to poll again, dropping the nudge when one is
+// already queued.
+func (w *Glorp) nudgePoll() {
+	select {
+	case w.negotiatedNudges() <- struct{}{}:
+	default:
+	}
+}
+
+// beginNegotiation reserves the background ownership handshake for key,
+// reporting false when one is already in flight. Polling continues while a
+// handshake waits out its grace window, so every poll in that window sees the
+// same issue as contested again; without this guard each one would post
+// another "Does anyone have this?" on the same ticket.
+func (w *Glorp) beginNegotiation(key string) bool {
+	w.negotiateMu.Lock()
+	defer w.negotiateMu.Unlock()
+	if w.negotiating[key] {
+		return false
+	}
+	if w.negotiating == nil {
+		w.negotiating = make(map[string]bool)
+	}
+	w.negotiating[key] = true
+	return true
+}
+
+// endNegotiation releases the reservation taken by beginNegotiation.
+func (w *Glorp) endNegotiation(key string) {
+	w.negotiateMu.Lock()
+	defer w.negotiateMu.Unlock()
+	delete(w.negotiating, key)
+}
+
+// negotiationInFlight reports whether a background handshake for key is still
+// running, so the reap can leave it alone rather than re-announcing it.
+func (w *Glorp) negotiationInFlight(key string) bool {
+	w.negotiateMu.Lock()
+	defer w.negotiateMu.Unlock()
+	return w.negotiating[key]
+}
+
+// awaitNegotiations blocks until every background handshake this instance
+// started has finished.
+func (w *Glorp) awaitNegotiations() {
+	w.negotiateWG.Wait()
+}
+
 type pendingIssue struct {
 	issue   Issue
 	session AgentSession
@@ -443,10 +516,15 @@ func (w *Glorp) releasePendingClaim(ctx context.Context, pending pendingIssue, r
 
 // negotiateContestedIssues runs the handoff handshake for every candidate
 // issue marked contested (no local record of being this instance's own
-// resumed work). Uncontested issues pass through untouched. Issues whose
-// negotiation loses (or errors) are dropped from the batch but stay marked as
-// seen, so a later poll retries them as contested work and renegotiates
-// instead of dispatching them as if nothing had ever claimed them.
+// resumed work). Uncontested issues pass through untouched.
+//
+// The handshake's grace window lasts minutes, so it runs in the background
+// and its issue leaves this batch: an issue being negotiated, one whose
+// negotiation loses, and one whose negotiation errors are all dropped but
+// stay marked as seen, so a later poll retries them as contested work rather
+// than dispatching them as if nothing had ever claimed them. A won handshake
+// leaves this instance's own claim on the ticket, which is what the next poll
+// reads to dispatch the work (issue #437).
 //
 // The first reap after startup is aggressive: every contested candidate is
 // asked about immediately. Later reaps run on a timer (issue #239), so they
@@ -463,6 +541,12 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 		if pending.session.Resume || !pending.contested {
 			continue
 		}
+		// A handshake already waiting out its grace window in the background
+		// is this reap's answer for that issue; announcing it again on every
+		// poll of that window would only repeat itself.
+		if w.negotiationInFlight(issueKey(pending.issue)) {
+			continue
+		}
 		contested = append(contested, pending.issue)
 	}
 	if len(contested) > 0 {
@@ -476,6 +560,9 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 	for i, pending := range newIssues {
 		if pending.session.Resume || !pending.contested {
 			keep[i] = true
+			continue
+		}
+		if w.negotiationInFlight(issueKey(pending.issue)) {
 			continue
 		}
 		wg.Add(1)
@@ -531,19 +618,35 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 					w.logf("issue #%d last claimed by instance %s %s ago (older than %s); treating it as abandoned", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter())
 				}
 			}
-			claimed, err := w.negotiateOwnership(ctx, target)
-			if err != nil {
-				w.logf("issue #%d ownership handoff failed: %v", issue.Number, err)
+			// The handshake waits out a grace window measured in minutes.
+			// Running it here would stop the poll loop for that whole window,
+			// so nothing else is read or dispatched meanwhile (issue #437).
+			// It is handed to a goroutine instead, and the poll returns
+			// without this issue: once the handshake settles, the next poll
+			// reads its own claim (or its handshake record) and dispatches
+			// without asking again.
+			key := issueKey(issue)
+			if !w.beginNegotiation(key) {
 				return
 			}
-			w.recordHandshake(target, claimed)
-			keep[i] = claimed
-			if claimed {
-				newIssues[i].claim = &target
-				w.logf("issue #%d picked up after handoff; dispatching", issue.Number)
-			} else {
-				w.logf("issue #%d ownership claimed by another instance; standing down", issue.Number)
-			}
+			w.negotiateWG.Add(1)
+			w.logf("issue #%d negotiating ownership in the background; polling continues while it waits", issue.Number)
+			go func() {
+				defer w.negotiateWG.Done()
+				defer w.endNegotiation(key)
+				claimed, err := w.negotiateOwnership(ctx, target)
+				if err != nil {
+					w.logf("issue #%d ownership handoff failed: %v", issue.Number, err)
+					return
+				}
+				w.recordHandshake(target, claimed)
+				if claimed {
+					w.logf("issue #%d picked up after handoff; dispatching on the next poll", issue.Number)
+					w.nudgePoll()
+				} else {
+					w.logf("issue #%d ownership claimed by another instance; standing down", issue.Number)
+				}
+			}()
 		}(i, pending.issue)
 	}
 	wg.Wait()
@@ -846,6 +949,11 @@ func (w *Glorp) forgetLogged(key string) bool {
 }
 
 func (w *Glorp) Run(ctx context.Context) error {
+	// Ownership handshakes wait out their grace window off the poll loop, so
+	// a run that is shutting down waits for them here rather than leaving
+	// them posting comments after it has returned. Cancelling ctx cuts the
+	// wait short, so this does not hold a shutdown open for the full window.
+	defer w.awaitNegotiations()
 	targets := append([]string(nil), w.Targets...)
 	if len(targets) == 0 && w.Repo != "" {
 		targets = []string{w.Repo}
@@ -1520,6 +1628,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 			running, queued, completed, failed := tasks.snapshot()
 			w.logf("stopped (tasks: %d running, %d queued, %d completed, %d failed)", running, queued, completed, failed)
 			return nil
+		case <-w.negotiatedNudges():
+			// A background handshake just won its ticket. Poll now so the
+			// reclaimed work is dispatched instead of waiting out a tick that
+			// may be an hour away, or the next reap.
+			if err := poll(nil); err != nil && ctx.Err() == nil {
+				reportPollError("handoff", err)
+			}
 		case <-tick:
 			if w.Webhooks != nil {
 				w.Webhooks(ctx)
