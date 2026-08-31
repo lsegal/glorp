@@ -2894,11 +2894,11 @@ func TestPushedBoardTargets(t *testing.T) {
 // Push mode never polls at Interval, so saying so in the startup log makes a
 // probed board look polled (issue #249).
 func TestWatchDescription(t *testing.T) {
-	if got := (&Glorp{Interval: time.Minute}).watchDescription(); got != "polling every 1m0s" {
+	if got := (&Glorp{Interval: time.Minute}).watchDescription(); got != "polling every 1m" {
 		t.Fatalf("poll mode description = %q", got)
 	}
 	got := (&Glorp{Interval: time.Minute, UseWebhooks: true}).watchDescription()
-	if !strings.Contains(got, pushFallbackInterval.String()) || strings.Contains(got, "1m0s") {
+	if !strings.Contains(got, formatInterval(pushFallbackInterval)) || strings.Contains(got, "polling") {
 		t.Fatalf("push mode description = %q, want one naming the %s fallback and not the poll interval", got, pushFallbackInterval)
 	}
 }

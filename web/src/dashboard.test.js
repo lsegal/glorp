@@ -3,6 +3,7 @@ import {
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchSettings,
+	formatInterval,
 	jobActionAvailability,
 	jobAgentSummary,
 	lastPollLabel,
@@ -210,5 +211,40 @@ describe("submitSettings", () => {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ concurrency: 4 }),
 		});
+	});
+});
+
+// The same table runs against formatInterval in ui.go (TestFormatInterval), so
+// the web status bar and the TUI cannot spell an interval differently again
+// (issue #449).
+describe("formatInterval", () => {
+	const second = 1_000_000_000;
+	const cases = [
+		[5 * second, "5s"],
+		[20 * second, "20s"],
+		[30 * second, "30s"],
+		[60 * second, "1m"],
+		[90 * second, "1m30s"],
+		[3600 * second, "1h"],
+		[5400 * second, "1h30m"],
+		[3630 * second, "1h30s"],
+		[7509 * second, "2h5m9s"],
+		[1_500_000_000, "1.5s"],
+		[500_000_000, "500ms"],
+		[0, "0s"],
+		[-second, "0s"],
+	];
+	for (const [nanoseconds, want] of cases) {
+		it(`renders ${nanoseconds}ns as ${want}`, () => {
+			expect(formatInterval(nanoseconds)).toBe(want);
+		});
+	}
+});
+
+describe("deliveryLabel interval spelling", () => {
+	it("renders a whole hour the way the TUI does", () => {
+		expect(deliveryLabel({ Interval: 3600 * 1_000_000_000 })).toBe(
+			"polling every 1h",
+		);
 	});
 });

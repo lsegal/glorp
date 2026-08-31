@@ -593,3 +593,40 @@ func TestDeliveryTextReportsLastPollInPushMode(t *testing.T) {
 		t.Errorf("delivery text = %q, want push mode last poll time", text)
 	}
 }
+
+// TestFormatInterval pins the shared interval spelling. The same table is run
+// against the web dashboard's formatInterval in web/src/dashboard.test.js, so
+// the two status bars cannot drift apart again (issue #449).
+func TestFormatInterval(t *testing.T) {
+	cases := []struct {
+		interval time.Duration
+		want     string
+	}{
+		{5 * time.Second, "5s"},
+		{20 * time.Second, "20s"},
+		{30 * time.Second, "30s"},
+		{time.Minute, "1m"},
+		{90 * time.Second, "1m30s"},
+		{time.Hour, "1h"},
+		{time.Hour + 30*time.Minute, "1h30m"},
+		{time.Hour + 30*time.Second, "1h30s"},
+		{2*time.Hour + 5*time.Minute + 9*time.Second, "2h5m9s"},
+		{1500 * time.Millisecond, "1.5s"},
+		{500 * time.Millisecond, "500ms"},
+		{0, "0s"},
+		{-time.Second, "0s"},
+	}
+	for _, testCase := range cases {
+		if got := formatInterval(testCase.interval); got != testCase.want {
+			t.Errorf("formatInterval(%v) = %q, want %q", testCase.interval, got, testCase.want)
+		}
+	}
+}
+
+// TestDeliveryTextFormatsWholeHour covers the status bar itself: an hourly poll
+// reads as 1h rather than Go's 1h0m0s (issue #449).
+func TestDeliveryTextFormatsWholeHour(t *testing.T) {
+	if got := deliveryText(GlorpSnapshot{Interval: time.Hour}); got != "polling every 1h" {
+		t.Errorf("deliveryText = %q, want %q", got, "polling every 1h")
+	}
+}
