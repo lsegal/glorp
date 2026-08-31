@@ -18,6 +18,14 @@ import (
 // dispatches from; the first pages hold the issues a poll actually acts on.
 const browserIssuesPageLimit = 3
 
+// The issues page is a client-rendered React app, so an extraction that runs
+// the instant navigation finishes can land before the list exists in the DOM.
+// These bound the wait for it, mirroring the project board reader's.
+const (
+	defaultIssuesSettleAttempts = 20
+	defaultIssuesSettleDelay    = 250 * time.Millisecond
+)
+
 // browserPage is the part of a browser tab the issue source drives. BrowserTab
 // satisfies it; tests supply a fake so the extraction logic can be exercised
 // without a browser or a network.
@@ -58,6 +66,12 @@ type browserIssueSource struct {
 	// distinguishable extraction failure below, never for an empty or a
 	// successful read.
 	vision *browserVision
+	// settleAttempts and settleDelay bound the wait for the client-rendered
+	// issues page to draw, the same way the project board reader waits for its
+	// board. sleep is a test seam for that wait.
+	settleAttempts int
+	settleDelay    time.Duration
+	sleep          func(context.Context, time.Duration) bool
 
 	mu sync.Mutex
 	// reported remembers which page URLs have already had an extraction
@@ -186,11 +200,13 @@ type browserIssueRow struct {
 }
 
 // browserIssueList is the page script's result: the rows it found, whether it
-// recognised the page at all, and the next page to follow if there is one.
+// recognised the page at all, whether the page named a list container, and the
+// next page to follow if there is one.
 type browserIssueList struct {
 	Rows       []browserIssueRow `json:"rows"`
 	Recognized bool              `json:"recognized"`
 	Empty      bool              `json:"empty"`
+	Container  bool              `json:"container"`
 	Next       string            `json:"next"`
 }
 
@@ -217,7 +233,7 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 			return nil, err
 		}
 		current := next
-		list, err := s.readPage(target, page, current, visited == 0)
+		list, err := s.readPage(ctx, target, page, current, visited == 0)
 		if err != nil {
 			recovered := s.recoverWithVision(ctx, target, page, current, err)
 			if len(recovered) == 0 {
@@ -360,7 +376,7 @@ func applyBrowserHydration(issue *Issue, hydrated browserHydratedIssue) {
 // readPage points the tab at one page of the list and runs the extractor in it.
 // The first page of a tick reloads when the tab is already there, so a poll
 // that changes nothing costs a reload rather than a fresh navigation.
-func (s *browserIssueSource) readPage(target string, page browserPage, pageURL string, first bool) (browserIssueList, error) {
+func (s *browserIssueSource) readPage(ctx context.Context, target string, page browserPage, pageURL string, first bool) (browserIssueList, error) {
 	if err := s.visit(target, page, pageURL, first); err != nil {
 		return browserIssueList{}, fmt.Errorf("load issue list at %s: %w", pageURL, err)
 	}
@@ -374,9 +390,26 @@ func (s *browserIssueSource) readPage(target string, page browserPage, pageURL s
 		}
 		return browserIssueList{}, fmt.Errorf("load issue list at %s: GitHub returned HTTP %d", pageURL, status)
 	}
+	// The issues page draws its rows client-side, so the first evaluation after
+	// a navigation or a reload usually lands before React has rendered
+	// anything: no rows and no empty-state marker, which is indistinguishable
+	// from markup glorp cannot read (issue #415). The read is retried until the
+	// page recognises itself -- as a list or as an honestly empty one -- so a
+	// page that has drawn costs a single evaluation and only a page that never
+	// draws waits out the whole budget.
 	var list browserIssueList
-	if err := page.Eval(browserIssueRowsScript, &list); err != nil {
-		return browserIssueList{}, fmt.Errorf("read issue list at %s: %w", pageURL, err)
+	for attempt := 0; ; attempt++ {
+		var read browserIssueList
+		if err := page.Eval(browserIssueRowsScript, &read); err != nil {
+			return browserIssueList{}, fmt.Errorf("read issue list at %s: %w", pageURL, err)
+		}
+		list = read
+		if list.Recognized || attempt >= s.attempts()-1 {
+			break
+		}
+		if !s.pause(ctx) {
+			return browserIssueList{}, ctx.Err()
+		}
 	}
 	// A page that yielded no rows is where a signed-out profile hides: with
 	// "@me" in the filter GitHub renders a genuine, correctly-empty result, so
@@ -386,8 +419,17 @@ func (s *browserIssueSource) readPage(target string, page browserPage, pageURL s
 	if len(list.Rows) == 0 && browserSignedOut(page) {
 		return browserIssueList{}, &browserSignedOutError{URL: pageURL, Profile: s.profile}
 	}
+	// A list container that still holds no rows once the render wait above is
+	// over is an empty list, not markup glorp failed to read: a repository with
+	// no ready issues was reported as an extraction failure on every tick of a
+	// five-second poll, purely because the blankslate beside the list carried
+	// none of the markers the script knows (issue #413). The wait runs first, so
+	// a page that had merely not drawn yet is never mistaken for an empty one.
+	if !list.Recognized && list.Container && len(list.Rows) == 0 {
+		list.Recognized, list.Empty = true, true
+	}
 	if !list.Recognized {
-		return browserIssueList{}, s.extractionFailed(pageURL, "no issue rows and no empty-list marker were found on the page (the page's markup may have changed)")
+		return browserIssueList{}, s.extractionFailed(pageURL, fmt.Sprintf("no issue rows and no empty-list marker appeared within %s (the page's markup may have changed)", time.Duration(s.attempts())*s.delay()))
 	}
 	return list, nil
 }
@@ -405,6 +447,39 @@ func (s *browserIssueSource) visit(target string, page browserPage, pageURL stri
 		return page.Reload()
 	}
 	return page.Navigate(pageURL)
+}
+
+// attempts is how many times one page load is read before it is reported as
+// unreadable.
+func (s *browserIssueSource) attempts() int {
+	if s.settleAttempts > 0 {
+		return s.settleAttempts
+	}
+	return defaultIssuesSettleAttempts
+}
+
+// delay is how long the reader waits between those attempts.
+func (s *browserIssueSource) delay() time.Duration {
+	if s.settleDelay > 0 {
+		return s.settleDelay
+	}
+	return defaultIssuesSettleDelay
+}
+
+// pause waits between settle attempts, reporting false when the run is being
+// shut down so a cancelled poll stops instead of sitting out the whole wait.
+func (s *browserIssueSource) pause(ctx context.Context) bool {
+	if s.sleep != nil {
+		return s.sleep(ctx, s.delay())
+	}
+	timer := time.NewTimer(s.delay())
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // extractionFailed builds the extraction error and logs it the first time a

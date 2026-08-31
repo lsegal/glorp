@@ -113,13 +113,14 @@ func TestExtractorScriptAgainstFixtures(t *testing.T) {
 		}
 	})
 
-	// An issues page whose list renders no rows is empty even when the
-	// blankslate beside it carries none of the markers the extractor knows, and
-	// an empty list is not a read failure to report on every poll (issue #413).
+	// An issues page whose list drew no rows reports the list it named, so the
+	// caller can tell an empty list from markup it could not read once its
+	// render wait is over, even when the blankslate beside the list carries
+	// none of the markers the script knows (issue #413).
 	t.Run("empty list with an unrecognized blankslate", func(t *testing.T) {
 		list := extractFixture(t, tab, baseURL, "github-issues-empty-unmarked.html")
-		if !list.Recognized || !list.Empty {
-			t.Fatalf("recognized=%v empty=%v, want a recognized empty list", list.Recognized, list.Empty)
+		if !list.Container || list.Recognized {
+			t.Fatalf("container=%v recognized=%v, want an unrecognized page that named its list", list.Container, list.Recognized)
 		}
 		if len(list.Rows) != 0 {
 			t.Fatalf("got %d rows, want none: %+v", len(list.Rows), list.Rows)
@@ -143,6 +144,10 @@ func TestExtractorScriptAgainstFixtures(t *testing.T) {
 		}
 		if len(list.Rows) != 0 {
 			t.Fatalf("got %d rows from a sign-in page: %+v", len(list.Rows), list.Rows)
+		}
+		// A page that names no list must not be read as an empty one.
+		if list.Container {
+			t.Fatalf("a sign-in page reported a list container: %+v", list)
 		}
 	})
 }

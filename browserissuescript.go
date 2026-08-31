@@ -79,8 +79,7 @@ const browserIssueRowsScript = `(function () {
     document.querySelector('[data-testid="issue-list-empty-state"]') ||
     document.querySelector('[data-testid="list-view-no-results"]') ||
     document.querySelector('.blankslate') ||
-    /no results matched your search|there aren't any (?:open )?issues|no open issues/i.test(text) ||
-    (list && rows.length === 0)
+    /no results matched your search|there aren't any (?:open )?issues|no open issues/i.test(text)
   );
 
   var pager =
@@ -90,5 +89,10 @@ const browserIssueRowsScript = `(function () {
     document.querySelector('a[aria-label="Next"]');
   var next = pager && pager.getAttribute('aria-disabled') !== 'true' ? pager.href : '';
 
-  return { rows: rows, recognized: rows.length > 0 || empty, empty: empty, next: next };
+  // container reports whether the page named a list at all. A named list that
+  // drew no rows is an empty list rather than markup the extractor could not
+  // read, but only once the caller's render wait is over, so the decision is
+  // left to it (issue #413). The fallback container is the document itself,
+  // which says nothing about a list, so it does not count.
+  return { rows: rows, recognized: rows.length > 0 || empty, empty: empty, container: !!list, next: next };
 })()`
