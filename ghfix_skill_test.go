@@ -103,13 +103,42 @@ func TestGhFixTreatsIdentityMentionsAsThreadedInstructions(t *testing.T) {
 func TestGhFixCopiesOriginatingIssueMetadataToFollowUps(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{
-		"Carry the originating issue's own metadata onto every new follow-up issue: its labels, its milestone, and its assignees",
+		"Carry the originating issue's milestone and assignees onto every new follow-up issue unchanged",
 		"say which value was skipped rather than dropping the whole step",
-		"Add inherited labels, milestone, and assignees to a reused issue only where it carries none of its own for that field",
-		"copy the originating issue's labels, milestone, or assignees",
+		"plus the inherited milestone and assignees, to a reused issue only where it carries none of its own for that field",
+		"copy the originating issue's milestone or assignees",
 	} {
 		if !strings.Contains(body, required) {
 			t.Errorf("gh-fix skill does not require follow-up metadata inheritance %q", required)
+		}
+	}
+}
+
+func TestGhFixLabelsFollowUpsFromTheFollowUpItself(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"Build every new follow-up issue's labels from the follow-up itself rather than copying the originating issue's label set",
+		"`gh label list`",
+		"a defect gets whatever this repository calls a bug",
+		"new work gets whatever it calls a feature",
+		"never invent a label it does not define",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require follow-up labels chosen from the follow-up %q", required)
+		}
+	}
+}
+
+func TestGhFixCarriesOverOnlyStillRelevantLabels(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"Carry an originating label over only when it is still accurate for the follow-up",
+		"an area, a component, a release train, a priority",
+		"its triage or workflow state",
+		"A carried label never overrides the kind label chosen for the follow-up",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not restrict originating label carry-over %q", required)
 		}
 	}
 }
