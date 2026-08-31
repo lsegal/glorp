@@ -64,6 +64,7 @@ const (
 	startingClaimBody   = "Starting work on this issue"
 	continuingClaimBody = "Continuing work on this issue"
 	presenceClaimBody   = "I am working on this"
+	releaseClaimBody    = "Releasing this issue"
 )
 
 type claimKind int
@@ -74,6 +75,7 @@ const (
 	claimStarting
 	claimContinuing
 	claimPresence
+	claimReleasing
 )
 
 // identityPattern matches the trailing "/glorp:UUID" signature that every
@@ -153,6 +155,8 @@ func parseClaim(body string) (kind claimKind, id Identity, ok bool) {
 		kind = claimContinuing
 	case strings.HasPrefix(text, presenceClaimBody):
 		kind = claimPresence
+	case strings.HasPrefix(text, releaseClaimBody):
+		kind = claimReleasing
 	default:
 		return claimUnknown, "", false
 	}
@@ -183,24 +187,45 @@ func claimedByOther(comments []Comment, after time.Time, self Identity) (Identit
 }
 
 // latestClaimMatching returns the creation time and signing identity of the
-// most recent starting, continuing, or presence claim whose signer satisfies
-// match.
+// most recent standing claim whose signer satisfies match. A claim stands only
+// while it is that signer's newest handoff comment: an instance that released
+// the work (issue #434) holds nothing, so its withdrawn claim is not reported
+// as ownership even though the claim comment is still on the ticket.
 func latestClaimMatching(comments []Comment, match func(Identity) bool) (time.Time, Identity, bool) {
-	var latest time.Time
-	var owner Identity
-	found := false
+	type standingClaim struct {
+		at       time.Time
+		released bool
+	}
+	newest := make(map[Identity]standingClaim)
+	order := make([]Identity, 0, len(comments))
 	for _, comment := range comments {
 		kind, id, ok := parseClaim(comment.Body)
 		if !ok || !match(id) {
 			continue
 		}
 		switch kind {
-		case claimStarting, claimContinuing, claimPresence:
-			if !found || comment.CreatedAt.After(latest) {
-				latest = comment.CreatedAt
-				owner = id
-				found = true
-			}
+		case claimStarting, claimContinuing, claimPresence, claimReleasing:
+		default:
+			continue
+		}
+		prev, seen := newest[id]
+		if !seen {
+			order = append(order, id)
+		} else if !comment.CreatedAt.After(prev.at) {
+			continue
+		}
+		newest[id] = standingClaim{at: comment.CreatedAt, released: kind == claimReleasing}
+	}
+	var latest time.Time
+	var owner Identity
+	found := false
+	for _, id := range order {
+		claim := newest[id]
+		if claim.released {
+			continue
+		}
+		if !found || claim.at.After(latest) {
+			latest, owner, found = claim.at, id, true
 		}
 	}
 	return latest, owner, found
@@ -297,6 +322,15 @@ func (w *Glorp) recordHandshake(target ownershipTarget, claimed bool) {
 	w.handshakes[handshakeKey(target)] = handshakeRecord{At: time.Now(), Claimed: claimed}
 }
 
+// forgetHandshake drops the record of a negotiation whose outcome no longer
+// holds, so the next reap renegotiates the target instead of reusing a
+// decision this instance has since walked back (issue #434).
+func (w *Glorp) forgetHandshake(target ownershipTarget) {
+	w.handshakeMu.Lock()
+	defer w.handshakeMu.Unlock()
+	delete(w.handshakes, handshakeKey(target))
+}
+
 // settledHandshake reports a negotiation this instance already ran on target
 // recently enough that re-running it would only repost the same ask and the
 // same claim. Records older than the staleness window are dropped so genuinely
@@ -391,6 +425,27 @@ func (w *Glorp) negotiateOwnership(ctx context.Context, target ownershipTarget) 
 	}
 	w.logf("%s unanswered after %s; claiming it as %s (%q)", target.describe(), ownershipWaitDuration, w.Identity, claimBody)
 	return true, w.Comments.PostComment(ctx, target.Repo, target.Number, signComment(claimBody, w.Identity))
+}
+
+// releaseOwnership withdraws a claim this instance holds on target but is not
+// going to work after all. The claim is posted before the dispatch it
+// announces happens, so a dispatch that is skipped afterwards would otherwise
+// leave the ticket owned by an instance that is doing nothing with it: other
+// instances stand down for work nobody is doing, and the ticket stays
+// contested on every later poll (issue #434). Posting the withdrawal makes the
+// released ticket readable as unclaimed by every instance, and dropping the
+// local handshake record makes this one renegotiate rather than reuse a
+// decision it has just walked back.
+func (w *Glorp) releaseOwnership(ctx context.Context, target ownershipTarget, reason string) {
+	w.forgetHandshake(target)
+	if w.Comments == nil {
+		return
+	}
+	if err := w.Comments.PostComment(ctx, target.Repo, target.Number, signComment(releaseClaimBody, w.Identity)); err != nil {
+		w.logf("%s claim not withdrawn after %s; the ticket may still read as claimed by %s: %v", target.describe(), reason, w.Identity, err)
+		return
+	}
+	w.logf("%s released by %s (%q); %s", target.describe(), w.Identity, releaseClaimBody, reason)
 }
 
 // awaitOwnershipWindow blocks for the handoff grace period, or returns
