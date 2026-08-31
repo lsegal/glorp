@@ -458,6 +458,35 @@ func TestBrowserIssueSourceReportsPageThatNeverRenders(t *testing.T) {
 	}
 }
 
+// TestBrowserIssueSourceReportsWhatItSaw checks the failure a page that never
+// renders produces says the list did not render, rather than blaming markup
+// glorp could not recognise: the page glorp actually met was a shell GitHub had
+// not finished drawing, and reporting it as a markup change sent the user
+// looking for a break that was not there (issue #427).
+func TestBrowserIssueSourceReportsWhatItSaw(t *testing.T) {
+	page := &fakeBrowserPage{results: []browserIssueList{{}, {}, {}}}
+	source := newTestIssueSource(page, defaultIssueFilter, false, nil)
+	source.settleAttempts = 3
+	source.sleep = func(context.Context, time.Duration) bool { return true }
+	_, err := source.ListIssues(context.Background(), "lsegal/glorp")
+	if !errors.Is(err, errBrowserExtraction) {
+		t.Fatalf("error %v, want an extraction failure", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "did not render") || strings.Contains(got, "no empty-list marker") {
+		t.Fatalf("error %q, want it to report an unrendered list", got)
+	}
+}
+
+// TestBrowserIssuesSettleBudget keeps the render wait long enough for GitHub's
+// own client render, which routinely takes longer than the five seconds the
+// budget used to allow (issue #427). The budget is only ever spent by a page
+// that has not drawn, so a generous one costs a rendered page nothing.
+func TestBrowserIssuesSettleBudget(t *testing.T) {
+	if budget := time.Duration(defaultIssuesSettleAttempts) * defaultIssuesSettleDelay; budget < 15*time.Second {
+		t.Fatalf("settle budget %s, want at least 15s", budget)
+	}
+}
+
 // TestBrowserIssueSourceStopsWaitingWhenCancelled checks a run being shut down
 // mid-wait stops instead of sitting out the whole settle budget.
 func TestBrowserIssueSourceStopsWaitingWhenCancelled(t *testing.T) {

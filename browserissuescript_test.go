@@ -127,6 +127,35 @@ func TestExtractorScriptAgainstFixtures(t *testing.T) {
 		}
 	})
 
+	// GitHub's page shell carries one hidden "Uh oh! There was an error"
+	// blankslate per lazily loaded fragment on every repository page, so a
+	// document-wide search for an empty-state marker answered yes on a page
+	// whose issue list had not been drawn yet: the extractor called an
+	// unrendered page a recognised empty list on the first evaluation and the
+	// render wait was never spent (issue #427).
+	t.Run("shell whose list has not rendered", func(t *testing.T) {
+		list := extractFixture(t, tab, baseURL, "github-issues-shell.html")
+		if list.Recognized || list.Empty || list.Container {
+			t.Fatalf("recognized=%v empty=%v container=%v, want an unrendered page recognised as nothing", list.Recognized, list.Empty, list.Container)
+		}
+		if len(list.Rows) != 0 {
+			t.Fatalf("got %d rows from an unrendered page: %+v", len(list.Rows), list.Rows)
+		}
+	})
+
+	// The same shell with the list drawn: GitHub renders its empty state
+	// inside the list rather than beside it, and that one is on the page
+	// rather than hidden, so it is read as the empty list it is (issue #427).
+	t.Run("empty list rendered inside the shell", func(t *testing.T) {
+		list := extractFixture(t, tab, baseURL, "github-issues-empty-inline.html")
+		if !list.Recognized || !list.Empty || !list.Container {
+			t.Fatalf("recognized=%v empty=%v container=%v, want a recognised empty list", list.Recognized, list.Empty, list.Container)
+		}
+		if len(list.Rows) != 0 {
+			t.Fatalf("got %d rows, want none: %+v", len(list.Rows), list.Rows)
+		}
+	})
+
 	t.Run("closed row", func(t *testing.T) {
 		list := extractFixture(t, tab, baseURL, "github-issues-closed.html")
 		if len(list.Rows) != 1 {
