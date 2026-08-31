@@ -829,3 +829,72 @@ func TestNegotiateContestedIssuesDoesNotBlockThePollOnTheGraceWindow(t *testing.
 		t.Fatalf("expected the ask and one starting claim, got %v", posted)
 	}
 }
+
+// A claim this instance withdrew must stop reading as ownership, or the reap
+// that follows a released ticket would keep standing down for work nobody is
+// doing (issue #434).
+func TestLatestClaimMatchingIgnoresWithdrawnClaims(t *testing.T) {
+	claimed := time.Now().Add(-time.Minute)
+	comments := []Comment{
+		{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: claimed},
+		{Body: signComment(releaseClaimBody, "OTHER"), CreatedAt: claimed.Add(time.Second)},
+	}
+	if at, owner, ok := latestClaimByOther(comments, "SELF"); ok {
+		t.Fatalf("latestClaimByOther = (%v, %q, true), want no standing claim after the release", at, owner)
+	}
+	// A claim posted after a release stands again: the withdrawal only
+	// retires the claims that came before it.
+	comments = append(comments, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: claimed.Add(2 * time.Second)})
+	if _, owner, ok := latestClaimByOther(comments, "SELF"); !ok || owner != "OTHER" {
+		t.Fatalf("latestClaimByOther = (%q, %v), want OTHER to own the work again after re-claiming", owner, ok)
+	}
+}
+
+func TestClaimStandingReportsNoOwnerAfterSelfRelease(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-time.Minute)})
+	comments.inject("o/r", 7, Comment{Body: signComment(releaseClaimBody, "SELF"), CreatedAt: time.Now()})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	standing, err := w.claimStanding(context.Background(), ownershipTarget{Repo: "o/r", Number: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if standing.SelfHolds || standing.OwnerClaimed {
+		t.Fatalf("claimStanding = %+v, want a released ticket to look unclaimed", standing)
+	}
+}
+
+// Releasing must both withdraw the public claim and drop the local handshake
+// record, so the next reap renegotiates instead of reusing a decision this
+// instance has just walked back.
+func TestReleaseOwnershipWithdrawsClaimAndForgetsHandshake(t *testing.T) {
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs}
+	target := ownershipTarget{Repo: "o/r", Number: 7}
+	w.recordHandshake(target, true)
+	w.releaseOwnership(context.Background(), target, "the dispatch never happened")
+
+	posted, _ := comments.ListComments(context.Background(), "o/r", 7)
+	if len(posted) != 1 {
+		t.Fatalf("posted comments = %v, want a single withdrawal", posted)
+	}
+	if kind, id, ok := parseClaim(posted[0].Body); !ok || kind != claimReleasing || id != "SELF" {
+		t.Fatalf("comment = %q, want a release signed by SELF", posted[0].Body)
+	}
+	if record, _, ok := w.settledHandshake(target); ok {
+		t.Fatalf("settledHandshake = %+v, want the record dropped so the target is renegotiated", record)
+	}
+	requireLogged(t, logs.String(), "issue o/r#7 released by SELF (\"Releasing this issue\"); the dispatch never happened")
+}
+
+// A withdrawal that cannot be posted is reported, because the ticket is then
+// left reading as claimed and only the log says otherwise.
+func TestReleaseOwnershipLogsAFailedWithdrawal(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.postErr = errors.New("boom")
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs}
+	w.releaseOwnership(context.Background(), ownershipTarget{Repo: "o/r", Number: 7}, "the dispatch never happened")
+	requireLogged(t, logs.String(), "issue o/r#7 claim not withdrawn after the dispatch never happened", "may still read as claimed by SELF")
+}

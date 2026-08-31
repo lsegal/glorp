@@ -3157,6 +3157,77 @@ func TestGlorpIgnoresOwnershipAskOnAnotherInstancesPullRequest(t *testing.T) {
 	}
 }
 
+// alwaysFailingStatuser refuses every status move, standing in for the
+// dispatch that is skipped after a handshake has already been won.
+type alwaysFailingStatuser struct{}
+
+func (alwaysFailingStatuser) SetIssueStatus(_ context.Context, _ string, _ Issue, _ string) error {
+	return errors.New("status update failure")
+}
+
+// A won handshake posts a claim before the dispatch it announces happens, so a
+// dispatch skipped afterwards must withdraw that claim rather than leave the
+// ticket owned by an instance with no work record and no running agent
+// (issue #434).
+func TestGlorpReleasesClaimWhenDispatchIsSkippedAfterHandshake(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, Repository: "o/r", ProjectStatus: "In Progress"}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
+	comments := newFakeCommentClient()
+	var logs bytes.Buffer
+	w := &Glorp{
+		Repo: "https://github.com/o/r/projects/3", Interval: time.Hour, Concurrency: 1,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: runner, Out: &logs,
+		Status: alwaysFailingStatuser{}, Comments: comments, Identity: "SELF",
+		ownershipWait: func(context.Context) bool { return true },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var posted []Comment
+	for time.Now().Before(deadline) {
+		posted, _ = comments.ListComments(context.Background(), "o/r", 7)
+		if len(posted) >= 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case got := <-runner.dispatched:
+		t.Fatalf("issue #%d was dispatched even though its status move failed", got)
+	default:
+	}
+	if len(posted) != 3 {
+		t.Fatalf("posted comments = %v, want the ask, the claim, and a withdrawal of that claim", posted)
+	}
+	if kind, id, ok := parseClaim(posted[2].Body); !ok || kind != claimReleasing || id != "SELF" {
+		t.Fatalf("last comment = %q, want the claim withdrawn by SELF", posted[2].Body)
+	}
+	standing, err := w.claimStanding(context.Background(), ownershipTarget{Repo: "o/r", Number: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if standing.SelfHolds || standing.OwnerClaimed {
+		t.Fatalf("claimStanding = %+v, want the ticket to read as unclaimed rather than claimed-but-idle", standing)
+	}
+	if record, _, ok := w.settledHandshake(ownershipTarget{Repo: "o/r", Number: 7}); ok {
+		t.Fatalf("settledHandshake = %+v, want the record dropped so a later reap renegotiates", record)
+	}
+	requireLogged(t, logs.String(),
+		"issue #7 not dispatched; failed to set project status",
+		"issue o/r#7 released by SELF (\"Releasing this issue\"); setting the project status failed, so it was never dispatched",
+	)
+
+	close(runner.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The reap's grace window used to run on the poll loop, so a single contested
 // ticket froze the whole watch for two minutes: poll #1 in the log of issue
 // #437 started at 21:12:21 and completed at 21:14:25, and nothing was read or
