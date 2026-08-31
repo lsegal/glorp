@@ -182,6 +182,37 @@ func TestBrowserBoardEmptyBoardReturnsNoIssues(t *testing.T) {
 	}
 }
 
+// TestBrowserBoardSettleBudget keeps the board render wait long enough for
+// GitHub's own client render. Boards are at least as slow to draw as the
+// repository issues page, whose budget was raised to 15s in issue #427, so a
+// board that had not drawn within five seconds was reported as one that never
+// would (issue #431). The budget is only ever spent by a board that has not
+// rendered, which TestBrowserBoardRenderedBoardCostsOneHarvest pins, so a
+// generous one costs a drawn board nothing.
+func TestBrowserBoardSettleBudget(t *testing.T) {
+	if budget := time.Duration(defaultBoardSettleAttempts) * defaultBoardSettleDelay; budget < 15*time.Second {
+		t.Fatalf("settle budget %s, want at least 15s", budget)
+	}
+}
+
+// TestBrowserBoardRenderedBoardCostsOneHarvest is what makes the budget above
+// safe to lengthen: a board that has already drawn is read exactly once and
+// never waited on, so the longer budget is only ever spent by a board that has
+// not rendered.
+func TestBrowserBoardRenderedBoardCostsOneHarvest(t *testing.T) {
+	page := &fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-table.html")}}
+	board, waits := newTestBoard(page)
+	if issues := boardIssues(t, board, "https://github.com/users/lsegal/projects/3"); len(issues) != 4 {
+		t.Fatalf("extracted %d issues from a rendered board, want 4", len(issues))
+	}
+	if *waits != 0 {
+		t.Errorf("waited %d times for a board that had already rendered", *waits)
+	}
+	if page.reads != 1 {
+		t.Errorf("harvested %d times for a board that had already rendered, want 1", page.reads)
+	}
+}
+
 // TestBrowserBoardWaitsForClientRender checks the bounded wait: the first read
 // lands on the loading skeleton, and the rows only exist on a later one.
 func TestBrowserBoardWaitsForClientRender(t *testing.T) {
