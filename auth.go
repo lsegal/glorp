@@ -177,14 +177,19 @@ func waitForGitHubLogin(ctx context.Context, page browserPage, timeout time.Dura
 // runner does not.
 var headedEnvironmentCheck = func() error { return checkHeadedEnvironment(runtime.GOOS, os.Getenv) }
 
+// displayServerAvailable reports whether this machine can put a window on
+// screen at all. On Linux that needs a display server; macOS and Windows always
+// have one. It is shared by every caller that wants a headed browser, so
+// `glorp auth` and `glorp watch -no-headless` agree on when a window is
+// possible.
+func displayServerAvailable(goos string, getenv func(string) string) bool {
+	return goos != "linux" || getenv("DISPLAY") != "" || getenv("WAYLAND_DISPLAY") != ""
+}
+
 // checkHeadedEnvironment refuses to open a login window where no window could
-// appear. On Linux a session with no display server would leave the user
-// waiting on a browser that never shows up; macOS and Windows always have one.
+// appear, which would leave the user waiting on a browser that never shows up.
 func checkHeadedEnvironment(goos string, getenv func(string) string) error {
-	if goos != "linux" {
-		return nil
-	}
-	if getenv("DISPLAY") != "" || getenv("WAYLAND_DISPLAY") != "" {
+	if displayServerAvailable(goos, getenv) {
 		return nil
 	}
 	return fmt.Errorf("cannot open a sign-in window: no display server (DISPLAY and WAYLAND_DISPLAY are both unset). Run `glorp auth` from a desktop session, then point -browser-profile at the signed-in profile directory from here")

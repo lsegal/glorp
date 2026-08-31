@@ -60,6 +60,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("browser-profile", "", "Chrome profile directory for browser mode (default: <config dir>/glorp/browser-data)")
 	flags.String("browser-binary", "", "Chrome/Chromium/Edge executable for browser mode")
 	flags.Bool("browser-vision", false, "in browser mode, let an agent read a screenshot of a page whose markup glorp no longer recognises (off by default, hard budget per run)")
+	flags.Bool("no-headless", false, "in browser mode, drive a visible browser window instead of a headless one, to watch what glorp reads while debugging")
 	return flags
 }
 

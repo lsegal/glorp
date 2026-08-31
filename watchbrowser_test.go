@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"io"
 	"strings"
@@ -24,7 +25,7 @@ func parseWatchFlags(t *testing.T, args ...string) *flag.FlagSet {
 
 func TestWatchFlagSetHasBrowserFlags(t *testing.T) {
 	flags := commandFlags("watch")
-	for _, name := range []string{"browser", "browser-profile", "browser-binary"} {
+	for _, name := range []string{"browser", "browser-profile", "browser-binary", "no-headless"} {
 		found := flags.Lookup(name)
 		if found == nil {
 			t.Fatalf("watch flag %q is missing", name)
@@ -146,6 +147,9 @@ func TestWatchHelpDocumentsBrowserMode(t *testing.T) {
 	if !strings.Contains(cmd.usage, "-browser") {
 		t.Fatal("watch usage does not describe browser mode")
 	}
+	if !strings.Contains(cmd.usage, "-no-headless") {
+		t.Fatal("watch usage does not describe -no-headless")
+	}
 }
 
 // The screenshot fallback is off unless it is asked for, and it only means
@@ -174,6 +178,111 @@ func TestResolveBrowserWatchRejectsVisionWithoutBrowserMode(t *testing.T) {
 	flags := parseWatchFlags(t, "--browser-vision", "owner/repo")
 	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
 		t.Fatal("expected -browser-vision without -browser to be rejected")
+	}
+}
+
+// -no-headless is the debugging escape hatch for browser mode (issue #428): the
+// browser it drives is headless unless the flag is passed, and the flag has to
+// reach the launcher's configuration or the window never appears.
+// allowNoHeadless stubs the display probe out so the flag's own behaviour can be
+// tested on a runner with no display server, which CI has none of.
+func allowNoHeadless(t *testing.T) {
+	t.Helper()
+	original := noHeadlessEnvironmentCheck
+	t.Cleanup(func() { noHeadlessEnvironmentCheck = original })
+	noHeadlessEnvironmentCheck = func() error { return nil }
+}
+
+func TestResolveBrowserWatchNoHeadless(t *testing.T) {
+	allowNoHeadless(t)
+	flags := parseWatchFlags(t, "--browser", "owner/repo")
+	options, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolveBrowserWatch: %v", err)
+	}
+	if options.Headed || options.config().Headed {
+		t.Fatal("browser mode is headed without -no-headless")
+	}
+
+	flags = parseWatchFlags(t, "--browser", "--no-headless", "owner/repo")
+	options, _, _, err = resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolveBrowserWatch: %v", err)
+	}
+	if !options.Headed {
+		t.Fatal("-no-headless did not ask for a headed browser")
+	}
+	if !options.config().Headed {
+		t.Fatal("-no-headless did not reach the browser launcher's configuration")
+	}
+}
+
+// -no-headless changes nothing but the visibility of the browser: the rest of
+// browser mode's resolution (implied polling, the shortened interval, the
+// overrides) has to survive it.
+func TestResolveBrowserWatchNoHeadlessKeepsBrowserModeIntact(t *testing.T) {
+	allowNoHeadless(t)
+	flags := parseWatchFlags(t, "--browser", "--no-headless", "--browser-binary", "/opt/chromium", "owner/repo")
+	options, interval, poll, err := resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolveBrowserWatch: %v", err)
+	}
+	if !poll || interval != browserWatchInterval {
+		t.Fatalf("poll = %v, interval = %v, want true and %v", poll, interval, browserWatchInterval)
+	}
+	if options.config().Binary != "/opt/chromium" {
+		t.Fatalf("binary override = %q", options.config().Binary)
+	}
+}
+
+func TestResolveBrowserWatchRejectsNoHeadlessWithoutBrowserMode(t *testing.T) {
+	flags := parseWatchFlags(t, "--no-headless", "owner/repo")
+	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
+		t.Fatal("expected -no-headless without -browser to be rejected")
+	}
+}
+
+// A machine that can show no window is told so, rather than being given a
+// browser that fails to start or one nobody can see.
+func TestResolveBrowserWatchRejectsNoHeadlessWithoutADisplay(t *testing.T) {
+	original := noHeadlessEnvironmentCheck
+	t.Cleanup(func() { noHeadlessEnvironmentCheck = original })
+	noHeadlessEnvironmentCheck = func() error { return errors.New("no display server") }
+
+	flags := parseWatchFlags(t, "--browser", "--no-headless", "owner/repo")
+	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
+		t.Fatal("expected -no-headless to be refused where no window can appear")
+	}
+
+	// Without -no-headless the same machine still watches headlessly.
+	flags = parseWatchFlags(t, "--browser", "owner/repo")
+	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err != nil {
+		t.Fatalf("headless browser mode was refused on a machine with no display: %v", err)
+	}
+}
+
+// displayServerAvailable is what both `glorp auth` and -no-headless decide on,
+// so a Linux session with a display server is usable and one without is not.
+func TestDisplayServerAvailable(t *testing.T) {
+	none := func(string) string { return "" }
+	if displayServerAvailable("linux", none) {
+		t.Fatal("a Linux session with no display server reports a window is possible")
+	}
+	for _, name := range []string{"DISPLAY", "WAYLAND_DISPLAY"} {
+		env := func(key string) string {
+			if key == name {
+				return ":0"
+			}
+			return ""
+		}
+		if !displayServerAvailable("linux", env) {
+			t.Fatalf("a Linux session with %s set reports no window is possible", name)
+		}
+	}
+	for _, goos := range []string{"darwin", "windows"} {
+		if !displayServerAvailable(goos, none) {
+			t.Fatalf("%s reports no window is possible", goos)
+		}
 	}
 }
 
