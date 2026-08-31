@@ -20,9 +20,13 @@ const browserIssuesPageLimit = 3
 
 // The issues page is a client-rendered React app, so an extraction that runs
 // the instant navigation finishes can land before the list exists in the DOM.
-// These bound the wait for it, mirroring the project board reader's.
+// These bound the wait for it, mirroring the project board reader's. The budget
+// is generous because it is only ever spent by a page that has not drawn: a
+// list that is there is read on the first attempt, while GitHub's own render
+// routinely takes longer than the five seconds this used to allow and was
+// reported as an unreadable page for no better reason than that (issue #427).
 const (
-	defaultIssuesSettleAttempts = 20
+	defaultIssuesSettleAttempts = 60
 	defaultIssuesSettleDelay    = 250 * time.Millisecond
 )
 
@@ -429,7 +433,7 @@ func (s *browserIssueSource) readPage(ctx context.Context, target string, page b
 		list.Recognized, list.Empty = true, true
 	}
 	if !list.Recognized {
-		return browserIssueList{}, s.extractionFailed(pageURL, fmt.Sprintf("no issue rows and no empty-list marker appeared within %s (the page's markup may have changed)", time.Duration(s.attempts())*s.delay()))
+		return browserIssueList{}, s.extractionFailed(pageURL, fmt.Sprintf("the issue list did not render within %s (GitHub may be failing to serve the page, or its markup may have changed)", time.Duration(s.attempts())*s.delay()))
 	}
 	return list, nil
 }

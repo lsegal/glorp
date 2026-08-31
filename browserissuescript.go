@@ -75,12 +75,23 @@ const browserIssueRowsScript = `(function () {
   // a failure on every five-second tick (issue #413). The fallback container is
   // the document itself, which says nothing about a list, so only a container
   // the page actually named counts as that evidence.
-  var empty = !!(
-    document.querySelector('[data-testid="issue-list-empty-state"]') ||
-    document.querySelector('[data-testid="list-view-no-results"]') ||
-    document.querySelector('.blankslate') ||
-    /no results matched your search|there aren't any (?:open )?issues|no open issues/i.test(text)
-  );
+  //
+  // Only markup the page is actually showing counts as that empty state. Every
+  // GitHub repository page ships hidden "Uh oh! There was an error" blankslates
+  // in its shell, one per lazily-loaded fragment, revealed only when a fragment
+  // fails; a document-wide search matched those on a page whose list had not
+  // been drawn yet, so the extractor called an unrendered page a recognised
+  // empty list on its first evaluation and never spent the render wait it has
+  // for exactly that (issue #427).
+  var empty = false;
+  if (rows.length === 0) {
+    var markers = document.querySelectorAll('[data-testid="issue-list-empty-state"], [data-testid="list-view-no-results"], .blankslate');
+    for (var m = 0; m < markers.length && !empty; m++) {
+      var marker = markers[m];
+      empty = !marker.closest('[hidden]') && marker.getClientRects().length > 0;
+    }
+    empty = empty || /no results|there aren't any (?:open )?issues|no open issues/i.test(text);
+  }
 
   var pager =
     document.querySelector('a[rel="next"]') ||
