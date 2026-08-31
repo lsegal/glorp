@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -18,11 +20,27 @@ type browserWatchOptions struct {
 	// DOM extractor stops recognising. It is off unless -browser-vision is
 	// passed, and it changes nothing on the success path.
 	Vision bool
+	// Headed drives a visible browser instead of a headless one, so the pages
+	// glorp reads can be watched while it reads them. It is a debugging aid
+	// (-no-headless, issue #428): a headless browser gives a failing read
+	// nothing to look at but the CDP traffic.
+	Headed bool
 }
 
 // config converts the flag values into the launcher's configuration.
 func (o browserWatchOptions) config() browserConfig {
-	return browserConfig{Binary: o.Binary, Profile: o.Profile}
+	return browserConfig{Binary: o.Binary, Profile: o.Profile, Headed: o.Headed}
+}
+
+// noHeadlessEnvironmentCheck refuses -no-headless where no window could ever
+// appear, instead of launching a browser that fails to start or is never seen.
+// It is a variable so tests can exercise both answers without depending on the
+// display server the test runner happens to have.
+var noHeadlessEnvironmentCheck = func() error {
+	if displayServerAvailable(runtime.GOOS, os.Getenv) {
+		return nil
+	}
+	return fmt.Errorf("-no-headless needs a display server to show the browser window, and neither DISPLAY nor WAYLAND_DISPLAY is set: drop -no-headless to keep watching headlessly, or run glorp from a desktop session")
 }
 
 // browserWatchInterval is the poll interval browser mode defaults to. Reading a
@@ -42,18 +60,25 @@ var browserExclusiveFlags = []string{"listen", "webhook-path", "webhook-secret",
 // -interval was passed explicitly, shortens the interval; an explicit interval
 // still wins. Combining it with a webhook-transport flag is an error rather
 // than a silent no-op, so a user who asked for a tunnel is told it cannot
-// happen instead of watching browser mode ignore them.
+// happen instead of watching browser mode ignore them. -no-headless is the
+// debugging escape hatch: it drives the same run through a visible browser, and
+// is refused where no window could appear rather than launching one nobody can
+// see.
 func resolveBrowserWatch(flags *flag.FlagSet, interval time.Duration, poll bool) (browserWatchOptions, time.Duration, bool, error) {
 	options := browserWatchOptions{
 		Enabled: flagValue[bool](flags, "browser"),
 		Binary:  flagValue[string](flags, "browser-binary"),
 		Profile: flagValue[string](flags, "browser-profile"),
 		Vision:  flagValue[bool](flags, "browser-vision"),
+		Headed:  flagValue[bool](flags, "no-headless"),
 	}
 	explicit := explicitFlags(flags)
 	if !options.Enabled {
 		if explicit["browser-vision"] {
 			return options, interval, poll, fmt.Errorf("-browser-vision only applies to browser mode, so it cannot be used without -browser")
+		}
+		if explicit["no-headless"] {
+			return options, interval, poll, fmt.Errorf("-no-headless only applies to browser mode, so it cannot be used without -browser")
 		}
 		return options, interval, poll, nil
 	}
@@ -65,6 +90,11 @@ func resolveBrowserWatch(flags *flag.FlagSet, interval time.Duration, poll bool)
 	}
 	if len(conflicting) > 0 {
 		return options, interval, poll, fmt.Errorf("-browser never starts a webhook server or an ngrok tunnel, so it cannot be combined with %s", strings.Join(conflicting, ", "))
+	}
+	if options.Headed {
+		if err := noHeadlessEnvironmentCheck(); err != nil {
+			return options, interval, poll, err
+		}
 	}
 	if !explicit["interval"] {
 		interval = browserWatchInterval

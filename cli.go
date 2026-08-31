@@ -44,6 +44,8 @@ server and no ngrok tunnel are started, and the poll interval defaults to 5s.
 -browser-vision additionally lets an agent recover an issue list or a project
 board from a single screenshot when GitHub's markup changes, under one hard
 per-run budget shared by both.
+-no-headless drives that same browser visibly instead, so the pages glorp reads
+can be watched while it reads them when a browser-mode run needs debugging.
 
 Flags:`,
 			run: runWatch,
