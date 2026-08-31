@@ -395,9 +395,9 @@ func boardPushesChanges(repo string) bool {
 // why a board still looks polled (issue #249).
 func (w *Glorp) watchDescription() string {
 	if !w.UseWebhooks {
-		return fmt.Sprintf("polling every %s", w.Interval)
+		return fmt.Sprintf("polling every %s", formatInterval(w.Interval))
 	}
-	return fmt.Sprintf("webhook push with a %s fallback poll", w.periodicPollInterval())
+	return fmt.Sprintf("webhook push with a %s fallback poll", formatInterval(w.periodicPollInterval()))
 }
 
 // reapPollTick is how often a reap pass runs when ordinary polling is slower
