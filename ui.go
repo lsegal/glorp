@@ -35,14 +35,14 @@ type JobSnapshot struct {
 }
 
 type GlorpSnapshot struct {
-	Targets       []string
-	IssueCounts   map[string]int
-	Running       int
-	Queued        int
-	Completed     int
-	Failed        int
-	Concurrency   int
-	NextPoll      time.Time
+	Targets     []string
+	IssueCounts map[string]int
+	Running     int
+	Queued      int
+	Completed   int
+	Failed      int
+	Concurrency int
+	NextPoll    time.Time
 	// LastPoll is when the most recent poll of GitHub finished. The poll loop
 	// only logs what it found when that changes (issue #413), so this is the
 	// run's standing evidence that it is still checking (issue #447).

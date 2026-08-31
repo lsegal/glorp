@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildSettingsUpdate,
 	deliveryLabel,
-	lastPollLabel,
 	fetchSettings,
 	jobActionAvailability,
 	jobAgentSummary,
+	lastPollLabel,
 	parseAllowedCommenters,
 	submitJobAction,
 	submitSettings,
