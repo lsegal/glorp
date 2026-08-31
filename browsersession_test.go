@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,11 @@ func TestSaveSessionCookiesKeepsOnlySessionCookies(t *testing.T) {
 }
 
 func TestSaveSessionCookiesWritesProfileOnlyPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows has no Unix permission bits to report: Go writes the file
+		// with the directory's inherited ACL and stats it as 0666.
+		t.Skip("file modes are not enforced on Windows")
+	}
 	profile := t.TempDir()
 	if err := saveSessionCookies(profile, &fakeCookieJar{jar: githubSessionCookies()}); err != nil {
 		t.Fatalf("saveSessionCookies: %v", err)
