@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/storage"
 	"github.com/chromedp/chromedp"
@@ -32,10 +34,23 @@ type sessionCookie struct {
 	HTTPOnly bool   `json:"httpOnly"`
 	SameSite string `json:"sameSite,omitempty"`
 
+	// Expires is the cookie's expiry as seconds since the UNIX epoch, zero for
+	// a cookie the browser holds only in memory. It is serialized so an expiry
+	// that has passed by the time the next browser process starts is dropped
+	// rather than replayed as if it were still live.
+	Expires float64 `json:"expires,omitempty"`
+
 	// session marks a cookie the browser holds only in memory. It is not
-	// serialized: everything in the file is a session cookie by construction,
-	// and the flag exists to pick those out of the browser's full jar.
+	// serialized: Expires already tells the two apart in the file, and the
+	// flag exists to pick the in-memory ones out of the browser's full jar.
 	session bool
+}
+
+// expired reports whether the cookie's own expiry has already passed. A
+// session cookie carries no expiry and never expires on its own: it dies with
+// the browser process, which is the whole reason glorp carries it by hand.
+func (c sessionCookie) expired(now time.Time) bool {
+	return c.Expires > 0 && !now.Before(time.Unix(0, int64(c.Expires*float64(time.Second))))
 }
 
 // cookieJar is the browser's cookie store, narrowed to the two operations the
@@ -51,28 +66,57 @@ func sessionCookiePath(profile string) string {
 	return filepath.Join(profile, sessionCookieFileName)
 }
 
-// sessionOnly keeps the cookies the browser would otherwise lose. Cookies with
-// an expiry are already written to the profile's own cookie database by the
-// browser, so re-injecting them would only duplicate work the browser did.
-func sessionOnly(cookies []sessionCookie) []sessionCookie {
+// carriedCookies keeps the cookies the next browser process would otherwise
+// start without: the session ones the browser holds only in memory, and the
+// expiring crumbs around them that it has not necessarily committed to disk.
+//
+// The expiring ones used to be left to the profile's own cookie database on the
+// premise that the browser had already written them there. That only holds for
+// a process that lives long enough: Chrome commits its cookie database on a
+// batch timer of roughly 30 seconds and glorp stops a browser by signalling its
+// process tree, which does not flush the store first, so a short-lived process
+// (`glorp auth`, the suspend/resume hand-off the sign-in recovery does) loses
+// GitHub's `logged_in`, `_octo` and `_device_id` outright (issue #422). Writing
+// them alongside the session cookies costs one injection and is correct whether
+// or not the browser got round to its own commit.
+//
+// A cookie whose expiry has already passed is dropped rather than carried: the
+// browser would be entitled to reject it, and replaying an expired crumb is
+// exactly the stale state the save is supposed to avoid.
+func carriedCookies(cookies []sessionCookie, now time.Time) []sessionCookie {
 	kept := make([]sessionCookie, 0, len(cookies))
 	for _, cookie := range cookies {
-		if cookie.session {
-			kept = append(kept, cookie)
+		if cookie.expired(now) {
+			continue
 		}
+		kept = append(kept, cookie)
 	}
 	return kept
 }
 
-// saveSessionCookies writes a profile's session cookies to the profile so the
+// signedIn reports whether a jar still holds a sign-in worth carrying. The
+// sign-in itself is a session cookie (`user_session` and friends), so a jar
+// with none left is a profile that was signed out — the expiring crumbs it
+// still carries say who was signed in, not that anyone is.
+func signedIn(cookies []sessionCookie) bool {
+	for _, cookie := range cookies {
+		if cookie.session {
+			return true
+		}
+	}
+	return false
+}
+
+// saveSessionCookies writes a signed-in profile's cookies to the profile so the
 // next browser process on it starts signed in.
 //
 // GitHub's sign-in lives in session cookies (`user_session` and friends), which
-// a browser keeps in memory and drops when its process exits, while only the
-// crumbs around them (`logged_in`, `_octo`, `_device_id`) carry an expiry and
-// reach the profile's cookie database. Persisting the profile directory alone
-// therefore persists everything about the sign-in except the sign-in, which is
-// why `glorp auth` had to be run again for every watch (issue #414).
+// a browser keeps in memory and drops when its process exits, so persisting the
+// profile directory alone persists everything about the sign-in except the
+// sign-in, which is why `glorp auth` had to be run again for every watch (issue
+// #414). The expiring crumbs around them (`logged_in`, `_octo`, `_device_id`)
+// are carried too, because the browser only commits those to the profile's own
+// cookie database on a batch timer glorp does not wait for (issue #422).
 func saveSessionCookies(profile string, jar cookieJar) error {
 	if profile == "" {
 		return nil
@@ -82,7 +126,11 @@ func saveSessionCookies(profile string, jar cookieJar) error {
 		return fmt.Errorf("read browser session cookies: %w", err)
 	}
 	path := sessionCookiePath(profile)
-	cookies = sessionOnly(cookies)
+	if !signedIn(cookies) {
+		cookies = nil
+	} else {
+		cookies = carriedCookies(cookies, time.Now())
+	}
 	if len(cookies) == 0 {
 		// A profile that was signed out has no sign-in left to carry, and a
 		// stale file would keep offering the browser a session GitHub has
@@ -128,6 +176,9 @@ func restoreSessionCookies(profile string, jar cookieJar) error {
 		_ = os.Remove(path)
 		return fmt.Errorf("decode browser session cookies %s: %w", path, err)
 	}
+	// A file written a while ago may name crumbs that have since expired; the
+	// session cookies beside them are still worth restoring.
+	cookies = carriedCookies(cookies, time.Now())
 	if len(cookies) == 0 {
 		return nil
 	}
@@ -160,6 +211,12 @@ func (j browserTabJar) readCookies() ([]sessionCookie, error) {
 		if cookie == nil {
 			continue
 		}
+		// CDP reports -1 rather than 0 as a session cookie's expiry; keep the
+		// file's own convention that no expiry means a session cookie.
+		expires := cookie.Expires
+		if cookie.Session || expires < 0 {
+			expires = 0
+		}
 		cookies = append(cookies, sessionCookie{
 			Name:     cookie.Name,
 			Value:    cookie.Value,
@@ -168,6 +225,7 @@ func (j browserTabJar) readCookies() ([]sessionCookie, error) {
 			Secure:   cookie.Secure,
 			HTTPOnly: cookie.HTTPOnly,
 			SameSite: cookie.SameSite.String(),
+			Expires:  expires,
 			session:  cookie.Session,
 		})
 	}
@@ -180,6 +238,13 @@ func (j browserTabJar) readCookies() ([]sessionCookie, error) {
 func (j browserTabJar) writeCookies(cookies []sessionCookie) error {
 	params := make([]*network.CookieParam, 0, len(cookies))
 	for _, cookie := range cookies {
+		// An omitted expiry is what makes the browser hold a cookie in memory
+		// only, so it is set for the expiring crumbs and left out otherwise.
+		var expires *cdp.TimeSinceEpoch
+		if cookie.Expires > 0 {
+			at := cdp.TimeSinceEpoch(time.Unix(0, int64(cookie.Expires*float64(time.Second))))
+			expires = &at
+		}
 		params = append(params, &network.CookieParam{
 			Name:     cookie.Name,
 			Value:    cookie.Value,
@@ -188,6 +253,7 @@ func (j browserTabJar) writeCookies(cookies []sessionCookie) error {
 			Secure:   cookie.Secure,
 			HTTPOnly: cookie.HTTPOnly,
 			SameSite: network.CookieSameSite(cookie.SameSite),
+			Expires:  expires,
 		})
 	}
 	return j.tab.run(chromedp.ActionFunc(func(ctx context.Context) error {
