@@ -501,7 +501,7 @@ func closesIssue(body, repo string, number int) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
-const defaultIssueFilter = "is:issue state:open assignee:@me author:@me"
+const defaultIssueFilter = "assignee:@me author:@me"
 
 type filterFlag struct {
 	values []string
@@ -981,36 +981,18 @@ func projectListArgs(t target, filter string, allIssues bool) []string {
 // as the board page's ?filterQuery= and as the GraphQL/`gh project item-list`
 // item query.
 //
-// The kind and state qualifiers are supplied only as defaults, for a filter
-// that does not already say what to search for, exactly as issueSearchTerms
-// does for the issues page: repeating them made the logged board URL harder to
-// read and contradicted a filter that deliberately asked for something else (a
-// "--filter is:pr ..." must not become "is:issue ... is:pr").
+// The kind and state qualifiers always open the query, exactly as
+// issueSearchTerms does for the issues page, and a filter naming its own is
+// stripped of it by issueFilterTerms rather than contradicting them.
 //
 // A board speaks a narrower search vocabulary than the issues page: it knows
-// "is:open"/"is:closed" but not "state:open". The defaults are therefore the
-// board's own, and a state the filter names in the issues-page vocabulary is
-// translated rather than passed through, so the qualifier is emitted once and
-// still means something to the board.
+// "is:open"/"is:closed" but not "state:open", so the open state is named the
+// board's own way here.
 func projectItemQuery(filter string, allIssues bool) string {
 	if allIssues || filter == defaultIssueFilter {
 		filter = ""
 	}
-	kind, state := issueSearchQualifiers(filter)
-	var terms []string
-	if !kind {
-		terms = append(terms, "is:issue")
-	}
-	if !state {
-		terms = append(terms, "is:open")
-	}
-	for _, term := range strings.Fields(filter) {
-		if rest, found := strings.CutPrefix(term, "state:"); found {
-			term = "is:" + rest
-		}
-		terms = append(terms, term)
-	}
-	return strings.Join(terms, " ")
+	return strings.Join(append([]string{"is:issue", "is:open"}, issueFilterTerms(filter)...), " ")
 }
 
 func (g GHCLI) listProjectItems(ctx context.Context, target target, filter string, allIssues bool) ([]projectItem, error) {

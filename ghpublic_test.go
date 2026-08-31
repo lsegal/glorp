@@ -246,9 +246,10 @@ func TestPublicIssueSearchQuery(t *testing.T) {
 		{name: "all issues ignores filter", repo: "owner/repo", filter: defaultIssueFilter, allIssues: true, selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open"},
 		{name: "custom filter without author", repo: "owner/repo", filter: "label:bug", want: "repo:owner/repo is:issue state:open label:bug"},
 		{name: "author filter still substitutes self login", repo: "owner/repo", filter: "author:@me", selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open author:lsegal"},
-		{name: "filter naming its own kind is not contradicted", repo: "owner/repo", filter: "is:pr author:@me", selfLogin: "lsegal", want: "repo:owner/repo state:open is:pr author:lsegal"},
-		{name: "filter naming its own state is not contradicted", repo: "owner/repo", filter: "state:closed label:bug", want: "repo:owner/repo is:issue state:closed label:bug"},
-		{name: "filter naming kind and state keeps only the repo qualifier", repo: "owner/repo", filter: "type:issue is:closed", want: "repo:owner/repo type:issue is:closed"},
+		{name: "filter naming its own kind cannot ask for pull requests", repo: "owner/repo", filter: "is:pr author:@me", selfLogin: "lsegal", want: "repo:owner/repo is:issue state:open author:lsegal"},
+		{name: "filter naming its own state cannot ask for closed issues", repo: "owner/repo", filter: "state:closed label:bug", want: "repo:owner/repo is:issue state:open label:bug"},
+		{name: "filter naming kind and state keeps neither", repo: "owner/repo", filter: "type:issue is:closed", want: "repo:owner/repo is:issue state:open"},
+		{name: "qualifiers are never repeated", repo: "owner/repo", filter: "is:issue state:open label:bug", want: "repo:owner/repo is:issue state:open label:bug"},
 		{name: "empty filter falls back to the defaults", repo: "owner/repo", want: "repo:owner/repo is:issue state:open"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -589,12 +590,32 @@ func TestListCommentsUsesPublicAPIForPublicRepo(t *testing.T) {
 	}
 }
 
+// TestDefaultIssueFilterOmitsKindAndStateQualifiers pins the kind and state
+// qualifiers out of the filter a user is shown and overrides. glorp only ever
+// dispatches an open issue, so they are appended to every query it builds
+// instead, and overriding --filter must not mean repeating them.
+func TestDefaultIssueFilterOmitsKindAndStateQualifiers(t *testing.T) {
+	for _, qualifier := range []string{"is:issue", "state:open"} {
+		if strings.Contains(defaultIssueFilter, qualifier) {
+			t.Fatalf("defaultIssueFilter = %q, want it not to name %q", defaultIssueFilter, qualifier)
+		}
+	}
+	for _, filter := range []string{"", defaultIssueFilter, "label:ready", "is:pr", "state:closed"} {
+		if got := strings.Join(issueSearchTerms(filter, false), " "); !strings.HasPrefix(got, "is:issue state:open") {
+			t.Errorf("issueSearchTerms(%q) = %q, want it to open with is:issue state:open", filter, got)
+		}
+		if got := projectItemQuery(filter, false); !strings.HasPrefix(got, "is:issue is:open") {
+			t.Errorf("projectItemQuery(%q) = %q, want it to open with is:issue is:open", filter, got)
+		}
+	}
+}
+
 // TestDefaultIssueFilterRequiresBothAssigneeAndAuthor pins the default filter to
 // requiring that the authenticated user both authored and is assigned to an
 // issue. Matching either qualifier alone would let anyone dispatch an agent by
 // assigning the authenticated user an issue they filed themselves.
 func TestDefaultIssueFilterRequiresBothAssigneeAndAuthor(t *testing.T) {
-	if defaultIssueFilter != "is:issue state:open assignee:@me author:@me" {
+	if defaultIssueFilter != "assignee:@me author:@me" {
 		t.Fatalf("defaultIssueFilter = %q, want both assignee:@me and author:@me", defaultIssueFilter)
 	}
 	query := publicIssueSearchQuery("owner/repo", defaultIssueFilter, false, "lsegal")

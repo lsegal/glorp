@@ -115,19 +115,19 @@ func TestBrowserIssuesURL(t *testing.T) {
 			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen",
 		},
 		{
-			name:   "filter naming its own kind is not contradicted",
+			name:   "filter naming its own kind cannot ask for pull requests",
 			filter: "is:pr assignee:@me",
-			want:   "https://github.com/lsegal/glorp/issues?q=state%3Aopen+is%3Apr+assignee%3A%40me",
+			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen+assignee%3A%40me",
 		},
 		{
-			name:   "filter naming its own state is not contradicted",
+			name:   "filter naming its own state cannot ask for closed issues",
 			filter: "state:closed label:ready",
-			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aclosed+label%3Aready",
+			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen+label%3Aready",
 		},
 		{
-			name:   "is:closed counts as a state",
-			filter: "is:closed",
-			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+is%3Aclosed",
+			name:   "filter repeating the qualifiers does not double them",
+			filter: "is:issue state:open label:ready",
+			want:   "https://github.com/lsegal/glorp/issues?q=is%3Aissue+state%3Aopen+label%3Aready",
 		},
 		{
 			name:      "all issues drops a filter that named its own kind",
