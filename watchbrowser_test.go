@@ -36,7 +36,7 @@ func TestWatchFlagSetHasBrowserFlags(t *testing.T) {
 	}
 }
 
-func TestResolveBrowserWatchImpliesPollAndFiveSecondInterval(t *testing.T) {
+func TestResolveBrowserWatchImpliesPollAndShortInterval(t *testing.T) {
 	flags := parseWatchFlags(t, "--browser", "owner/repo")
 	options, interval, poll, err := resolveBrowserWatch(flags, 30*time.Second, false)
 	if err != nil {
@@ -48,8 +48,8 @@ func TestResolveBrowserWatchImpliesPollAndFiveSecondInterval(t *testing.T) {
 	if !poll {
 		t.Fatal("poll = false, want -browser to imply -poll")
 	}
-	if interval != 5*time.Second {
-		t.Fatalf("interval = %s, want 5s", interval)
+	if interval != 20*time.Second {
+		t.Fatalf("interval = %s, want 20s", interval)
 	}
 }
 
@@ -346,13 +346,23 @@ func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 	if w.Projects != issues.Board {
 		t.Fatalf("Projects = %v, want the same board the issue source reads (%v)", w.Projects, issues.Board)
 	}
-	// Discussions has no REST API to trade away, and comments and status
-	// writes have no page affordance, so they stay on gh.
+	// Discussions has no REST API to trade away, and status writes have no
+	// page affordance, so they stay on gh.
 	if _, ok := w.Discussions.(GHCLI); !ok {
 		t.Fatalf("Discussions = %T, want GHCLI", w.Discussions)
 	}
-	if _, ok := w.Comments.(GHCLI); !ok {
-		t.Fatalf("Comments = %T, want GHCLI", w.Comments)
+	// Comment reads move onto the conversation page (issue #441), but the
+	// reader has to keep the API client: it posts every comment and answers
+	// any read the page could not.
+	comments, ok := w.Comments.(*browserCommentSource)
+	if !ok {
+		t.Fatalf("Comments = %T, want *browserCommentSource", w.Comments)
+	}
+	if comments.pageFor == nil {
+		t.Fatal("comment source has no tab opener, so it cannot read a conversation")
+	}
+	if _, ok := comments.api.(GHCLI); !ok {
+		t.Fatalf("comment source api = %T, want GHCLI", comments.api)
 	}
 	if _, ok := w.Status.(GHCLI); !ok {
 		t.Fatalf("Status = %T, want GHCLI", w.Status)

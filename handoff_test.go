@@ -78,8 +78,11 @@ type fakeCommentClient struct {
 	mu       sync.Mutex
 	comments map[string][]Comment
 	posts    int
-	postErr  error
-	listErr  error
+	// lists counts the reads that reached this client, which is how the
+	// browser-mode comment reader's tests tell a page read from a fallback.
+	lists   int
+	postErr error
+	listErr error
 }
 
 func newFakeCommentClient() *fakeCommentClient {
@@ -105,6 +108,7 @@ func (f *fakeCommentClient) PostComment(_ context.Context, repo string, number i
 func (f *fakeCommentClient) ListComments(_ context.Context, repo string, number int) ([]Comment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lists++
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
