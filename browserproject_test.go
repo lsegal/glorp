@@ -613,7 +613,7 @@ func TestBoardScrollScriptScrollsEveryColumn(t *testing.T) {
 	if strings.Contains(boardScrollScript, "best") {
 		t.Errorf("the board scroll script still picks a single scroller")
 	}
-	for _, want := range []string{"scrollTop = el.scrollHeight", "scrolled === 0"} {
+	for _, want := range []string{"el.scrollTop + Math.max(el.clientHeight, 1)", "scrolled === 0"} {
 		if !strings.Contains(boardScrollScript, want) {
 			t.Errorf("the board scroll script does not contain %q", want)
 		}

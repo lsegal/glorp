@@ -99,30 +99,32 @@ func newBrowserBoard(browser *Browser, filter string, allIssues bool, vision *br
 // only ever be exercised against a live board.
 const boardDocumentScript = "document.documentElement.outerHTML"
 
-// boardScrollScript scrolls the board to the bottom and reports whether
+// boardScrollScript advances the board by one viewport and reports whether
 // anything actually moved. Projects v2 virtualizes its items, so the ones past
-// the viewport are not in the DOM until they are scrolled into it. Every
-// element that has more content than it can show is scrolled rather than only
-// the largest one: the table layout has a single list, but the board layout
-// gives each column a scroller of its own, and scrolling only the biggest of
-// them left every other column stuck on the handful of cards that happened to
-// fit (issue #457). Falling back to the document covers the layouts that
-// scroll the page itself.
+// the viewport are not in the DOM until they are scrolled into it, and the
+// caller harvests between scrolls: jumping straight to the bottom moved the
+// window past every item in between, which were then never in the DOM to be
+// read at all. Every element that has more content than it can show is
+// advanced rather than only the largest one, because the table layout has a
+// single list but the board layout gives each column a scroller of its own,
+// and moving only the biggest of them left every other column stuck on the
+// handful of cards that happened to fit (issue #457). Falling back to the
+// document covers the layouts that scroll the page itself.
 const boardScrollScript = `(function(){
   var moved = false, scrolled = 0;
+  function advance(el) {
+    var before = el.scrollTop;
+    el.scrollTop = Math.min(el.scrollHeight, el.scrollTop + Math.max(el.clientHeight, 1));
+    return el.scrollTop > before;
+  }
   document.querySelectorAll('*').forEach(function(el){
     if (el.scrollHeight - el.clientHeight <= 40) { return; }
     if (el.clientWidth * el.clientHeight < 2000) { return; }
     scrolled++;
-    var before = el.scrollTop;
-    el.scrollTop = el.scrollHeight;
-    if (el.scrollTop > before) { moved = true; }
+    if (advance(el)) { moved = true; }
   });
   if (scrolled === 0) {
-    var page = document.scrollingElement || document.documentElement;
-    var before = page.scrollTop;
-    page.scrollTop = page.scrollHeight;
-    moved = page.scrollTop > before;
+    moved = advance(document.scrollingElement || document.documentElement);
   }
   return moved;
 })()`
