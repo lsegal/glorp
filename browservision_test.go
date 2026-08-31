@@ -128,9 +128,9 @@ func TestBrowserVisionNeverCalledWhileExtractionWorks(t *testing.T) {
 	source.pageFor = func(string) (browserPage, error) { return page, nil }
 	source.vision = vision
 
-	// Twenty minutes of a five-second loop, which is twice the cooldown: a
-	// per-schedule trigger or a leak on the success path would show up here.
-	if err := pollTicks(t, source, 240); err != nil {
+	// Twenty minutes of polling, which is twice the cooldown: a per-schedule
+	// trigger or a leak on the success path would show up here.
+	if err := pollTicks(t, source, int(20*time.Minute/browserWatchInterval)); err != nil {
 		t.Fatalf("polling a healthy page failed: %v", err)
 	}
 	if page.screenshots != 0 || *asks != 0 {
@@ -179,7 +179,7 @@ func TestBrowserVisionNeverCalledForANavigationFailure(t *testing.T) {
 }
 
 // The cooldown is what keeps a permanently broken page from queueing an agent
-// call on every tick of a five-second loop.
+// call on every tick of the browser-mode poll loop.
 func TestBrowserVisionCooldownHoldsUnderRepeatedFailures(t *testing.T) {
 	clock := &visionClock{step: browserWatchInterval}
 	// The per-run cap is raised out of the way so this test measures the
@@ -190,8 +190,9 @@ func TestBrowserVisionCooldownHoldsUnderRepeatedFailures(t *testing.T) {
 	source.pageFor = func(string) (browserPage, error) { return page, nil }
 	source.vision = vision
 
-	// 240 ticks of 5s is 20 minutes, which spans two 10-minute windows.
-	pollTicks(t, source, 240)
+	// 20 minutes of polling spans two 10-minute cooldown windows, whatever
+	// the browser-mode interval happens to be.
+	pollTicks(t, source, int(20*time.Minute/browserWatchInterval))
 	if *asks != 2 {
 		t.Fatalf("expected 2 vision calls across 20 minutes of failures, got %d", *asks)
 	}

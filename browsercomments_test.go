@@ -96,7 +96,9 @@ func TestBrowserCommentsReadFromThePage(t *testing.T) {
 	page := &fakeCommentPage{results: []browserCommentList{{
 		Recognized: true,
 		Comments: []browserCommentRow{
-			{ID: "1", Author: "alice", Body: "Does anyone have this? /glorp:AAAA", CreatedAt: "2026-08-30T10:00:00Z"},
+			// GitHub renders its timestamps with a fractional second, so the
+			// parse has to take one.
+			{ID: "1", Author: "alice", Body: "Does anyone have this? /glorp:AAAA", CreatedAt: "2026-08-30T10:00:00.000Z"},
 			{ID: "2", Author: "bob", Body: "Starting work on this issue /glorp:BBBB", CreatedAt: "2026-08-30T10:05:00Z"},
 		},
 	}}}

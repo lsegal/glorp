@@ -22,7 +22,7 @@ import (
 // how long it polls, for issue pages and project boards alike.
 const (
 	// browserVisionCooldown is the minimum time between screenshots of the
-	// same target. A five-second poll loop hitting a permanently broken page
+	// same target. A poll loop hitting a permanently broken page
 	// would otherwise queue an agent call every tick.
 	browserVisionCooldown = 10 * time.Minute
 	// browserVisionRunLimit is how many vision calls a single run may make

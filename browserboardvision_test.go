@@ -59,8 +59,8 @@ func TestBrowserBoardVisionNeverCalledWhileTheBoardRenders(t *testing.T) {
 	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-table.html")}}}
 	board := newVisionBoard(page, vision)
 
-	// Twenty minutes of a five-second loop, which is twice the cooldown.
-	pollBoardTicks(board, 240)
+	// Twenty minutes of polling, which is twice the cooldown.
+	pollBoardTicks(board, int(20*time.Minute/browserWatchInterval))
 	if issues := boardIssues(t, board, boardTarget); len(issues) != 4 {
 		t.Fatalf("extracted %d issues from a healthy board, want 4", len(issues))
 	}
@@ -75,12 +75,12 @@ func TestBrowserBoardVisionNeverCalledWhileTheBoardRenders(t *testing.T) {
 func TestBrowserBoardVisionSpendsOneScreenshotPerCooldownAndStopsAtTheSharedCap(t *testing.T) {
 	clock := &visionClock{step: browserWatchInterval}
 	// The cap is raised out of the way first, so this half measures the
-	// cooldown alone: 240 ticks of 5s is 20 minutes, which spans two windows.
+	// cooldown alone: 20 minutes of polling spans two cooldown windows.
 	vision, asks, _ := testVisionRefs(t, 1000, browserVisionCooldown, clock, nil, true)
 	page := &visionBoardPage{fakeBoardPage: fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-loading.html")}}}
 	board := newVisionBoard(page, vision)
 
-	pollBoardTicks(board, 240)
+	pollBoardTicks(board, int(20*time.Minute/browserWatchInterval))
 	if *asks != 2 || page.screenshots != 2 {
 		t.Fatalf("expected 2 calls across 20 minutes of a broken board, got %d screenshot(s) and %d agent call(s)", page.screenshots, *asks)
 	}
