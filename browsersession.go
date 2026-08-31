@@ -20,12 +20,6 @@ import (
 // -browser-profile somewhere else and the sign-in there is the one restored.
 const sessionCookieFileName = "glorp-session-cookies.json"
 
-// browserCookieTabName is the tab cookies are read and written through when a
-// browser has no tab open yet. Storage commands are browser-scoped, but CDP
-// still needs a target to carry them, and a run that saves its sign-in before
-// opening any page would otherwise have none.
-const browserCookieTabName = "glorp-session"
-
 // sessionCookie is one cookie glorp carries across browser processes. It is a
 // glorp-owned record rather than the CDP type so the file format does not move
 // when the protocol's own cookie struct gains fields.
@@ -143,35 +137,20 @@ func restoreSessionCookies(profile string, jar cookieJar) error {
 	return nil
 }
 
-// cookieTab returns a tab to carry storage commands on, preferring one the run
-// already has open over opening another.
-func (b *Browser) cookieTab() (*BrowserTab, error) {
-	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
-		return nil, fmt.Errorf("browser is closed")
-	}
-	var existing *BrowserTab
-	for _, tab := range b.tabs {
-		existing = tab
-		break
-	}
-	b.mu.Unlock()
-	if existing != nil {
-		return existing, nil
-	}
-	return b.Tab(browserCookieTabName)
-}
+// browserTabJar is a browser's cookie store reached through one of its tabs.
+// Storage commands are browser-scoped, but CDP still needs a target to carry
+// them, so the jar borrows a tab the run already has rather than opening one:
+// a headed browser's first tab is the window `glorp auth` signs in through
+// (issue #412), and taking it for cookie work would put a second window on
+// screen again.
+type browserTabJar struct{ tab *BrowserTab }
 
 // readCookies reports every cookie the browser currently holds.
-func (b *Browser) readCookies() ([]sessionCookie, error) {
-	tab, err := b.cookieTab()
-	if err != nil {
-		return nil, err
-	}
+func (j browserTabJar) readCookies() ([]sessionCookie, error) {
 	var jar []*network.Cookie
-	if err := tab.run(chromedp.ActionFunc(func(ctx context.Context) error {
-		jar, err = storage.GetCookies().Do(ctx)
+	if err := j.tab.run(chromedp.ActionFunc(func(ctx context.Context) error {
+		cookies, err := storage.GetCookies().Do(ctx)
+		jar = cookies
 		return err
 	})); err != nil {
 		return nil, err
@@ -198,11 +177,7 @@ func (b *Browser) readCookies() ([]sessionCookie, error) {
 // writeCookies injects cookies into the browser. It is called before anything
 // navigates, so the first page load of a run is already made as the signed-in
 // user rather than being redirected to a login wall first.
-func (b *Browser) writeCookies(cookies []sessionCookie) error {
-	tab, err := b.cookieTab()
-	if err != nil {
-		return err
-	}
+func (j browserTabJar) writeCookies(cookies []sessionCookie) error {
 	params := make([]*network.CookieParam, 0, len(cookies))
 	for _, cookie := range cookies {
 		params = append(params, &network.CookieParam{
@@ -215,15 +190,20 @@ func (b *Browser) writeCookies(cookies []sessionCookie) error {
 			SameSite: network.CookieSameSite(cookie.SameSite),
 		})
 	}
-	return tab.run(chromedp.ActionFunc(func(ctx context.Context) error {
+	return j.tab.run(chromedp.ActionFunc(func(ctx context.Context) error {
 		return storage.SetCookies(params).Do(ctx)
 	}))
 }
 
 // saveSession and restoreSession carry the profile's sign-in across the browser
-// processes a run starts and stops. Both are best-effort: a browser that cannot
-// be asked for its cookies still watches GitHub, and a sign-in that could not
-// be carried is recovered by the sign-in guard exactly as it is today. The
-// error is returned so callers that can report it may.
-func (b *Browser) saveSession() error    { return saveSessionCookies(b.Profile(), b) }
-func (b *Browser) restoreSession() error { return restoreSessionCookies(b.Profile(), b) }
+// processes a run starts and stops, through a tab the run already owns. Both
+// are best-effort: a browser that cannot be asked for its cookies still watches
+// GitHub, and a sign-in that could not be carried is recovered by the sign-in
+// guard exactly as it is today. The error is returned so callers may report it.
+func (b *Browser) saveSession(tab *BrowserTab) error {
+	return saveSessionCookies(b.Profile(), browserTabJar{tab})
+}
+
+func (b *Browser) restoreSession(tab *BrowserTab) error {
+	return restoreSessionCookies(b.Profile(), browserTabJar{tab})
+}

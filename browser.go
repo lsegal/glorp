@@ -30,6 +30,9 @@ type Browser struct {
 	mu     sync.Mutex
 	tabs   map[string]*BrowserTab
 	closed bool
+	// restored records that this browser process has already been given the
+	// sign-in saved by the last one, so it happens once per process.
+	restored bool
 }
 
 // startBrowser launches a headless browser against glorp's own profile and
@@ -51,9 +54,6 @@ func startBrowser(ctx context.Context, config browserConfig) (*Browser, error) {
 		cancelAlloc: cancelAlloc,
 		tabs:        map[string]*BrowserTab{},
 	}
-	// A browser process starts with none of the session cookies the last one
-	// held, so the sign-in is put back before anything navigates (issue #414).
-	_ = browser.restoreSession()
 	return browser, nil
 }
 
@@ -69,15 +69,8 @@ func (b *Browser) Suspend() error { return b.Close() }
 // belongs to the process that owned it, and every reader re-opens the one it
 // needs on its next read, navigating it where it needs to be anyway.
 func (b *Browser) Resume() error {
-	relaunched, err := b.relaunch()
-	if err != nil || !relaunched {
-		return err
-	}
-	// The process the sign-in window signed in is not the process the watch
-	// loop reads GitHub with, so the sign-in is carried over here too
-	// (issue #414). It runs outside the lock because it reads the tabs.
-	_ = b.restoreSession()
-	return nil
+	_, err := b.relaunch()
+	return err
 }
 
 // relaunch starts a new browser process for a suspended Browser and reports
@@ -96,6 +89,9 @@ func (b *Browser) relaunch() (bool, error) {
 	b.cmd, b.allocCtx, b.cancelAlloc = process, allocCtx, cancelAlloc
 	b.tabs = map[string]*BrowserTab{}
 	b.closed = false
+	// The new process holds none of the old one's session cookies, so the
+	// sign-in is carried into it again on its first tab (issue #414).
+	b.restored = false
 	return true, nil
 }
 
@@ -124,7 +120,26 @@ func (b *Browser) Tab(name string) (*BrowserTab, error) {
 		return nil, fmt.Errorf("open browser tab for %s: %w", name, err)
 	}
 	b.tabs[name] = tab
+	// The sign-in saved by the last browser process is put back on the first
+	// tab this one opens, before it navigates anywhere, so the run's first page
+	// load is already made as the signed-in user (issue #414). It rides the tab
+	// the run wanted anyway rather than opening one of its own, which would
+	// cost a headed `glorp auth` the window adoption above.
+	if !b.restored {
+		b.restored = true
+		_ = b.restoreSession(tab)
+	}
 	return tab, nil
+}
+
+// anyTab returns one of the browser's open tabs, or nil when it has none.
+func (b *Browser) anyTab() *BrowserTab {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, tab := range b.tabs {
+		return tab
+	}
+	return nil
 }
 
 // adoptsExistingWindow reports whether the next tab should attach to a window
@@ -158,8 +173,11 @@ func (b *Browser) openTab() (*BrowserTab, error) {
 // It is safe to call more than once, so shutdown paths can call it defensively.
 func (b *Browser) Close() error {
 	// Saved before the process is stopped, because the sign-in only exists in
-	// the memory of the process about to be terminated (issue #414).
-	_ = b.saveSession()
+	// the memory of the process about to be terminated (issue #414). A browser
+	// that never opened a tab has nothing to save and no target to ask.
+	if tab := b.anyTab(); tab != nil {
+		_ = b.saveSession(tab)
+	}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
