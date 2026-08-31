@@ -191,6 +191,29 @@ func TestBrowserIssueSourceEmptyList(t *testing.T) {
 	}
 }
 
+// TestBrowserIssueSourceEmptyListWithoutAMarker checks a list container that
+// drew no rows is read as an empty list once the render wait is over, rather
+// than as an extraction failure reported on every poll (issue #413).
+func TestBrowserIssueSourceEmptyListWithoutAMarker(t *testing.T) {
+	page := &fakeBrowserPage{results: []browserIssueList{{Container: true}, {Container: true}, {Container: true}}}
+	var logged []string
+	source := newTestIssueSource(page, defaultIssueFilter, false, func(format string, args ...interface{}) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	})
+	issues, err := source.ListIssues(context.Background(), "lsegal/glorp")
+	if err != nil {
+		t.Fatalf("ListIssues: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("got %d issues, want none", len(issues))
+	}
+	for _, line := range logged {
+		if strings.Contains(line, "could not read") {
+			t.Fatalf("an empty list was reported as a failure: %v", logged)
+		}
+	}
+}
+
 // TestBrowserIssueSourceExtractionFailure checks an unreadable page produces the
 // distinguishable error, and that it is logged once rather than on every tick.
 func TestBrowserIssueSourceExtractionFailure(t *testing.T) {

@@ -215,8 +215,13 @@ type Glorp struct {
 	reapInterval time.Duration
 	// staleClaim overrides the age at which another instance's claim is
 	// considered abandoned in tests.
-	staleClaim    time.Duration
-	logMu         sync.Mutex
+	staleClaim time.Duration
+	logMu      sync.Mutex
+	// repeatMu guards lastLogged, the state last reported under each
+	// logChanged key. A poll loop ticking every few seconds must report a
+	// summary, or a failure, once rather than on every tick (issue #413).
+	repeatMu      sync.Mutex
+	lastLogged    map[string]string
 	jobActionOnce sync.Once
 	jobActions    chan jobActionRequest
 	// settingsOnce/settingsRequests carry live settings updates (issue #341)
@@ -522,7 +527,7 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 		}
 		discussions, err := w.Discussions.ListUnansweredDiscussions(ctx, target)
 		if err != nil {
-			w.logf("poll #%d failed while listing discussions for %s: %v", n, target, err)
+			w.logChanged("discussions:"+target, err.Error(), "poll #%d failed while listing discussions for %s: %v", n, target, err)
 			continue
 		}
 		for _, discussion := range discussions {
@@ -757,6 +762,36 @@ func (w *Glorp) logf(format string, args ...interface{}) {
 	}
 }
 
+// logChanged logs a line only when the state it reports differs from the state
+// last logged under the same key, and reports whether it logged. Polling every
+// five seconds otherwise repeats an unchanged summary, and an unchanged
+// failure, on every tick (issue #413).
+func (w *Glorp) logChanged(key, state, format string, args ...interface{}) bool {
+	w.repeatMu.Lock()
+	if previous, ok := w.lastLogged[key]; ok && previous == state {
+		w.repeatMu.Unlock()
+		return false
+	}
+	if w.lastLogged == nil {
+		w.lastLogged = map[string]string{}
+	}
+	w.lastLogged[key] = state
+	w.repeatMu.Unlock()
+	w.logf(format, args...)
+	return true
+}
+
+// forgetLogged drops the state remembered for key so the next logChanged with
+// it logs again, and reports whether anything was remembered. That answer is
+// how a poll that succeeded knows a failure was reported for it earlier.
+func (w *Glorp) forgetLogged(key string) bool {
+	w.repeatMu.Lock()
+	defer w.repeatMu.Unlock()
+	_, ok := w.lastLogged[key]
+	delete(w.lastLogged, key)
+	return ok
+}
+
 func (w *Glorp) Run(ctx context.Context) error {
 	targets := append([]string(nil), w.Targets...)
 	if len(targets) == 0 && w.Repo != "" {
@@ -840,11 +875,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// remaining refreshes have nothing left to catch. Only the run loop's own
 	// goroutine reads or writes it.
 	var observed map[string]bool
-	poll := func(sweep map[string]bool) error {
+	pollOnce := func(sweep map[string]bool) error {
 		pollNumber++
 		n := pollNumber
-		running, queued, completed, failed := tasks.snapshot()
-		w.logf("poll #%d started (tasks: %d running, %d queued, %d completed, %d failed)", n, running, queued, completed, failed)
+		running, queued, _, _ := tasks.snapshot()
 		// Publish before listing: browser mode consults this snapshot while
 		// extracting, to avoid fetching metadata for work already in flight
 		// or already finished.
@@ -858,8 +892,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			batch, err := w.Issues.ListIssues(ctx, target)
 			if err != nil {
-				w.logf("poll #%d failed while listing %s: %v", n, target, err)
-				return err
+				return fmt.Errorf("listing %s: %w", target, err)
 			}
 			jobMu.Lock()
 			issueCounts[target] = len(batch)
@@ -872,7 +905,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				issues = append(issues, batch[i])
 			}
 		}
-		w.logf("poll #%d found %d open issue(s)", n, len(issues))
+		w.logChanged("poll-issues", strconv.Itoa(len(issues)), "poll #%d found %d open issue(s)", n, len(issues))
 		w.pollDiscussions(ctx, n, targets, sem, &wg, &workMu, active)
 		observed = make(map[string]bool, len(issues))
 		for _, issue := range issues {
@@ -956,11 +989,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 		err = saveScopedWorkState(w.StatePath, work, targets)
 		workMu.Unlock()
 		if err != nil {
-			w.logf("poll #%d failed while saving state: %v", n, err)
-			return err
+			return fmt.Errorf("saving state: %w", err)
 		}
 		if len(newIssues) == 0 {
-			w.logf("poll #%d complete; no new issues (tasks: %d running, %d queued)", n, running, queued)
 			return nil
 		}
 		issuesToLog := make([]Issue, len(newIssues))
@@ -1206,6 +1237,27 @@ func (w *Glorp) Run(ctx context.Context) error {
 		w.logf("poll #%d complete; dispatched %d issue(s) (tasks: %d running, %d queued)", n, len(newIssues), running, queued)
 		return nil
 	}
+	// poll runs one poll and reports the end of a run of failures, so a poll
+	// loop that recovers says so once even though the failures it recovered
+	// from were only reported once (issue #413).
+	poll := func(sweep map[string]bool) error {
+		err := pollOnce(sweep)
+		if err == nil && w.forgetLogged("poll-error") {
+			w.logf("poll #%d succeeded; the failure reported above is resolved", pollNumber)
+		}
+		return err
+	}
+	// reportPollError reports a failed poll once. Every poll that fails does so
+	// through here, so the same failure repeating on a five-second tick is
+	// reported when it starts rather than on every tick, and the listing or
+	// state error that caused it is reported by this line alone instead of
+	// being logged a second time where it was raised (issue #413).
+	reportPollError := func(kind string, err error) {
+		if kind != "" {
+			kind += " "
+		}
+		w.logChanged("poll-error", err.Error(), "%spoll #%d error: %v; retrying in %s", kind, pollNumber, err, w.periodicPollInterval())
+	}
 	// respondToOwnershipAsk answers a "Does anyone have this?" handoff comment
 	// (issue #214) the moment its webhook delivery arrives, rather than
 	// waiting for the next poll to notice the issue is still active locally.
@@ -1261,7 +1313,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("stopped during initial poll")
 			return nil
 		}
-		w.logf("initial poll error: %v; will retry in %s", err, w.periodicPollInterval())
+		reportPollError("initial", err)
 	}
 	publish()
 	// Board-only project changes never reach a webhook, so push mode probes a
@@ -1276,7 +1328,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			state, err := w.Projects.ProjectState(ctx, target)
 			if err != nil {
 				if ctx.Err() == nil {
-					w.logf("project board probe for %s failed: %v", target, err)
+					w.logChanged("board-probe:"+target, err.Error(), "project board probe for %s failed: %v", target, err)
 				}
 				continue
 			}
@@ -1424,19 +1476,19 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("stopped")
 					return nil
 				}
-				w.logf("poll #%d error: %v; will retry in %s", pollNumber, err, periodicInterval)
+				reportPollError("", err)
 			}
 		case <-boardTick:
 			if !probeBoards(ctx) {
 				continue
 			}
 			if err := poll(nil); err != nil && ctx.Err() == nil {
-				w.logf("project board poll #%d error: %v", pollNumber, err)
+				reportPollError("project board", err)
 			}
 		case <-reap:
 			w.logf("periodic reap started")
 			if err := poll(nil); err != nil && ctx.Err() == nil {
-				w.logf("reap poll #%d error: %v", pollNumber, err)
+				reportPollError("reap", err)
 			}
 		case event := <-w.Events:
 			w.logWebhookEvent(event)
@@ -1461,7 +1513,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					directMentions[key] = true
 					w.logf("issue #%d directly mentioned instance %s; refreshing for a threaded gh-fix run", event.IssueNumber, w.Identity)
 					if err := poll(nil); err != nil && ctx.Err() == nil {
-						w.logf("direct-mention poll #%d error: %v", pollNumber, err)
+						reportPollError("direct-mention", err)
 					}
 					// A direct mention is intentionally not an ordinary comment refresh:
 					// it must survive a lagging issue search (or a transient list
@@ -1507,7 +1559,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					wg.Wait()
 					return nil
 				}
-				w.logf("webhook-triggered poll #%d error: %v", pollNumber, err)
+				reportPollError("webhook-triggered", err)
 			}
 			// Keep an already scheduled follow-up refresh. GitHub may deliver
 			// another webhook while its issue index is still catching up; resetting
@@ -1529,7 +1581,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			retryTimer = nil
 			w.logf("webhook follow-up refresh started")
 			if err := poll(pendingWebhookSweep); err != nil && ctx.Err() == nil {
-				w.logf("webhook follow-up poll #%d error: %v", pollNumber, err)
+				reportPollError("webhook follow-up", err)
 			}
 			retriesRemaining--
 			if pendingWebhookIssue != "" && !directMentions[pendingWebhookIssue] && observed[pendingWebhookIssue] {
@@ -1552,13 +1604,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if status == "failed" {
 					delete(retryAfterStop, key)
 					if err := poll(nil); err != nil && ctx.Err() == nil {
-						w.logf("retry poll #%d error: %v", pollNumber, err)
+						reportPollError("retry", err)
 					}
 				}
 			}
 			if len(directMentions) > 0 {
 				if err := poll(nil); err != nil && ctx.Err() == nil {
-					w.logf("queued direct-mention poll #%d error: %v", pollNumber, err)
+					reportPollError("queued direct-mention", err)
 				}
 			}
 		case <-stateChanges:
@@ -1597,7 +1649,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			workMu.Unlock()
 			w.logf("state reloaded; scheduling resync")
 			if err := poll(nil); err != nil && ctx.Err() == nil {
-				w.logf("state reload poll #%d error: %v", pollNumber, err)
+				reportPollError("state reload", err)
 			}
 		}
 	}

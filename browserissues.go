@@ -200,11 +200,13 @@ type browserIssueRow struct {
 }
 
 // browserIssueList is the page script's result: the rows it found, whether it
-// recognised the page at all, and the next page to follow if there is one.
+// recognised the page at all, whether the page named a list container, and the
+// next page to follow if there is one.
 type browserIssueList struct {
 	Rows       []browserIssueRow `json:"rows"`
 	Recognized bool              `json:"recognized"`
 	Empty      bool              `json:"empty"`
+	Container  bool              `json:"container"`
 	Next       string            `json:"next"`
 }
 
@@ -416,6 +418,15 @@ func (s *browserIssueSource) readPage(ctx context.Context, target string, page b
 	// The probe runs only here, so a read that found issues costs nothing.
 	if len(list.Rows) == 0 && browserSignedOut(page) {
 		return browserIssueList{}, &browserSignedOutError{URL: pageURL, Profile: s.profile}
+	}
+	// A list container that still holds no rows once the render wait above is
+	// over is an empty list, not markup glorp failed to read: a repository with
+	// no ready issues was reported as an extraction failure on every tick of a
+	// five-second poll, purely because the blankslate beside the list carried
+	// none of the markers the script knows (issue #413). The wait runs first, so
+	// a page that had merely not drawn yet is never mistaken for an empty one.
+	if !list.Recognized && list.Container && len(list.Rows) == 0 {
+		list.Recognized, list.Empty = true, true
 	}
 	if !list.Recognized {
 		return browserIssueList{}, s.extractionFailed(pageURL, fmt.Sprintf("no issue rows and no empty-list marker appeared within %s (the page's markup may have changed)", time.Duration(s.attempts())*s.delay()))
