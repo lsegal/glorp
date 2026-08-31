@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 // fakeBoardPage replays captured board markup instead of loading a page, so
@@ -528,6 +530,111 @@ func TestNormalizeStatus(t *testing.T) {
 	for input, want := range tests {
 		if got := normalizeStatus(input); got != want {
 			t.Errorf("normalizeStatus(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+// TestBrowserBoardExtractsStatusFromLiveTableMarkup is the regression for
+// issue #457. On the markup GitHub actually serves, nothing on a row names the
+// field a cell holds except the CSS custom property it is sized from, and the
+// only attribute that mentions "status" is the title cell's own label -- which
+// carries the issue's open/closed state, not the board's Status field. Reading
+// that label put the row's whole title in ProjectStatus, so every item on a
+// real board failed the ready-state gate and a poll that logged the right
+// number of items dispatched none of them.
+func TestBrowserBoardExtractsStatusFromLiveTableMarkup(t *testing.T) {
+	page := &fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-table-live.html")}}
+	board, _ := newTestBoard(page)
+	issues := boardIssues(t, board, "https://github.com/users/lsegal/projects/4")
+
+	want := []Issue{
+		{Number: 188, Repository: "lsegal/zvidlib", Title: "HEVC: time the SSE4.1/AVX2 kernels", ProjectStatus: "Ready"},
+		{Number: 259, Repository: "lsegal/glorp", Title: "Didn't we implement subcommands?", ProjectStatus: "Done"},
+		{Number: 276, Repository: "lsegal/glorp", Title: "Remove the remaining GraphQL calls", ProjectStatus: ""},
+	}
+	if len(issues) != len(want) {
+		t.Fatalf("extracted %d issues, want %d: %+v", len(issues), len(want), issues)
+	}
+	for i, issue := range issues {
+		if !reflect.DeepEqual(issue, want[i]) {
+			t.Errorf("issue %d = %+v, want %+v", i, issue, want[i])
+		}
+	}
+}
+
+// TestBrowserBoardLiveTableItemsPassTheReadyGate states the consequence the
+// fix exists for: what the extractor reads has to be a value the dispatch gate
+// recognises, not merely a non-empty string.
+func TestBrowserBoardLiveTableItemsPassTheReadyGate(t *testing.T) {
+	page := &fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-table-live.html")}}
+	board, _ := newTestBoard(page)
+	dispatchable := 0
+	for _, issue := range boardIssues(t, board, "https://github.com/users/lsegal/projects/4") {
+		if projectStatusAllowsDispatch(issue.ProjectStatus, "") {
+			dispatchable++
+		}
+	}
+	if dispatchable != 1 {
+		t.Fatalf("%d board items pass the default ready-state gate, want 1", dispatchable)
+	}
+}
+
+// TestBrowserBoardExtractsLiveColumnMarkup covers the other view the board
+// page is served in. A real column names its status in data-board-column and
+// carries no test id, and the page ships a labelled group and a <table> of its
+// own that are not the board: taking the first layout that merely recognised
+// itself read a drawn board as an empty table.
+func TestBrowserBoardExtractsLiveColumnMarkup(t *testing.T) {
+	page := &fakeBoardPage{documents: []string{readBoardFixture(t, "project-board-columns-live.html")}}
+	board, _ := newTestBoard(page)
+	issues := boardIssues(t, board, "https://github.com/users/lsegal/projects/4")
+
+	want := map[int]string{188: "Ready", 276: "Ready", 378: "In Progress", 259: "Done"}
+	if len(issues) != len(want) {
+		t.Fatalf("extracted %d issues, want %d: %+v", len(issues), len(want), issues)
+	}
+	for _, issue := range issues {
+		status, ok := want[issue.Number]
+		if !ok {
+			t.Errorf("unexpected issue #%d on the board", issue.Number)
+			continue
+		}
+		if issue.ProjectStatus != status {
+			t.Errorf("issue #%d status %q, want %q", issue.Number, issue.ProjectStatus, status)
+		}
+	}
+}
+
+// TestBoardScrollScriptScrollsEveryColumn pins the scroll behaviour a board
+// layout needs: each column virtualizes its own cards, so scrolling only the
+// largest scroller left every other column stuck on the cards that happened to
+// fit in the viewport.
+func TestBoardScrollScriptScrollsEveryColumn(t *testing.T) {
+	if strings.Contains(boardScrollScript, "best") {
+		t.Errorf("the board scroll script still picks a single scroller")
+	}
+	for _, want := range []string{"el.scrollTop + Math.max(el.clientHeight, 1)", "scrolled === 0"} {
+		if !strings.Contains(boardScrollScript, want) {
+			t.Errorf("the board scroll script does not contain %q", want)
+		}
+	}
+}
+
+// TestCellFieldName reads the field a project table cell holds out of the CSS
+// custom property GitHub sizes its column with, which is the only place a
+// cell's field name still appears.
+func TestCellFieldName(t *testing.T) {
+	cases := map[string]string{
+		"display: inline-block; width: calc(var(--column-Status-width) * 1px);":         "Status",
+		"width: calc(var(--column-Sub-issues-progress-width) * 1px);":                   "Sub issues progress",
+		"width: calc(var(--column-row-drag-handle-width) * 1px);":                       "row drag handle",
+		"display: inline-block; height: var(--table-cell-height); white-space: nowrap;": "",
+		"": "",
+	}
+	for style, want := range cases {
+		node := &html.Node{Type: html.ElementNode, Data: "div", Attr: []html.Attribute{{Key: "style", Val: style}}}
+		if got := cellFieldName(node); got != want {
+			t.Errorf("cellFieldName(%q) = %q, want %q", style, got, want)
 		}
 	}
 }
