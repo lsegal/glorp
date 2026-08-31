@@ -145,6 +145,11 @@ func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions
 	if w == nil || browser == nil {
 		return
 	}
+	// Every page load the run makes goes through one queue, so a tick that
+	// reloads many targets staggers its requests rather than firing them all
+	// at once (issue #450). It is attached to the browser rather than to any
+	// reader because the burst is the sum of what all the readers do.
+	browser.SetLoadQueue(newBrowserLoadQueue(w.Interval, w.logf))
 	var vision *browserVision
 	if options.Vision {
 		runner, _ := w.Runner.(CommandRunner)

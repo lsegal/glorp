@@ -32,6 +32,11 @@ type Browser struct {
 	mu     sync.Mutex
 	tabs   map[string]*BrowserTab
 	closed bool
+	// queue paces the page loads every tab of this browser makes, so a tick
+	// that reloads many targets trickles its requests out instead of firing
+	// them all at once (issue #450). It is nil for a browser that is not
+	// polling on a timer, such as the one `glorp auth` signs in through.
+	queue *browserLoadQueue
 	// restored records that this browser process has already been given the
 	// sign-in saved by the last one, so it happens once per process.
 	restored bool
@@ -57,6 +62,18 @@ func startBrowser(ctx context.Context, config browserConfig) (*Browser, error) {
 		tabs:        map[string]*BrowserTab{},
 	}
 	return browser, nil
+}
+
+// SetLoadQueue attaches the run's shared page-load queue, which every tab this
+// browser opens paces its navigations and reloads through. It is set before
+// anything is read, because tabs are opened lazily on their first read.
+func (b *Browser) SetLoadQueue(queue *browserLoadQueue) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.queue = queue
+	for _, tab := range b.tabs {
+		tab.paceWith(b.ctx, queue)
+	}
 }
 
 // Suspend stops the browser process and drops its tabs, leaving the Browser
@@ -121,6 +138,9 @@ func (b *Browser) Tab(name string) (*BrowserTab, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open browser tab for %s: %w", name, err)
 	}
+	// Every tab loads pages through the run's one queue, so the stagger is a
+	// property of the run rather than of any single target's tab.
+	tab.paceWith(b.ctx, b.queue)
 	b.tabs[name] = tab
 	// The sign-in saved by the last browser process is put back on the first
 	// tab this one opens, before it navigates anywhere, so the run's first page
@@ -212,6 +232,46 @@ type BrowserTab struct {
 	statusMu  sync.Mutex
 	mainFrame cdp.FrameID
 	status    int
+
+	// queue paces this tab's page loads, and paceCtx is the run's context, so
+	// a tab waiting for its slot is released when the run shuts down. A nil
+	// queue loads pages the moment it is asked to. loadURL is the URL the tab
+	// was last pointed at, which is what a reload is loading and so how the
+	// queue counts it.
+	queue   *browserLoadQueue
+	paceCtx context.Context
+	loadURL string
+}
+
+// paceWith points the tab at the queue its page loads are staggered by.
+func (t *BrowserTab) paceWith(ctx context.Context, queue *browserLoadQueue) {
+	t.statusMu.Lock()
+	defer t.statusMu.Unlock()
+	t.queue, t.paceCtx = queue, ctx
+}
+
+// awaitLoadSlot holds a load of url until the run's queue says its turn has
+// come, and remembers the URL so a later reload queues as the same page. A run
+// being shut down mid-wait stops waiting: the load still goes ahead, and the
+// cancelled browser context fails it the same way it fails any other command
+// issued during shutdown.
+//
+// An empty url is a reload of a tab that has never navigated, which is not a
+// page glorp asked for; it is paced under one shared key rather than being
+// counted as demand of its own.
+func (t *BrowserTab) awaitLoadSlot(url string) {
+	t.statusMu.Lock()
+	if url == "" {
+		url = t.loadURL
+	} else {
+		t.loadURL = url
+	}
+	queue, ctx := t.queue, t.paceCtx
+	t.statusMu.Unlock()
+	if queue == nil {
+		return
+	}
+	queue.wait(ctx, url)
 }
 
 // newBrowserTab opens a tab and starts watching it for the status of its
@@ -289,6 +349,7 @@ func (t *BrowserTab) HTTPStatus() int {
 
 // Navigate points the tab at a URL.
 func (t *BrowserTab) Navigate(url string) error {
+	t.awaitLoadSlot(url)
 	t.clearStatus()
 	return t.run(chromedp.Navigate(url))
 }
@@ -296,6 +357,7 @@ func (t *BrowserTab) Navigate(url string) error {
 // Reload loads the tab's current URL again, which is how a watched page is
 // polled without opening anything new.
 func (t *BrowserTab) Reload() error {
+	t.awaitLoadSlot("")
 	t.clearStatus()
 	return t.run(chromedp.Reload())
 }
