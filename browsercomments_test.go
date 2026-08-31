@@ -152,6 +152,32 @@ func TestBrowserCommentsSortIntoCreationOrder(t *testing.T) {
 	}
 }
 
+// Comments sharing a timestamp are ordered by their position in the list, which
+// is how the handshake breaks a tie between a claim and the withdrawal posted
+// moments after it (issue #443), so the page's own order has to survive the
+// sort rather than being shuffled by it.
+func TestBrowserCommentsKeepPageOrderForTiedTimestamps(t *testing.T) {
+	page := &fakeCommentPage{results: []browserCommentList{{
+		Recognized: true,
+		Comments: []browserCommentRow{
+			{ID: "1", Author: "bob", Body: "Starting work on this issue /glorp:BBBB", CreatedAt: "2026-08-30T10:00:00Z"},
+			{ID: "2", Author: "bob", Body: "Releasing this issue /glorp:BBBB", CreatedAt: "2026-08-30T10:00:00Z"},
+		},
+	}}}
+	source := newTestCommentSource(page, newFakeCommentClient(), nil)
+
+	comments, err := source.ListComments(context.Background(), "owner/repo", 7)
+	if err != nil {
+		t.Fatalf("ListComments: %v", err)
+	}
+	if kind, _, ok := parseClaim(comments[1].Body); !ok || kind != claimReleasing {
+		t.Fatalf("the withdrawal is no longer last: %+v", comments)
+	}
+	if _, _, _, ok := latestClaimByOther(comments, "SELF"); ok {
+		t.Fatal("a withdrawn claim still reads as owned, so the page order was lost")
+	}
+}
+
 // A conversation that rendered with nothing on it is an empty comment list,
 // not a failure, and must not cost an API call either.
 func TestBrowserCommentsEmptyConversationIsNotAFallback(t *testing.T) {
