@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeCookieJar stands in for a browser's cookie store.
@@ -37,20 +38,23 @@ func (f *fakeCookieJar) writeCookies(cookies []sessionCookie) error {
 	return nil
 }
 
+// aYearFromNow is the expiry GitHub gives its `logged_in` crumb, as seconds
+// since the epoch — the form the browser reports and the file stores.
+func aYearFromNow() float64 {
+	return float64(time.Now().Add(365 * 24 * time.Hour).UnixNano()) / float64(time.Second)
+}
+
 func githubSessionCookies() []sessionCookie {
 	return []sessionCookie{
 		{Name: "user_session", Value: "abc", Domain: "github.com", Path: "/", Secure: true, HTTPOnly: true, SameSite: "Lax", session: true},
-		{Name: "logged_in", Value: "yes", Domain: ".github.com", Path: "/"},
+		{Name: "logged_in", Value: "yes", Domain: ".github.com", Path: "/", Expires: aYearFromNow()},
 		{Name: "dotcom_user", Value: "octocat", Domain: "github.com", Path: "/", session: true},
 	}
 }
 
-func TestSaveSessionCookiesKeepsOnlySessionCookies(t *testing.T) {
-	profile := t.TempDir()
-	jar := &fakeCookieJar{jar: githubSessionCookies()}
-	if err := saveSessionCookies(profile, jar); err != nil {
-		t.Fatalf("saveSessionCookies: %v", err)
-	}
+// readSavedCookies decodes the file a save left in a profile.
+func readSavedCookies(t *testing.T, profile string) []sessionCookie {
+	t.Helper()
 	data, err := os.ReadFile(sessionCookiePath(profile))
 	if err != nil {
 		t.Fatalf("read saved cookies: %v", err)
@@ -59,14 +63,58 @@ func TestSaveSessionCookiesKeepsOnlySessionCookies(t *testing.T) {
 	if err := json.Unmarshal(data, &saved); err != nil {
 		t.Fatalf("decode saved cookies: %v", err)
 	}
-	if len(saved) != 2 {
-		t.Fatalf("saved %d cookies, want the 2 session ones: %+v", len(saved), saved)
+	return saved
+}
+
+// savedNames lists the cookies in a save, in order.
+func savedNames(cookies []sessionCookie) string {
+	names := make([]string, 0, len(cookies))
+	for _, cookie := range cookies {
+		names = append(names, cookie.Name)
 	}
-	if saved[0].Name != "user_session" || saved[1].Name != "dotcom_user" {
-		t.Fatalf("saved the wrong cookies: %+v", saved)
+	return strings.Join(names, ",")
+}
+
+// TestSaveSessionCookiesKeepsTheExpiringCrumbsToo is issue #422: the browser
+// only commits an expiring cookie to the profile's own database on a batch
+// timer, so a save that skipped them lost GitHub's sign-in crumbs whenever the
+// browser process was stopped before that timer fired.
+func TestSaveSessionCookiesKeepsTheExpiringCrumbsToo(t *testing.T) {
+	profile := t.TempDir()
+	jar := &fakeCookieJar{jar: githubSessionCookies()}
+	if err := saveSessionCookies(profile, jar); err != nil {
+		t.Fatalf("saveSessionCookies: %v", err)
+	}
+	saved := readSavedCookies(t, profile)
+	if got := savedNames(saved); got != "user_session,logged_in,dotcom_user" {
+		t.Fatalf("saved %s, want the session cookies and the expiring crumb", got)
 	}
 	if saved[0].Value != "abc" || !saved[0].Secure || !saved[0].HTTPOnly || saved[0].SameSite != "Lax" {
 		t.Fatalf("cookie attributes were not carried: %+v", saved[0])
+	}
+	if saved[0].Expires != 0 {
+		t.Fatalf("session cookie was given an expiry: %+v", saved[0])
+	}
+	if saved[1].Expires == 0 {
+		t.Fatalf("expiring crumb lost its expiry, so it would be replayed as a session cookie: %+v", saved[1])
+	}
+}
+
+// TestSaveSessionCookiesDropsAnAlreadyExpiredCookie keeps the save from writing
+// back a crumb whose expiry has already passed: the browser would be entitled
+// to reject it, and replaying it is exactly the stale state the file avoids.
+func TestSaveSessionCookiesDropsAnAlreadyExpiredCookie(t *testing.T) {
+	profile := t.TempDir()
+	expired := float64(time.Now().Add(-time.Hour).UnixNano()) / float64(time.Second)
+	jar := &fakeCookieJar{jar: []sessionCookie{
+		{Name: "user_session", Value: "abc", Domain: "github.com", session: true},
+		{Name: "_device_id", Value: "stale", Domain: "github.com", Expires: expired},
+	}}
+	if err := saveSessionCookies(profile, jar); err != nil {
+		t.Fatalf("saveSessionCookies: %v", err)
+	}
+	if got := savedNames(readSavedCookies(t, profile)); got != "user_session" {
+		t.Fatalf("saved %s, want only the live sign-in", got)
 	}
 }
 
@@ -95,8 +143,9 @@ func TestSaveSessionCookiesClearsFileWhenSignedOut(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`[{"name":"user_session"}]`), 0o600); err != nil {
 		t.Fatalf("seed saved cookies: %v", err)
 	}
-	// Only persistent crumbs left: the profile was signed out.
-	jar := &fakeCookieJar{jar: []sessionCookie{{Name: "logged_in", Domain: ".github.com"}}}
+	// Only persistent crumbs left: the profile was signed out. They say who was
+	// signed in, not that anyone is, so there is nothing left to carry.
+	jar := &fakeCookieJar{jar: []sessionCookie{{Name: "logged_in", Domain: ".github.com", Expires: aYearFromNow()}}}
 	if err := saveSessionCookies(profile, jar); err != nil {
 		t.Fatalf("saveSessionCookies: %v", err)
 	}
@@ -138,14 +187,35 @@ func TestRestoreSessionCookiesRoundTrips(t *testing.T) {
 	if err := restoreSessionCookies(profile, target); err != nil {
 		t.Fatalf("restoreSessionCookies: %v", err)
 	}
-	if len(target.written) != 2 {
-		t.Fatalf("restored %d cookies, want 2: %+v", len(target.written), target.written)
+	if got := savedNames(target.written); got != "user_session,logged_in,dotcom_user" {
+		t.Fatalf("restored %s, want every carried cookie: %+v", got, target.written)
 	}
 	if target.written[0].Name != "user_session" || target.written[0].Value != "abc" {
 		t.Fatalf("restored the wrong cookie: %+v", target.written[0])
 	}
 	if !target.written[0].Secure || !target.written[0].HTTPOnly || target.written[0].Path != "/" {
 		t.Fatalf("restored cookie lost its attributes: %+v", target.written[0])
+	}
+	if target.written[1].Expires == 0 {
+		t.Fatalf("restored crumb lost its expiry: %+v", target.written[1])
+	}
+}
+
+// TestRestoreSessionCookiesSkipsAnExpiredCookie covers a file saved long enough
+// ago that one of its crumbs has since expired: the sign-in beside it is still
+// worth restoring, the expired one is not replayed.
+func TestRestoreSessionCookiesSkipsAnExpiredCookie(t *testing.T) {
+	profile := t.TempDir()
+	saved := `[{"name":"user_session","value":"abc"},{"name":"logged_in","value":"yes","expires":1000000000}]`
+	if err := os.WriteFile(sessionCookiePath(profile), []byte(saved), 0o600); err != nil {
+		t.Fatalf("seed saved cookies: %v", err)
+	}
+	target := &fakeCookieJar{}
+	if err := restoreSessionCookies(profile, target); err != nil {
+		t.Fatalf("restoreSessionCookies: %v", err)
+	}
+	if got := savedNames(target.written); got != "user_session" {
+		t.Fatalf("restored %s, want only the cookie that has not expired", got)
 	}
 }
 
@@ -221,11 +291,7 @@ func TestBrowserSessionSurvivesAProcessRestart(t *testing.T) {
 	if err := restoreSessionCookies(profile, next); err != nil {
 		t.Fatalf("restore on browser start: %v", err)
 	}
-	var names []string
-	for _, cookie := range next.written {
-		names = append(names, cookie.Name)
-	}
-	if strings.Join(names, ",") != "user_session,dotcom_user" {
-		t.Fatalf("second browser process came up with cookies %v, want the sign-in", names)
+	if got := savedNames(next.written); got != "user_session,logged_in,dotcom_user" {
+		t.Fatalf("second browser process came up with cookies %s, want the sign-in", got)
 	}
 }
