@@ -266,6 +266,56 @@ func (w *Glorp) claimStanding(ctx context.Context, target ownershipTarget) (clai
 	return standing, nil
 }
 
+// handshakeRecord remembers an ownership negotiation this instance ran to
+// completion, and what it decided. The reap's other guards are all derived
+// from GitHub's own comments; this one is local, so a negotiation cannot be
+// re-opened just because a comment read disagrees with what already happened
+// (issue #432).
+type handshakeRecord struct {
+	At time.Time
+	// Claimed reports that the negotiation ended with this instance owning
+	// the work, rather than standing down for another instance.
+	Claimed bool
+}
+
+// handshakeKey names the target a handshake record belongs to. A negotiation
+// that moved from the issue to a pull request opened for it is a different
+// negotiation, so the number is part of the key.
+func handshakeKey(target ownershipTarget) string {
+	return fmt.Sprintf("%s#%d", target.Repo, target.Number)
+}
+
+// recordHandshake stores the outcome of a negotiation this instance just ran,
+// so later reaps on the same target reuse the decision instead of asking the
+// same question again.
+func (w *Glorp) recordHandshake(target ownershipTarget, claimed bool) {
+	w.handshakeMu.Lock()
+	defer w.handshakeMu.Unlock()
+	if w.handshakes == nil {
+		w.handshakes = make(map[string]handshakeRecord)
+	}
+	w.handshakes[handshakeKey(target)] = handshakeRecord{At: time.Now(), Claimed: claimed}
+}
+
+// settledHandshake reports a negotiation this instance already ran on target
+// recently enough that re-running it would only repost the same ask and the
+// same claim. Records older than the staleness window are dropped so genuinely
+// abandoned work is renegotiated rather than held forever.
+func (w *Glorp) settledHandshake(target ownershipTarget) (handshakeRecord, time.Duration, bool) {
+	w.handshakeMu.Lock()
+	defer w.handshakeMu.Unlock()
+	record, ok := w.handshakes[handshakeKey(target)]
+	if !ok {
+		return handshakeRecord{}, 0, false
+	}
+	age := time.Since(record.At)
+	if age >= w.staleClaimAfter() {
+		delete(w.handshakes, handshakeKey(target))
+		return handshakeRecord{}, 0, false
+	}
+	return record, age, true
+}
+
 // ownershipTarget identifies where a handoff negotiation should take place:
 // the issue itself, or an already open draft pull request linked to it.
 type ownershipTarget struct {
