@@ -186,19 +186,29 @@ func claimedByOther(comments []Comment, after time.Time, self Identity) (Identit
 	return "", false
 }
 
-// latestClaimMatching returns the creation time and signing identity of the
-// most recent standing claim whose signer satisfies match. A claim stands only
-// while it is that signer's newest handoff comment: an instance that released
-// the work (issue #434) holds nothing, so its withdrawn claim is not reported
-// as ownership even though the claim comment is still on the ticket.
-func latestClaimMatching(comments []Comment, match func(Identity) bool) (time.Time, Identity, bool) {
+// latestClaimMatching returns the creation time, position, and signing
+// identity of the most recent standing claim whose signer satisfies match. A
+// claim stands only while it is that signer's newest handoff comment: an
+// instance that released the work (issue #434) holds nothing, so its withdrawn
+// claim is not reported as ownership even though the claim comment is still on
+// the ticket.
+//
+// Recency is decided by timestamp and, for comments sharing one, by their
+// order in the list, which GitHub returns in creation order. Two comments
+// posted in quick succession can carry the same timestamp -- Windows's wall
+// clock has a resolution of roughly 15ms, and a withdrawal posted right after
+// the claim it withdraws lands well inside that -- so ordering on time alone
+// let the superseded claim win (issue #443). The returned position lets a
+// caller break the same tie against a claim signed by another identity.
+func latestClaimMatching(comments []Comment, match func(Identity) bool) (time.Time, int, Identity, bool) {
 	type standingClaim struct {
 		at       time.Time
+		index    int
 		released bool
 	}
 	newest := make(map[Identity]standingClaim)
 	order := make([]Identity, 0, len(comments))
-	for _, comment := range comments {
+	for index, comment := range comments {
 		kind, id, ok := parseClaim(comment.Body)
 		if !ok || !match(id) {
 			continue
@@ -211,12 +221,13 @@ func latestClaimMatching(comments []Comment, match func(Identity) bool) (time.Ti
 		prev, seen := newest[id]
 		if !seen {
 			order = append(order, id)
-		} else if !comment.CreatedAt.After(prev.at) {
+		} else if comment.CreatedAt.Before(prev.at) {
 			continue
 		}
-		newest[id] = standingClaim{at: comment.CreatedAt, released: kind == claimReleasing}
+		newest[id] = standingClaim{at: comment.CreatedAt, index: index, released: kind == claimReleasing}
 	}
 	var latest time.Time
+	var latestIndex int
 	var owner Identity
 	found := false
 	for _, id := range order {
@@ -224,25 +235,35 @@ func latestClaimMatching(comments []Comment, match func(Identity) bool) (time.Ti
 		if claim.released {
 			continue
 		}
-		if !found || claim.at.After(latest) {
-			latest, owner, found = claim.at, id, true
+		if !found || claimNewer(claim.at, claim.index, latest, latestIndex) {
+			latest, latestIndex, owner, found = claim.at, claim.index, id, true
 		}
 	}
-	return latest, owner, found
+	return latest, latestIndex, owner, found
 }
 
-// latestClaimByOther returns the creation time and signing identity of the
-// most recent starting, continuing, or presence claim signed by an identity
-// other than self.
-func latestClaimByOther(comments []Comment, self Identity) (time.Time, Identity, bool) {
+// claimNewer reports whether the claim at (at, index) supersedes the one at
+// (other, otherIndex). Both positions must index the same comment list, whose
+// order breaks a tie between claims sharing a timestamp.
+func claimNewer(at time.Time, index int, other time.Time, otherIndex int) bool {
+	if at.Equal(other) {
+		return index > otherIndex
+	}
+	return at.After(other)
+}
+
+// latestClaimByOther returns the creation time, position, and signing identity
+// of the most recent starting, continuing, or presence claim signed by an
+// identity other than self.
+func latestClaimByOther(comments []Comment, self Identity) (time.Time, int, Identity, bool) {
 	return latestClaimMatching(comments, func(id Identity) bool { return id != self })
 }
 
-// latestClaimBySelf returns the creation time of the most recent starting,
-// continuing, or presence claim this instance signed itself.
-func latestClaimBySelf(comments []Comment, self Identity) (time.Time, bool) {
-	at, _, ok := latestClaimMatching(comments, func(id Identity) bool { return self != "" && id == self })
-	return at, ok
+// latestClaimBySelf returns the creation time and position of the most recent
+// starting, continuing, or presence claim this instance signed itself.
+func latestClaimBySelf(comments []Comment, self Identity) (time.Time, int, bool) {
+	at, index, _, ok := latestClaimMatching(comments, func(id Identity) bool { return self != "" && id == self })
+	return at, index, ok
 }
 
 // claimStanding summarizes the ownership claims standing on a target: the
@@ -277,16 +298,19 @@ func (w *Glorp) claimStanding(ctx context.Context, target ownershipTarget) (clai
 		return standing, err
 	}
 	stale := w.staleClaimAfter()
-	if claimedAt, owner, ok := latestClaimByOther(comments, w.Identity); ok {
+	var ownerAt time.Time
+	var ownerIndex int
+	if claimedAt, index, owner, ok := latestClaimByOther(comments, w.Identity); ok {
 		standing.Owner = owner
 		standing.OwnerAge = time.Since(claimedAt)
 		standing.OwnerClaimed = true
 		standing.OwnerFresh = standing.OwnerAge < stale
+		ownerAt, ownerIndex = claimedAt, index
 	}
-	if claimedAt, ok := latestClaimBySelf(comments, w.Identity); ok {
+	if claimedAt, index, ok := latestClaimBySelf(comments, w.Identity); ok {
 		standing.SelfAge = time.Since(claimedAt)
 		standing.SelfHolds = standing.SelfAge < stale &&
-			(!standing.OwnerClaimed || standing.SelfAge < standing.OwnerAge)
+			(!standing.OwnerClaimed || claimNewer(claimedAt, index, ownerAt, ownerIndex))
 	}
 	return standing, nil
 }

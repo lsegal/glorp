@@ -58,10 +58,19 @@ type BrowserBoard struct {
 	sleep          func(context.Context, time.Duration) bool
 }
 
+// The settle budget is 15s, matching the one the repository issues page
+// settled on in issue #427. Measured against real boards under this reader --
+// two public organization boards and a signed-in user board, on cold and warm
+// profiles -- GitHub's own client render finished between 0.7s and 1.9s, so
+// the old 5s bound left under three times the slowest measured render for a
+// slower machine, a colder cache, or a busier GitHub to fit into, and a board
+// that was merely slow was reported as one that never rendered. A board that
+// has already drawn costs a single harvest and no wait, so the longer budget
+// is only ever spent by a board that has not rendered (issue #431).
 const (
 	defaultBoardMaxItems       = 1000
 	defaultBoardMaxScrolls     = 40
-	defaultBoardSettleAttempts = 20
+	defaultBoardSettleAttempts = 60
 	defaultBoardSettleDelay    = 250 * time.Millisecond
 )
 
