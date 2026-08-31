@@ -309,11 +309,11 @@ func TestLatestClaimByOtherPicksNewestForeignClaim(t *testing.T) {
 		{Body: signComment(startingClaimBody, "SELF"), CreatedAt: now},
 		{Body: "unrelated chatter", CreatedAt: now},
 	}
-	at, owner, ok := latestClaimByOther(comments, "SELF")
+	at, _, owner, ok := latestClaimByOther(comments, "SELF")
 	if !ok || !at.Equal(now.Add(-time.Hour)) || owner != "OTHER" {
 		t.Fatalf("latestClaimByOther = (%v, %q, %v), want the 1h-old continuing claim from OTHER", at, owner, ok)
 	}
-	if _, _, ok := latestClaimByOther(comments[3:], "SELF"); ok {
+	if _, _, _, ok := latestClaimByOther(comments[3:], "SELF"); ok {
 		t.Fatalf("own claims and non-protocol comments should not count as a foreign claim")
 	}
 }
@@ -839,13 +839,13 @@ func TestLatestClaimMatchingIgnoresWithdrawnClaims(t *testing.T) {
 		{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: claimed},
 		{Body: signComment(releaseClaimBody, "OTHER"), CreatedAt: claimed.Add(time.Second)},
 	}
-	if at, owner, ok := latestClaimByOther(comments, "SELF"); ok {
+	if at, _, owner, ok := latestClaimByOther(comments, "SELF"); ok {
 		t.Fatalf("latestClaimByOther = (%v, %q, true), want no standing claim after the release", at, owner)
 	}
 	// A claim posted after a release stands again: the withdrawal only
 	// retires the claims that came before it.
 	comments = append(comments, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: claimed.Add(2 * time.Second)})
-	if _, owner, ok := latestClaimByOther(comments, "SELF"); !ok || owner != "OTHER" {
+	if _, _, owner, ok := latestClaimByOther(comments, "SELF"); !ok || owner != "OTHER" {
 		t.Fatalf("latestClaimByOther = (%q, %v), want OTHER to own the work again after re-claiming", owner, ok)
 	}
 }
@@ -897,4 +897,57 @@ func TestReleaseOwnershipLogsAFailedWithdrawal(t *testing.T) {
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs}
 	w.releaseOwnership(context.Background(), ownershipTarget{Repo: "o/r", Number: 7}, "the dispatch never happened")
 	requireLogged(t, logs.String(), "issue o/r#7 claim not withdrawn after the dispatch never happened", "may still read as claimed by SELF")
+}
+
+// A withdrawal posted in the same clock tick as the claim it withdraws must
+// still retire that claim. Windows's wall clock resolves to roughly 15ms, so
+// the two comments routinely carry one timestamp and ordering on time alone
+// let the superseded claim win (issue #443).
+func TestLatestClaimMatchingBreaksTimestampTiesOnCommentOrder(t *testing.T) {
+	at := time.Now().Add(-time.Minute)
+	comments := []Comment{
+		{Body: signComment(askClaimBody, "OTHER"), CreatedAt: at},
+		{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: at},
+		{Body: signComment(releaseClaimBody, "OTHER"), CreatedAt: at},
+	}
+	if claimedAt, _, owner, ok := latestClaimByOther(comments, "SELF"); ok {
+		t.Fatalf("latestClaimByOther = (%v, %q, true), want the same-timestamp withdrawal to retire the claim", claimedAt, owner)
+	}
+	// The reverse order must stand: a re-claim posted after a withdrawal in
+	// the same tick owns the work again.
+	comments = append(comments, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: at})
+	if _, _, owner, ok := latestClaimByOther(comments, "SELF"); !ok || owner != "OTHER" {
+		t.Fatalf("latestClaimByOther = (%q, %v), want OTHER to own the work after the same-timestamp re-claim", owner, ok)
+	}
+}
+
+// Two instances claiming in the same clock tick are ordered by the comments
+// themselves, so the last claim posted wins whichever instance signed it.
+func TestClaimStandingBreaksTimestampTiesBetweenInstances(t *testing.T) {
+	at := time.Now().Add(-time.Minute)
+	target := ownershipTarget{Repo: "o/r", Number: 7}
+
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: at})
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: at})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	standing, err := w.claimStanding(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if standing.SelfHolds || !standing.OwnerClaimed || standing.Owner != "OTHER" {
+		t.Fatalf("claimStanding = %+v, want OTHER to hold the ticket it claimed last", standing)
+	}
+
+	comments = newFakeCommentClient()
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: at})
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: at})
+	w = &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	standing, err = w.claimStanding(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !standing.SelfHolds {
+		t.Fatalf("claimStanding = %+v, want SELF to hold the ticket it claimed last", standing)
+	}
 }
