@@ -115,6 +115,23 @@ func explicitFlags(flags *flag.FlagSet) map[string]bool {
 	return set
 }
 
+// browserTabIdleFloor is the shortest a tab is left open with nothing reading
+// it, so a short poll interval does not close and reopen tabs on work that is
+// merely between reads.
+const browserTabIdleFloor = time.Minute
+
+// browserTabIdleTimeout is how long a tab may go unread before the run closes
+// it. It is measured in poll intervals, because a page glorp still watches is
+// re-read once per tick: missing several ticks in a row is what tells a page
+// apart from one nothing is reading any more.
+func browserTabIdleTimeout(interval time.Duration) time.Duration {
+	idle := 3 * interval
+	if idle < browserTabIdleFloor {
+		idle = browserTabIdleFloor
+	}
+	return idle
+}
+
 // applyBrowserSources swaps the reads a run does for their browser-backed
 // equivalents. Browser mode reads the issue list off GitHub's own issues page
 // (issue #377) and a project board off its Projects v2 page (issue #378), both
@@ -150,6 +167,11 @@ func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions
 	// at once (issue #450). It is attached to the browser rather than to any
 	// reader because the burst is the sum of what all the readers do.
 	browser.SetLoadQueue(newBrowserLoadQueue(w.Interval, w.logf))
+	// A tab glorp has stopped reading is closed rather than left open for the
+	// rest of the run (issue #461). Every watched target is re-read on every
+	// tick, so what ages out is the conversation of an issue nothing is
+	// working any more.
+	browser.SetTabIdleTimeout(browserTabIdleTimeout(w.Interval), w.logf)
 	var vision *browserVision
 	if options.Vision {
 		runner, _ := w.Runner.(CommandRunner)

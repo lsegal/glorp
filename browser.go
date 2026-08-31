@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
@@ -32,6 +33,19 @@ type Browser struct {
 	mu     sync.Mutex
 	tabs   map[string]*BrowserTab
 	closed bool
+	// used is when each open tab was last handed out, idle is how long a tab
+	// may go unread before it is closed, and resume is the page a closed tab
+	// was showing so its replacement can pick the same one up again. Together
+	// they retire a tab glorp has stopped reading -- the conversation of an
+	// issue whose agent has finished, most visibly -- rather than leaving its
+	// page open for the rest of the run (issue #461). A zero idle never
+	// retires anything, which is what a browser that is not polling on a timer
+	// (the one `glorp auth` signs in through) wants.
+	used   map[string]time.Time
+	idle   time.Duration
+	resume map[string]string
+	now    func() time.Time
+	logf   func(string, ...interface{})
 	// queue paces the page loads every tab of this browser makes, so a tick
 	// that reloads many targets trickles its requests out instead of firing
 	// them all at once (issue #450). It is nil for a browser that is not
@@ -60,6 +74,8 @@ func startBrowser(ctx context.Context, config browserConfig) (*Browser, error) {
 		allocCtx:    allocCtx,
 		cancelAlloc: cancelAlloc,
 		tabs:        map[string]*BrowserTab{},
+		used:        map[string]time.Time{},
+		resume:      map[string]string{},
 	}
 	return browser, nil
 }
@@ -107,6 +123,7 @@ func (b *Browser) relaunch() (bool, error) {
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(b.ctx, process.wsURL, chromedp.NoModifyURL)
 	b.cmd, b.allocCtx, b.cancelAlloc = process, allocCtx, cancelAlloc
 	b.tabs = map[string]*BrowserTab{}
+	b.used, b.resume = map[string]time.Time{}, map[string]string{}
 	b.closed = false
 	// The new process holds none of the old one's session cookies, so the
 	// sign-in is carried into it again on its first tab (issue #414).
@@ -126,22 +143,58 @@ func (b *Browser) Profile() string {
 // Tab returns the tab glorp drives for a target, opening it on first use and
 // reusing it afterwards. Names are the caller's own: one per watched target.
 func (b *Browser) Tab(name string) (*BrowserTab, error) {
+	tab, retired, err := b.tabFor(name)
+	// Retired tabs are closed outside the browser lock, because closing one
+	// waits for whatever it was last doing to finish and no other reader
+	// should be held up by that.
+	for _, closing := range retired {
+		closing.tab.close()
+		b.logTabRetired(closing.name, closing.idle)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return tab, nil
+}
+
+// retiredTab is a tab the reap closed, kept only long enough to close and
+// report it once the browser lock has been released.
+type retiredTab struct {
+	tab  *BrowserTab
+	name string
+	idle time.Duration
+}
+
+// tabFor does Tab's bookkeeping under the browser lock: it hands out the named
+// tab, opening one when there is none, and names the tabs that have gone idle
+// long enough to be closed.
+func (b *Browser) tabFor(name string) (*BrowserTab, []retiredTab, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
-		return nil, fmt.Errorf("browser is closed")
+		return nil, nil, fmt.Errorf("browser is closed")
 	}
+	now := b.clock()
 	if tab, ok := b.tabs[name]; ok {
-		return tab, nil
+		b.used[name] = now
+		return tab, b.reapIdleTabs(name, now), nil
 	}
 	tab, err := b.openTab()
 	if err != nil {
-		return nil, fmt.Errorf("open browser tab for %s: %w", name, err)
+		return nil, nil, fmt.Errorf("open browser tab for %s: %w", name, err)
 	}
 	// Every tab loads pages through the run's one queue, so the stagger is a
 	// property of the run rather than of any single target's tab.
 	tab.paceWith(b.ctx, b.queue)
+	// A tab reopened under a name that was retired starts out pointed at the
+	// page the old one was showing, so a reader that polls by reloading an
+	// unchanged URL loads that page again instead of reloading a blank tab.
+	if url := b.resume[name]; url != "" {
+		delete(b.resume, name)
+		tab.resumeAt(url)
+	}
 	b.tabs[name] = tab
+	b.used[name] = now
 	// The sign-in saved by the last browser process is put back on the first
 	// tab this one opens, before it navigates anywhere, so the run's first page
 	// load is already made as the signed-in user (issue #414). It rides the tab
@@ -151,7 +204,73 @@ func (b *Browser) Tab(name string) (*BrowserTab, error) {
 		b.restored = true
 		_ = b.restoreSession(tab)
 	}
-	return tab, nil
+	return tab, b.reapIdleTabs(name, now), nil
+}
+
+// SetTabIdleTimeout sets how long a tab may go unread before the browser closes
+// it, and where the closures are logged. A run watching a handful of targets
+// reloads their pages every tick, so only a page glorp has genuinely stopped
+// reading ages out.
+func (b *Browser) SetTabIdleTimeout(idle time.Duration, logf func(string, ...interface{})) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.idle, b.logf = idle, logf
+}
+
+// reapIdleTabs drops every tab that has gone unread for the idle timeout,
+// returning them for the caller to close once the lock is released. keep is the
+// tab being handed out, which is never retired however long it sat idle before
+// this read.
+//
+// The last remaining tab is kept whatever its age: Chrome exits when its final
+// page target closes, and the sign-in a run saves on shutdown is read off a tab
+// of the still-running browser.
+func (b *Browser) reapIdleTabs(keep string, now time.Time) []retiredTab {
+	if b.idle <= 0 {
+		return nil
+	}
+	var retired []retiredTab
+	for name, tab := range b.tabs {
+		if len(b.tabs) <= 1 {
+			break
+		}
+		if name == keep {
+			continue
+		}
+		idle := now.Sub(b.used[name])
+		if idle < b.idle {
+			continue
+		}
+		delete(b.tabs, name)
+		delete(b.used, name)
+		// Remembered so a later read of the same target reopens on the page it
+		// was left on rather than on a blank tab.
+		if url := tab.currentURL(); url != "" {
+			b.resume[name] = url
+		}
+		retired = append(retired, retiredTab{tab: tab, name: name, idle: idle})
+	}
+	return retired
+}
+
+// logTabRetired reports a closed tab, so a run that quietly drops a page it had
+// open says so.
+func (b *Browser) logTabRetired(name string, idle time.Duration) {
+	b.mu.Lock()
+	logf := b.logf
+	b.mu.Unlock()
+	if logf == nil {
+		return
+	}
+	logf("closing browser tab for %s: unread for %s", name, formatInterval(idle))
+}
+
+// clock reports the browser's current time, which tests replace.
+func (b *Browser) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
 }
 
 // anyTab returns one of the browser's open tabs, or nil when it has none.
@@ -211,6 +330,7 @@ func (b *Browser) Close() error {
 		tabs = append(tabs, tab)
 	}
 	b.tabs = nil
+	b.used, b.resume = nil, nil
 	b.mu.Unlock()
 	for _, tab := range tabs {
 		tab.close()
@@ -241,6 +361,27 @@ type BrowserTab struct {
 	queue   *browserLoadQueue
 	paceCtx context.Context
 	loadURL string
+	// navigated records that this tab has actually loaded loadURL, which a tab
+	// reopened in place of a retired one has not: its reload navigates instead.
+	navigated bool
+}
+
+// resumeAt tells a tab which page it is meant to be showing without loading it,
+// so a reader that polls by reloading an unchanged URL navigates there on its
+// next read instead of reloading a tab that has never been anywhere.
+func (t *BrowserTab) resumeAt(url string) {
+	t.statusMu.Lock()
+	defer t.statusMu.Unlock()
+	t.loadURL = url
+	t.navigated = false
+}
+
+// currentURL is the page the tab was last pointed at, or "" when it has not
+// been pointed anywhere.
+func (t *BrowserTab) currentURL() string {
+	t.statusMu.Lock()
+	defer t.statusMu.Unlock()
+	return t.loadURL
 }
 
 // paceWith points the tab at the queue its page loads are staggered by.
@@ -351,12 +492,32 @@ func (t *BrowserTab) HTTPStatus() int {
 func (t *BrowserTab) Navigate(url string) error {
 	t.awaitLoadSlot(url)
 	t.clearStatus()
+	t.markNavigated()
 	return t.run(chromedp.Navigate(url))
+}
+
+// markNavigated records that the tab has been sent to its current URL.
+func (t *BrowserTab) markNavigated() {
+	t.statusMu.Lock()
+	defer t.statusMu.Unlock()
+	t.navigated = true
 }
 
 // Reload loads the tab's current URL again, which is how a watched page is
 // polled without opening anything new.
 func (t *BrowserTab) Reload() error {
+	// A tab that has never navigated but knows where it belongs is one that
+	// replaced a retired tab: reloading it would load nothing, so the page it
+	// is standing in for is opened instead (issue #461).
+	t.statusMu.Lock()
+	resumeURL := ""
+	if !t.navigated && t.loadURL != "" {
+		resumeURL = t.loadURL
+	}
+	t.statusMu.Unlock()
+	if resumeURL != "" {
+		return t.Navigate(resumeURL)
+	}
 	t.awaitLoadSlot("")
 	t.clearStatus()
 	return t.run(chromedp.Reload())
