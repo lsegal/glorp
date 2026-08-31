@@ -420,6 +420,25 @@ type pendingIssue struct {
 	// instance's apparent work, or a stale local record), so its ownership
 	// must be negotiated through the comment protocol before dispatch.
 	contested bool
+	// claim names the target this instance holds an ownership claim on,
+	// posted by the handoff handshake before the dispatch it announces has
+	// happened. A dispatch that is skipped after that point must withdraw the
+	// claim rather than leave the ticket owned by an idle instance (issue
+	// #434).
+	claim *ownershipTarget
+}
+
+// releasePendingClaim withdraws the ownership claim a won handshake already
+// posted for a candidate this instance turns out not to dispatch. Without it
+// the ticket stays claimed by an instance with no work record and no running
+// agent: other instances read the claim and stand down for work nobody is
+// doing (issue #434). Candidates that hold no claim of this instance's own
+// have nothing to withdraw.
+func (w *Glorp) releasePendingClaim(ctx context.Context, pending pendingIssue, reason string) {
+	if pending.claim == nil {
+		return
+	}
+	w.releaseOwnership(ctx, *pending.claim, reason)
 }
 
 // negotiateContestedIssues runs the handoff handshake for every candidate
@@ -481,6 +500,7 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 				if standing.SelfHolds {
 					w.logf("issue #%d already claimed by this instance %s ago; dispatching without re-asking", issue.Number, standing.SelfAge.Round(time.Second))
 					keep[i] = true
+					newIssues[i].claim = &target
 					return
 				}
 				if standing.OwnerFresh {
@@ -499,6 +519,7 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 					if record.Claimed {
 						w.logf("issue #%d handshake already settled %s ago in this instance's favour; dispatching without re-asking", issue.Number, age.Round(time.Second))
 						keep[i] = true
+						newIssues[i].claim = &target
 					} else {
 						w.logf("issue #%d handshake already settled %s ago for another instance; standing down without re-asking", issue.Number, age.Round(time.Second))
 					}
@@ -518,6 +539,7 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 			w.recordHandshake(target, claimed)
 			keep[i] = claimed
 			if claimed {
+				newIssues[i].claim = &target
 				w.logf("issue #%d picked up after handoff; dispatching", issue.Number)
 			} else {
 				w.logf("issue #%d ownership claimed by another instance; standing down", issue.Number)
@@ -1043,6 +1065,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if agentProvider(session.Agent) != "codex" {
 					session.ID, err = newSessionID()
 					if err != nil {
+						w.releasePendingClaim(ctx, pending, "creating its session identifier failed, so it was never dispatched")
 						return err
 					}
 				}
@@ -1050,6 +1073,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if w.Status != nil {
 				if err := w.Status.SetIssueStatus(ctx, issue.Target, issue, "In Progress"); err != nil {
 					w.logf("issue #%d not dispatched; failed to set project status: %v", issue.Number, err)
+					w.releasePendingClaim(ctx, pending, "setting the project status failed, so it was never dispatched")
 					continue
 				}
 			}
