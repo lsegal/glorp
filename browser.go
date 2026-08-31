@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -215,7 +217,7 @@ type BrowserTab struct {
 // newBrowserTab opens a tab and starts watching it for the status of its
 // main-frame navigations.
 func newBrowserTab(allocCtx context.Context, opts ...chromedp.ContextOption) (*BrowserTab, error) {
-	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
+	ctx, cancel := chromedp.NewContext(allocCtx, append([]chromedp.ContextOption{chromedp.WithErrorf(browserErrorf)}, opts...)...)
 	tab := &BrowserTab{ctx: ctx, cancel: cancel}
 	// Network events carry the status code, and the frame tree identifies which
 	// of them belong to the tab itself rather than to an embedded frame.
@@ -329,4 +331,17 @@ func (t *BrowserTab) close() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.cancel()
+}
+
+// chromedp logs an error for every DOM event it has no case for in its own
+// node-tree bookkeeping, and browsers keep adding events it does not model:
+// `dom.topLayerElementsUpdated`, for instance, fires whenever a dialog or a
+// popover enters the top layer. Those events say nothing about glorp's own
+// work, so they are dropped instead of being printed to the terminal a user is
+// watching (issue #438). Anything else chromedp reports is still surfaced.
+func browserErrorf(s string, v ...any) {
+	if strings.HasPrefix(s, "unhandled node event") {
+		return
+	}
+	log.Printf("ERROR: "+s, v...)
 }

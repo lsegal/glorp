@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"testing"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 )
@@ -151,5 +154,38 @@ func TestBrowserAdoptsHeadedWindowOnce(t *testing.T) {
 				t.Fatalf("adoptsExistingWindow() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+// captureBrowserErrorf collects what browserErrorf writes to the standard
+// logger, restoring the logger's own destination and flags afterwards.
+func captureBrowserErrorf(t *testing.T, s string, v ...any) string {
+	t.Helper()
+	var buf bytes.Buffer
+	flags := log.Flags()
+	out := log.Writer()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(out)
+		log.SetFlags(flags)
+	}()
+	browserErrorf(s, v...)
+	return buf.String()
+}
+
+func TestBrowserErrorfDropsUnhandledNodeEvents(t *testing.T) {
+	// The exact message chromedp emits for a DOM event it does not model; it
+	// says nothing about glorp's work, so it must not reach the terminal.
+	got := captureBrowserErrorf(t, "unhandled node event %T", &dom.EventTopLayerElementsUpdated{})
+	if got != "" {
+		t.Fatalf("logged %q, want nothing", got)
+	}
+}
+
+func TestBrowserErrorfKeepsOtherErrors(t *testing.T) {
+	got := captureBrowserErrorf(t, "could not unmarshal event: %s", "boom")
+	if want := "ERROR: could not unmarshal event: boom\n"; got != want {
+		t.Fatalf("logged %q, want %q", got, want)
 	}
 }
