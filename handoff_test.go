@@ -114,6 +114,14 @@ func (f *fakeCommentClient) ListComments(_ context.Context, repo string, number 
 	return out, nil
 }
 
+// reset drops every comment on a target, standing in for the ways a reap can
+// read a ticket and learn nothing about who owns it.
+func (f *fakeCommentClient) reset(repo string, number int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.comments, f.key(repo, number))
+}
+
 func (f *fakeCommentClient) inject(repo string, number int, comment Comment) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -598,5 +606,94 @@ func TestParseIssueWorkKey(t *testing.T) {
 		if ok != tc.ok || target != tc.target || number != tc.number {
 			t.Fatalf("parseIssueWorkKey(%q) = (%q, %d, %v), want (%q, %d, %v)", tc.key, target, number, ok, tc.target, tc.number, tc.ok)
 		}
+	}
+}
+
+// The reap's other guards all read the ticket's own comments. When that read
+// comes back empty -- the spam of issue #432, where an instance re-opened the
+// same negotiation every poll -- the instance's own record of the handshake it
+// already ran must still stop it from asking again.
+func TestNegotiateContestedIssuesDoesNotReAskAfterItsOwnHandshake(t *testing.T) {
+	comments := newFakeCommentClient()
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
+	pending := func() []pendingIssue {
+		return []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
+	}
+	seen := map[string]bool{issueKey(pending()[0].issue): true}
+
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false); len(result) != 1 {
+		t.Fatalf("the first handshake should claim the issue, got %+v", result)
+	}
+	posted, err := comments.ListComments(context.Background(), "o/r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posted) != 2 {
+		t.Fatalf("expected an ask and a starting claim, got %v", posted)
+	}
+
+	// Forget everything the ticket says about who owns it. Only the local
+	// record is left, and it alone has to hold the handshake shut.
+	comments.reset("o/r", 1)
+	for pass := 0; pass < 3; pass++ {
+		result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false)
+		if len(result) != 1 || result[0].issue.Number != 1 {
+			t.Fatalf("pass %d: settled work should stay in the batch, got %+v", pass, result)
+		}
+		posted, err := comments.ListComments(context.Background(), "o/r", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(posted) != 0 {
+			t.Fatalf("pass %d: a settled handshake must not comment again, got %v", pass, posted)
+		}
+	}
+}
+
+// Standing down for another instance is just as settled as winning: the reap
+// must not re-ask, and must not quietly pick the work up either.
+func TestNegotiateContestedIssuesRemembersStandingDown(t *testing.T) {
+	comments := newFakeCommentClient()
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	w.ownershipWait = func(context.Context) bool {
+		comments.inject("o/r", 3, Comment{Body: signComment(presenceClaimBody, "OTHER"), CreatedAt: time.Now()})
+		return true
+	}
+	pending := func() []pendingIssue {
+		return []pendingIssue{{issue: Issue{Number: 3, Repository: "o/r", Target: "o/r"}, contested: true}}
+	}
+	seen := map[string]bool{}
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false); len(result) != 0 {
+		t.Fatalf("an answered ask must drop the issue, got %+v", result)
+	}
+	comments.reset("o/r", 3)
+	if result := w.negotiateContestedIssues(context.Background(), nil, pending(), seen, false); len(result) != 0 {
+		t.Fatalf("work this instance stood down for must stay dropped, got %+v", result)
+	}
+	if posted, _ := comments.ListComments(context.Background(), "o/r", 3); len(posted) != 0 {
+		t.Fatalf("a settled stand-down must not re-ask, got %v", posted)
+	}
+}
+
+// A record older than the staleness window is not evidence of anything: work
+// that really was abandoned has to be renegotiable.
+func TestSettledHandshakeExpiresWithTheStalenessWindow(t *testing.T) {
+	w := &Glorp{Identity: "SELF", Out: io.Discard, staleClaim: time.Hour}
+	target := ownershipTarget{Repo: "o/r", Number: 5}
+	w.recordHandshake(target, true)
+	if record, age, ok := w.settledHandshake(target); !ok || !record.Claimed || age > time.Minute {
+		t.Fatalf("a fresh record should hold the work, got %+v age=%v ok=%v", record, age, ok)
+	}
+	w.handshakeMu.Lock()
+	w.handshakes[handshakeKey(target)] = handshakeRecord{At: time.Now().Add(-2 * time.Hour), Claimed: true}
+	w.handshakeMu.Unlock()
+	if _, _, ok := w.settledHandshake(target); ok {
+		t.Fatalf("an expired record should not hold the work")
+	}
+	// The negotiation on a pull request opened for the issue is a different
+	// negotiation, so the issue's record must not settle it.
+	w.recordHandshake(target, true)
+	if _, _, ok := w.settledHandshake(ownershipTarget{Repo: "o/r", Number: 6, Continue: true}); ok {
+		t.Fatalf("a record for one target must not settle another")
 	}
 }

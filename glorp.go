@@ -216,7 +216,11 @@ type Glorp struct {
 	// staleClaim overrides the age at which another instance's claim is
 	// considered abandoned in tests.
 	staleClaim time.Duration
-	logMu      sync.Mutex
+	// handshakeMu guards handshakes, this instance's own record of the
+	// ownership negotiations it has already run (issue #432).
+	handshakeMu sync.Mutex
+	handshakes  map[string]handshakeRecord
+	logMu       sync.Mutex
 	// repeatMu guards lastLogged, the state last reported under each
 	// logChanged key. A poll loop ticking every few seconds must report a
 	// summary, or a failure, once rather than on every tick (issue #413).
@@ -483,6 +487,23 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 					w.logf("issue #%d claimed by instance %s %s ago (within %s); skipping reap", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter())
 					return
 				}
+				// The checks above are all derived from the ticket's own
+				// comments. This one is local: a negotiation this instance
+				// already ran on this target settled who owns the work, and
+				// re-running it would repost the same ask and the same claim
+				// on every pass, stalling each one for the grace window. That
+				// is the comment spam of issue #432, so the decision is reused
+				// until the record goes stale even when the comments read as
+				// if nothing had ever been negotiated.
+				if record, age, ok := w.settledHandshake(target); ok {
+					if record.Claimed {
+						w.logf("issue #%d handshake already settled %s ago in this instance's favour; dispatching without re-asking", issue.Number, age.Round(time.Second))
+						keep[i] = true
+					} else {
+						w.logf("issue #%d handshake already settled %s ago for another instance; standing down without re-asking", issue.Number, age.Round(time.Second))
+					}
+					return
+				}
 				if !standing.OwnerClaimed {
 					w.logf("issue #%d has no claim from another instance; treating it as abandoned", issue.Number)
 				} else {
@@ -494,6 +515,7 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 				w.logf("issue #%d ownership handoff failed: %v", issue.Number, err)
 				return
 			}
+			w.recordHandshake(target, claimed)
 			keep[i] = claimed
 			if claimed {
 				w.logf("issue #%d picked up after handoff; dispatching", issue.Number)
