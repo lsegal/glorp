@@ -45,9 +45,12 @@ var noHeadlessEnvironmentCheck = func() error {
 
 // browserWatchInterval is the poll interval browser mode defaults to. Reading a
 // page glorp already has a tab open on is far cheaper than the API path's `gh`
-// invocations, so browser mode can poll on a human timescale instead of the
-// half-minute the API default is chosen to stay inside rate limits.
-const browserWatchInterval = 5 * time.Second
+// invocations, so browser mode can poll faster than the half-minute the API
+// default is chosen to stay inside rate limits. It is not free, though: a tick
+// reloads every watched target's page, waits out GitHub's client-side render,
+// and re-reads the conversation of every issue an agent is working, none of
+// which fits in the five seconds this was first set to (issue #441).
+const browserWatchInterval = 20 * time.Second
 
 // browserExclusiveFlags are the webhook-transport flags browser mode can never
 // honour: it never starts a webhook server and never opens an ngrok tunnel, so
@@ -117,10 +120,16 @@ func explicitFlags(flags *flag.FlagSet) map[string]bool {
 // (issue #377) and a project board off its Projects v2 page (issue #378), both
 // through tabs on the one shared browser the run launched.
 //
-// Only reads move. Discussions has no REST API to trade for a page read,
-// comments drive the handoff handshake, and status writes have no stable page
-// affordance, so those stay on GHCLI. A nil browser means -browser was not
-// passed, and the run is left exactly as the API path built it.
+// Only reads move. Discussions has no REST API to trade for a page read, and
+// posting a comment or moving a status has no page affordance glorp could
+// drive, so those stay on GHCLI. A nil browser means -browser was not passed,
+// and the run is left exactly as the API path built it.
+//
+// Comment reads move too (issue #441): the handoff handshake polls the
+// conversation of every contested candidate and of every issue an agent is
+// working, which was the heaviest API user left in browser mode. Those reads go
+// through one shared tab, and a page that could not be read falls back to the
+// API rather than reporting a ticket as unclaimed.
 //
 // The board is built once and shared: it answers as the issue source for
 // project targets and as the push-mode ProjectState probe, and giving each of
@@ -153,4 +162,7 @@ func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions
 		recovery: newBrowserSignInRecovery(browser, options.config(), w.logf),
 	}
 	w.Projects = board
+	if w.Comments != nil {
+		w.Comments = newBrowserComments(browser, w.Comments, w.logf)
+	}
 }

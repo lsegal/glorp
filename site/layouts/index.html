@@ -78,7 +78,7 @@
             <h2>It keeps going after you stop looking</h2>
             <p>A webhook delivery &mdash; or a poll, if you would rather skip the tunnel &mdash; surfaces the issue in seconds. glorp claims it with a signed comment so no two instances take the same ticket, then starts the agent.</p>
             <p class="muted">When a pull request closes, it sweeps for <code>#123</code> mentions and picks up whatever that unblocked. Sessions persist in <code>.glorp.json</code>, so a restart resumes instead of repeating.</p>
-            <p class="muted">Would rather skip the tunnel entirely? <code>glorp watch --browser</code> reads GitHub through a headless Chrome it drives itself &mdash; no ngrok, no API rate limit to ration. It always polls, every five seconds, on a browser profile of its own. Point it at another Chromium build with <code>--browser-binary</code>, or another profile directory with <code>--browser-profile</code>.</p>
+            <p class="muted">Would rather skip the tunnel entirely? <code>glorp watch --browser</code> reads GitHub through a headless Chrome it drives itself &mdash; no ngrok, no API rate limit to ration. It always polls, every twenty seconds, on a browser profile of its own. Point it at another Chromium build with <code>--browser-binary</code>, or another profile directory with <code>--browser-profile</code>.</p>
             <p class="muted">That profile starts signed out, so anything private looks like a 404 until it has a session. <code>glorp auth</code> opens a real browser window on the same profile, waits while you sign in, and closes it again &mdash; once, and the session sticks across restarts. <code>glorp auth --status</code> says who it is signed in as.</p>
           </div>
           <div class="loop-circle">
