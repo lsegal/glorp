@@ -99,3 +99,17 @@ func TestGhFixTreatsIdentityMentionsAsThreadedInstructions(t *testing.T) {
 		}
 	}
 }
+
+func TestGhFixCopiesOriginatingIssueMetadataToFollowUps(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"Carry the originating issue's own metadata onto every new follow-up issue: its labels, its milestone, and its assignees",
+		"say which value was skipped rather than dropping the whole step",
+		"Add inherited labels, milestone, and assignees to a reused issue only where it carries none of its own for that field",
+		"copy the originating issue's labels, milestone, or assignees",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require follow-up metadata inheritance %q", required)
+		}
+	}
+}
