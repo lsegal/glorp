@@ -43,6 +43,11 @@ const (
 	// browserReadyInterval is how often the DevTools endpoint is polled while
 	// waiting for the browser to come up.
 	browserReadyInterval = 100 * time.Millisecond
+	// browserTargetTimeout bounds the wait for the window a headed browser
+	// opens by itself to show up in the target list. The browser is already
+	// answering the DevTools endpoint by the time it is asked, so the window is
+	// normally there on the first read; past this it is not coming.
+	browserTargetTimeout = 2 * time.Second
 )
 
 // browserBinaryNames are the Chromium-based executables looked for on PATH, in
@@ -244,4 +249,66 @@ func browserWebSocketURL(ctx context.Context, baseURL string) (string, error) {
 		return "", fmt.Errorf("browser DevTools endpoint reported no WebSocket URL")
 	}
 	return info.WebSocketDebuggerURL, nil
+}
+
+// browserTargetInfo is the part of a DevTools /json/list entry glorp reads: a
+// target's id and what kind of target it is.
+type browserTargetInfo struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
+// browserOpenPageTarget returns the id of a page the browser already has open.
+// A headed browser puts a window on screen before glorp ever connects -- Chrome
+// always opens one -- so the auth flow drives that window rather than asking
+// for a new target, which would leave an empty "New Tab" window sitting beside
+// the login window (issue #412).
+//
+// The target list is polled rather than read once because the initial window is
+// created alongside the DevTools endpoint, not before it, and an empty list is
+// reported as an error so the caller can fall back to opening its own tab.
+func browserOpenPageTarget(ctx context.Context, baseURL string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(browserReadyInterval)
+	defer ticker.Stop()
+	for {
+		if id, err := browserPageTargetID(ctx, baseURL); err == nil && id != "" {
+			return id, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("no open browser window at %s: %w", baseURL, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// browserPageTargetID asks the DevTools endpoint for its targets and returns
+// the first page among them. Anything that is not a page -- the DevTools
+// front-end itself, service workers, extension backgrounds -- is skipped: they
+// are not windows and cannot be navigated to GitHub.
+func browserPageTargetID(ctx context.Context, baseURL string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/json/list", nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("browser DevTools endpoint returned %s", response.Status)
+	}
+	var targets []browserTargetInfo
+	if err := json.NewDecoder(response.Body).Decode(&targets); err != nil {
+		return "", err
+	}
+	for _, info := range targets {
+		if info.Type == "page" && info.ID != "" {
+			return info.ID, nil
+		}
+	}
+	return "", fmt.Errorf("browser DevTools endpoint reported no open page")
 }
