@@ -9,14 +9,37 @@ export function lastPollLabel(lastPoll) {
 	return `${pad(checked.getHours())}:${pad(checked.getMinutes())}:${pad(checked.getSeconds())}`;
 }
 
+// formatInterval renders a poll interval held as Go nanoseconds. It mirrors
+// formatInterval in ui.go so the web status bar and the TUI spell the same
+// interval the same way (issue #449): zero components are dropped, so an hour
+// reads `1h` on both sides rather than `3600s` here and `1h0m0s` there, and a
+// short interval stays short (`20s`, not `0h0m20s`).
+export function formatInterval(nanoseconds) {
+	const milliseconds = Math.round(Number(nanoseconds) / 1_000_000);
+	if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "0s";
+	if (milliseconds < 1000) return `${milliseconds}ms`;
+	let rest = milliseconds;
+	let text = "";
+	const hours = Math.floor(rest / 3_600_000);
+	if (hours > 0) {
+		text += `${hours}h`;
+		rest -= hours * 3_600_000;
+	}
+	const minutes = Math.floor(rest / 60_000);
+	if (minutes > 0) {
+		text += `${minutes}m`;
+		rest -= minutes * 60_000;
+	}
+	if (rest > 0) text += `${Number((rest / 1000).toFixed(3))}s`;
+	return text;
+}
+
 // deliveryLabel describes how work is picked up, and when GitHub was last
 // checked. A poll that finds nothing new logs nothing (issue #413), so the
 // last-checked time is the only standing sign the run is still polling
 // (issue #447). Push mode shows it too, since it still reconciles periodically.
 export function deliveryLabel(snapshot) {
-	const interval = snapshot.Interval
-		? `${snapshot.Interval / 1_000_000_000}s`
-		: "—";
+	const interval = snapshot.Interval ? formatInterval(snapshot.Interval) : "—";
 	let label = snapshot.UseWebhooks ? "push" : `polling every ${interval}`;
 	const checked = lastPollLabel(snapshot.LastPoll);
 	if (checked) label += `; checked ${checked}`;
