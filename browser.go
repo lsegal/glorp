@@ -42,14 +42,18 @@ func startBrowser(ctx context.Context, config browserConfig) (*Browser, error) {
 	// The endpoint reported by the browser is already a complete WebSocket URL,
 	// so chromedp is told not to rewrite it.
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
-	return &Browser{
+	browser := &Browser{
 		ctx:         ctx,
 		config:      config,
 		cmd:         process,
 		allocCtx:    allocCtx,
 		cancelAlloc: cancelAlloc,
 		tabs:        map[string]*BrowserTab{},
-	}, nil
+	}
+	// A browser process starts with none of the session cookies the last one
+	// held, so the sign-in is put back before anything navigates (issue #414).
+	_ = browser.restoreSession()
+	return browser, nil
 }
 
 // Suspend stops the browser process and drops its tabs, leaving the Browser
@@ -64,20 +68,34 @@ func (b *Browser) Suspend() error { return b.Close() }
 // belongs to the process that owned it, and every reader re-opens the one it
 // needs on its next read, navigating it where it needs to be anyway.
 func (b *Browser) Resume() error {
+	relaunched, err := b.relaunch()
+	if err != nil || !relaunched {
+		return err
+	}
+	// The process the sign-in window signed in is not the process the watch
+	// loop reads GitHub with, so the sign-in is carried over here too
+	// (issue #414). It runs outside the lock because it reads the tabs.
+	_ = b.restoreSession()
+	return nil
+}
+
+// relaunch starts a new browser process for a suspended Browser and reports
+// whether it started one, so Resume can do its cookie work unlocked.
+func (b *Browser) relaunch() (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.closed {
-		return nil
+		return false, nil
 	}
 	process, err := launchBrowser(b.ctx, b.config)
 	if err != nil {
-		return err
+		return false, err
 	}
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(b.ctx, process.wsURL, chromedp.NoModifyURL)
 	b.cmd, b.allocCtx, b.cancelAlloc = process, allocCtx, cancelAlloc
 	b.tabs = map[string]*BrowserTab{}
 	b.closed = false
-	return nil
+	return true, nil
 }
 
 // Profile reports the profile directory the browser was launched against, or
@@ -112,6 +130,9 @@ func (b *Browser) Tab(name string) (*BrowserTab, error) {
 // and the process is terminated so no browser survives the run that started it.
 // It is safe to call more than once, so shutdown paths can call it defensively.
 func (b *Browser) Close() error {
+	// Saved before the process is stopped, because the sign-in only exists in
+	// the memory of the process about to be terminated (issue #414).
+	_ = b.saveSession()
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
