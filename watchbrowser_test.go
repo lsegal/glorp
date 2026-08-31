@@ -184,7 +184,17 @@ func TestResolveBrowserWatchRejectsVisionWithoutBrowserMode(t *testing.T) {
 // -no-headless is the debugging escape hatch for browser mode (issue #428): the
 // browser it drives is headless unless the flag is passed, and the flag has to
 // reach the launcher's configuration or the window never appears.
+// allowNoHeadless stubs the display probe out so the flag's own behaviour can be
+// tested on a runner with no display server, which CI has none of.
+func allowNoHeadless(t *testing.T) {
+	t.Helper()
+	original := noHeadlessEnvironmentCheck
+	t.Cleanup(func() { noHeadlessEnvironmentCheck = original })
+	noHeadlessEnvironmentCheck = func() error { return nil }
+}
+
 func TestResolveBrowserWatchNoHeadless(t *testing.T) {
+	allowNoHeadless(t)
 	flags := parseWatchFlags(t, "--browser", "owner/repo")
 	options, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false)
 	if err != nil {
@@ -211,6 +221,7 @@ func TestResolveBrowserWatchNoHeadless(t *testing.T) {
 // browser mode's resolution (implied polling, the shortened interval, the
 // overrides) has to survive it.
 func TestResolveBrowserWatchNoHeadlessKeepsBrowserModeIntact(t *testing.T) {
+	allowNoHeadless(t)
 	flags := parseWatchFlags(t, "--browser", "--no-headless", "--browser-binary", "/opt/chromium", "owner/repo")
 	options, interval, poll, err := resolveBrowserWatch(flags, 30*time.Second, false)
 	if err != nil {
