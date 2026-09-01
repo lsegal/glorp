@@ -677,6 +677,13 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 	if w.Discussions == nil {
 		return
 	}
+	// Snapshot the in-flight counts before this poll claims anything, so the
+	// rotation below is led by work that is genuinely still running rather
+	// than by the candidates this poll is about to queue.
+	workMu.Lock()
+	counts := activeCountsByTarget(active, parseDiscussionWorkKey)
+	workMu.Unlock()
+	var pending []pendingIssue
 	for _, target := range targets {
 		if !isDiscussionTarget(target) {
 			continue
@@ -687,7 +694,7 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 			continue
 		}
 		for _, discussion := range discussions {
-			key := target + "#discussion#" + strconv.Itoa(discussion.Number)
+			key := discussionWorkKey(target, discussion.Number)
 			workMu.Lock()
 			_, inFlight := active[key]
 			if !inFlight {
@@ -698,30 +705,46 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 				continue
 			}
 			issue := Issue{Number: discussion.Number, Title: discussion.Title, Body: discussion.Body, CreatedAt: discussion.CreatedAt, Target: target, Repository: issueRepository(target, Issue{})}
-			if err := w.acquireSlot(ctx, sem); err != nil {
+			pending = append(pending, pendingIssue{issue: issue})
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	// Every target's candidates are collected before any of them blocks on a
+	// slot, so one Discussions target's backlog cannot take every slot ahead
+	// of another target's threads (issue #467).
+	pending = balanceAcrossTargets(pending, counts)
+	for index, candidate := range pending {
+		issue := candidate.issue
+		if err := w.acquireSlot(ctx, sem); err != nil {
+			// Hand back this candidate's claim and every one still behind it;
+			// they were never dispatched, so a later poll must see them as
+			// unanswered again.
+			workMu.Lock()
+			for _, remaining := range pending[index:] {
+				delete(active, discussionWorkKey(remaining.issue.Target, remaining.issue.Number))
+			}
+			workMu.Unlock()
+			return
+		}
+		w.logf("discussion #%d queued", issue.Number)
+		wg.Add(1)
+		go func(i Issue, key string) {
+			defer wg.Done()
+			defer sem.release()
+			defer func() {
 				workMu.Lock()
 				delete(active, key)
 				workMu.Unlock()
+			}()
+			w.logf("discussion #%d started", i.Number)
+			if err := w.runner().Run(ctx, i); err != nil {
+				w.logf("discussion #%d failed: %v", i.Number, err)
 				return
 			}
-			w.logf("discussion #%d queued", discussion.Number)
-			wg.Add(1)
-			go func(i Issue, key string) {
-				defer wg.Done()
-				defer sem.release()
-				defer func() {
-					workMu.Lock()
-					delete(active, key)
-					workMu.Unlock()
-				}()
-				w.logf("discussion #%d started", i.Number)
-				if err := w.runner().Run(ctx, i); err != nil {
-					w.logf("discussion #%d failed: %v", i.Number, err)
-					return
-				}
-				w.logf("discussion #%d completed", i.Number)
-			}(issue, key)
-		}
+			w.logf("discussion #%d completed", i.Number)
+		}(issue, discussionWorkKey(issue.Target, issue.Number))
 	}
 }
 
@@ -832,12 +855,14 @@ type workState struct {
 }
 
 // activeCountsByTarget counts, per configured target, the work this instance
-// currently has in flight. Discussion keys name a thread rather than an issue
-// and are not part of the issue dispatch rotation, so they are skipped.
-func activeCountsByTarget(active map[string]string) map[string]int {
+// currently has in flight, counting only the keys parse accepts. Issues and
+// discussions are dispatched on separate paths and each rotates over its own
+// candidates, so each caller passes the parser for its own key shape and a
+// backlog on one path never leads the other's rotation.
+func activeCountsByTarget(active map[string]string, parse func(string) (string, int, bool)) map[string]int {
 	counts := make(map[string]int, len(active))
 	for key := range active {
-		if target, _, ok := parseIssueWorkKey(key); ok {
+		if target, _, ok := parse(key); ok {
 			counts[target]++
 		}
 	}
@@ -855,7 +880,8 @@ func activeCountsByTarget(active map[string]string) map[string]int {
 // Each target keeps its own order, and the rotation is led by whichever target
 // has the least work already in flight (ties broken by configured order), so a
 // target that already filled slots on an earlier poll yields the next ones to a
-// target that has none.
+// target that has none. Discussion dispatch rotates over its own candidates
+// through this same function (issue #467).
 func balanceAcrossTargets(pending []pendingIssue, inFlight map[string]int) []pendingIssue {
 	if len(pending) < 2 {
 		return pending
@@ -905,6 +931,32 @@ func parseIssueWorkKey(key string) (target string, number int, ok bool) {
 	}
 	target = key[:index]
 	if strings.HasSuffix(target, "#discussion") {
+		return "", 0, false
+	}
+	number, err := strconv.Atoi(key[index+1:])
+	if err != nil || number <= 0 {
+		return "", 0, false
+	}
+	return target, number, true
+}
+
+// discussionWorkKey names an in-flight discussion thread. The extra segment is
+// what keeps a discussion out of the issue dispatch rotation and its own work
+// key distinct from the issue that happens to share its number.
+func discussionWorkKey(target string, number int) string {
+	return target + "#discussion#" + strconv.Itoa(number)
+}
+
+// parseDiscussionWorkKey splits a key built by discussionWorkKey back into its
+// configured target and discussion number. Issue keys carry no "#discussion"
+// segment and are rejected, mirroring parseIssueWorkKey.
+func parseDiscussionWorkKey(key string) (target string, number int, ok bool) {
+	index := strings.LastIndex(key, "#")
+	if index < 0 {
+		return "", 0, false
+	}
+	target = strings.TrimSuffix(key[:index], "#discussion")
+	if target == key[:index] {
 		return "", 0, false
 	}
 	number, err := strconv.Atoi(key[index+1:])
@@ -1209,7 +1261,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen, n == 1)
 		workMu.Lock()
-		inFlight := activeCountsByTarget(active)
+		inFlight := activeCountsByTarget(active, parseIssueWorkKey)
 		workMu.Unlock()
 		newIssues = balanceAcrossTargets(newIssues, inFlight)
 		workMu.Lock()
