@@ -3375,11 +3375,74 @@ func TestBalanceAcrossTargetsLeadsWithTheLeastBusyTarget(t *testing.T) {
 }
 
 func TestActiveCountsByTargetSkipsDiscussions(t *testing.T) {
-	counts := activeCountsByTarget(map[string]string{
-		"o/a#1": "s1", "o/a#2": "s2", "o/b#3": "s3", "o/b#discussion#4": "s4",
-	})
+	active := map[string]string{
+		"o/a#1": "s1", "o/a#2": "s2", "o/b#3": "s3", "o/b#discussion#4": "s4", "o/b#discussion#5": "s5",
+	}
+	counts := activeCountsByTarget(active, parseIssueWorkKey)
 	if want := map[string]int{"o/a": 2, "o/b": 1}; !reflect.DeepEqual(counts, want) {
-		t.Fatalf("got %v, want %v", counts, want)
+		t.Fatalf("issue counts: got %v, want %v", counts, want)
+	}
+	// The discussion rotation counts the mirror image: its own keys only, so a
+	// busy issue backlog never leads the discussion rotation or the reverse.
+	counts = activeCountsByTarget(active, parseDiscussionWorkKey)
+	if want := map[string]int{"o/b": 2}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("discussion counts: got %v, want %v", counts, want)
+	}
+}
+
+type targetDiscussionSource struct {
+	discussions map[string][]Discussion
+}
+
+func (s *targetDiscussionSource) ListUnansweredDiscussions(_ context.Context, target string) ([]Discussion, error) {
+	return s.discussions[target], nil
+}
+
+func TestGlorpDoesNotStarveAQuietDiscussionTargetBehindABusyOne(t *testing.T) {
+	dir := t.TempDir()
+	busyTarget := "https://github.com/o/a/discussions"
+	quietTarget := "https://github.com/o/b/discussions"
+	busy := make([]Discussion, 0, 20)
+	for i := 1; i <= 20; i++ {
+		busy = append(busy, Discussion{Number: i, Title: "Q"})
+	}
+	ds := &targetDiscussionSource{discussions: map[string][]Discussion{
+		busyTarget:  busy,
+		quietTarget: {{Number: 101, Title: "Q"}, {Number: 102, Title: "Q"}, {Number: 103, Title: "Q"}},
+	}}
+	src := &targetIssueSource{issues: map[string][]Issue{}}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 32)}
+	logs := &syncBuffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &Glorp{Targets: []string{busyTarget, quietTarget}, Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Discussions: ds, Runner: r, Out: logs}
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	// The runner blocks, so only Concurrency discussions are ever started.
+	// Both targets must be represented in them: before issue #467 the busy
+	// target's backlog filled every slot and the quiet one was never reached.
+	first := make([]int, 0, 2)
+	for len(first) < 2 {
+		select {
+		case number := <-r.dispatched:
+			first = append(first, number)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d discussion(s) dispatched: %v\n%s", len(first), first, logs.String())
+		}
+	}
+	quiet := 0
+	for _, number := range first {
+		if number >= 101 {
+			quiet++
+		}
+	}
+	if quiet != 1 {
+		t.Fatalf("expected one discussion from each target, got %v", first)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

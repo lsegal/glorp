@@ -636,6 +636,31 @@ func TestParseIssueWorkKey(t *testing.T) {
 	}
 }
 
+func TestParseDiscussionWorkKey(t *testing.T) {
+	cases := []struct {
+		key    string
+		target string
+		number int
+		ok     bool
+	}{
+		{"o/r#discussion#4", "o/r", 4, true},
+		{"https://github.com/o/r/discussions#discussion#12", "https://github.com/o/r/discussions", 12, true},
+		{"o/r#7", "", 0, false},
+		{"o/r#discussion#0", "", 0, false},
+		{"o/r#discussion#abc", "", 0, false},
+		{"o/r", "", 0, false},
+	}
+	for _, tc := range cases {
+		target, number, ok := parseDiscussionWorkKey(tc.key)
+		if ok != tc.ok || target != tc.target || number != tc.number {
+			t.Fatalf("parseDiscussionWorkKey(%q) = (%q, %d, %v), want (%q, %d, %v)", tc.key, target, number, ok, tc.target, tc.number, tc.ok)
+		}
+		if tc.ok && discussionWorkKey(tc.target, tc.number) != tc.key {
+			t.Fatalf("discussionWorkKey(%q, %d) = %q, want %q", tc.target, tc.number, discussionWorkKey(tc.target, tc.number), tc.key)
+		}
+	}
+}
+
 // The reap's other guards all read the ticket's own comments. When that read
 // comes back empty -- the spam of issue #432, where an instance re-opened the
 // same negotiation every poll -- the instance's own record of the handshake it
