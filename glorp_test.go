@@ -3331,3 +3331,99 @@ func TestGlorpPublishesLastPollTime(t *testing.T) {
 		t.Fatalf("last poll time %v was not recorded after the poll ran (started %v)", last.LastPoll, before)
 	}
 }
+
+// targetIssueSource serves a fixed list of issues per configured target, so a
+// multi-target run reads a different backlog from each one.
+type targetIssueSource struct {
+	issues map[string][]Issue
+}
+
+func (s *targetIssueSource) ListIssues(_ context.Context, target string) ([]Issue, error) {
+	return s.issues[target], nil
+}
+
+func TestBalanceAcrossTargetsInterleavesBacklogs(t *testing.T) {
+	pending := []pendingIssue{
+		{issue: Issue{Target: "o/a", Number: 1}},
+		{issue: Issue{Target: "o/a", Number: 2}},
+		{issue: Issue{Target: "o/a", Number: 3}},
+		{issue: Issue{Target: "o/b", Number: 10}},
+		{issue: Issue{Target: "o/b", Number: 11}},
+	}
+	got := []int{}
+	for _, candidate := range balanceAcrossTargets(pending, nil) {
+		got = append(got, candidate.issue.Number)
+	}
+	if want := []int{1, 10, 2, 11, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestBalanceAcrossTargetsLeadsWithTheLeastBusyTarget(t *testing.T) {
+	pending := []pendingIssue{
+		{issue: Issue{Target: "o/a", Number: 1}},
+		{issue: Issue{Target: "o/a", Number: 2}},
+		{issue: Issue{Target: "o/b", Number: 10}},
+	}
+	got := []int{}
+	for _, candidate := range balanceAcrossTargets(pending, map[string]int{"o/a": 2}) {
+		got = append(got, candidate.issue.Number)
+	}
+	if want := []int{10, 1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestActiveCountsByTargetSkipsDiscussions(t *testing.T) {
+	counts := activeCountsByTarget(map[string]string{
+		"o/a#1": "s1", "o/a#2": "s2", "o/b#3": "s3", "o/b#discussion#4": "s4",
+	})
+	if want := map[string]int{"o/a": 2, "o/b": 1}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("got %v, want %v", counts, want)
+	}
+}
+
+func TestGlorpDoesNotStarveAQuietTargetBehindABusyOne(t *testing.T) {
+	dir := t.TempDir()
+	busy := make([]Issue, 0, 20)
+	for i := 1; i <= 20; i++ {
+		busy = append(busy, Issue{Number: i, Repository: "o/a"})
+	}
+	src := &targetIssueSource{issues: map[string][]Issue{
+		"o/a": busy,
+		"o/b": {{Number: 101, Repository: "o/b"}, {Number: 102, Repository: "o/b"}, {Number: 103, Repository: "o/b"}},
+	}}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 32)}
+	logs := &syncBuffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &Glorp{Targets: []string{"o/a", "o/b"}, Interval: time.Millisecond, Concurrency: 2, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: logs}
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	// The runner blocks, so only Concurrency issues are ever started. Both
+	// targets must be represented in them: before issue #464 the busy target
+	// filled every slot and the quiet one was never reached.
+	first := make([]int, 0, 2)
+	for len(first) < 2 {
+		select {
+		case number := <-r.dispatched:
+			first = append(first, number)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d issue(s) dispatched: %v\n%s", len(first), first, logs.String())
+		}
+	}
+	quiet := 0
+	for _, number := range first {
+		if number >= 101 {
+			quiet++
+		}
+	}
+	if quiet != 1 {
+		t.Fatalf("expected one issue from each target, got %v", first)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

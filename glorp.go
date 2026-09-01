@@ -831,6 +831,62 @@ type workState struct {
 	Owner string `json:"owner,omitempty"`
 }
 
+// activeCountsByTarget counts, per configured target, the work this instance
+// currently has in flight. Discussion keys name a thread rather than an issue
+// and are not part of the issue dispatch rotation, so they are skipped.
+func activeCountsByTarget(active map[string]string) map[string]int {
+	counts := make(map[string]int, len(active))
+	for key := range active {
+		if target, _, ok := parseIssueWorkKey(key); ok {
+			counts[target]++
+		}
+	}
+	return counts
+}
+
+// balanceAcrossTargets reorders the dispatch candidates a poll produced so the
+// watched targets are drawn from in turn instead of one target's whole backlog
+// being queued ahead of another's (issue #464). A poll lists the targets in the
+// order they were configured and appends each one's issues to a single slice,
+// and the dispatch loop blocks on a concurrency slot in that same order, so
+// `glorp watch repoA repoB` with 20 open issues in repoA and 3 in repoB spends
+// every slot on repoA until it drains and never reaches repoB.
+//
+// Each target keeps its own order, and the rotation is led by whichever target
+// has the least work already in flight (ties broken by configured order), so a
+// target that already filled slots on an earlier poll yields the next ones to a
+// target that has none.
+func balanceAcrossTargets(pending []pendingIssue, inFlight map[string]int) []pendingIssue {
+	if len(pending) < 2 {
+		return pending
+	}
+	order := make([]string, 0, len(pending))
+	queues := make(map[string][]pendingIssue, len(pending))
+	for _, candidate := range pending {
+		target := candidate.issue.Target
+		if _, ok := queues[target]; !ok {
+			order = append(order, target)
+		}
+		queues[target] = append(queues[target], candidate)
+	}
+	if len(order) < 2 {
+		return pending
+	}
+	slices.SortStableFunc(order, func(a, b string) int { return inFlight[a] - inFlight[b] })
+	balanced := make([]pendingIssue, 0, len(pending))
+	for len(balanced) < len(pending) {
+		for _, target := range order {
+			queue := queues[target]
+			if len(queue) == 0 {
+				continue
+			}
+			balanced = append(balanced, queue[0])
+			queues[target] = queue[1:]
+		}
+	}
+	return balanced
+}
+
 func issueKey(issue Issue) string {
 	target := issue.Target
 	if target == "" {
@@ -1152,6 +1208,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 		}
 		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen, n == 1)
+		workMu.Lock()
+		inFlight := activeCountsByTarget(active)
+		workMu.Unlock()
+		newIssues = balanceAcrossTargets(newIssues, inFlight)
 		workMu.Lock()
 		err = saveScopedWorkState(w.StatePath, work, targets)
 		workMu.Unlock()
