@@ -142,3 +142,54 @@ func TestGhFixCarriesOverOnlyStillRelevantLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestGhFixSplitsSeparableIssuesConservatively(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"## Split a multi-part issue into sub-issues",
+		"Split only when the issue itself plainly states multiple distinct, separable tasks",
+		"Be very conservative",
+		"could be implemented, tested, and merged on its own without the others",
+		"when the division is your own inference rather than the issue's own words",
+		"When in doubt, do not split",
+		"attach it to the originating issue with GitHub's sub-issue API",
+		"Do not settle for a Markdown checklist",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require conservative sub-issue splitting %q", required)
+		}
+	}
+}
+
+func TestGhFixTreatsParentIssuesAsTrackingIssues(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"the parent is a tracking or meta issue",
+		"It does not require a pull request, code, or a changelog entry to close",
+		"it must not consume an agent slot",
+		"end the run without cloning, branching, or opening a pull request",
+		"the next agent slot is free to pick up a sub-issue",
+		"Route every new sub-issue exactly as \"Create follow-up issues\" routes a follow-up",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not treat split parents as tracking issues %q", required)
+		}
+	}
+}
+
+func TestGhFixNeverResplitsAnIssueWithSubIssues(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"Read the issue's existing sub-issues first",
+		"Never create further sub-issues for it and never open a pull request for it",
+		"the only thing `/gh-fix` does with such an issue is determine whether it is closeable",
+		"close the parent with a comment naming the completed sub-issues",
+		"end the run reporting which ones remain, and post no comment",
+		"repeated dispatches do not accumulate identical comments",
+		"is exempt from this rule",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not stay re-entrant on already-split issues %q", required)
+		}
+	}
+}
