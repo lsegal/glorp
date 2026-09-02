@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -203,6 +204,9 @@ func (b *Browser) tabFor(name string) (*BrowserTab, []retiredTab, error) {
 	}
 	b.tabs[name] = tab
 	b.used[name] = now
+	// A tab whose command stops returning is dropped rather than left in the
+	// map for every later read to queue behind (issue #472).
+	tab.watchStalls(func() { b.discardStalledTab(name, tab) })
 	// The sign-in saved by the last browser process is put back on the first
 	// tab this one opens, before it navigates anywhere, so the run's first page
 	// load is already made as the signed-in user (issue #414). It rides the tab
@@ -259,6 +263,31 @@ func (b *Browser) reapIdleTabs(keep string, now time.Time) []retiredTab {
 		retired = append(retired, retiredTab{tab: tab, name: name, idle: idle})
 	}
 	return retired
+}
+
+// discardStalledTab drops a tab whose command stopped returning, so the next
+// read of that target opens a fresh one instead of queueing behind a command
+// that is never coming back. The page it was showing is remembered, exactly as
+// it is for a tab retired for idleness, so its replacement reopens there.
+func (b *Browser) discardStalledTab(name string, tab *BrowserTab) {
+	b.mu.Lock()
+	if current, ok := b.tabs[name]; !ok || current != tab {
+		b.mu.Unlock()
+		return
+	}
+	delete(b.tabs, name)
+	delete(b.used, name)
+	if url := tab.currentURL(); url != "" && b.resume != nil {
+		b.resume[name] = url
+	}
+	logf := b.logf
+	b.mu.Unlock()
+	if logf != nil {
+		logf("dropping unresponsive browser tab for %s; reopening it on the next read", name)
+	}
+	// Closed off the browser lock: cancelling the tab tears down its target,
+	// and no other reader should wait on that.
+	go tab.close()
 }
 
 // logTabRetired reports a closed tab, so a run that quietly drops a page it had
@@ -353,9 +382,20 @@ func (b *Browser) Close() error {
 // BrowserTab is one reusable tab. Its methods serialize on the tab because a
 // single CDP target cannot service two commands at once.
 type BrowserTab struct {
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
+	// busy admits one command at a time. It is a channel rather than a mutex
+	// so a caller can give up waiting for a command that has stopped
+	// returning, instead of joining it in blocking forever (issue #472).
+	busy     chan struct{}
+	busyOnce sync.Once
+	ctx      context.Context
+	cancel   context.CancelFunc
+	// timeout bounds a single command, counted from the moment it is issued.
+	// Zero uses browserCommandTimeout.
+	timeout time.Duration
+	// onStall is called when a command times out, so the browser can drop the
+	// tab and reopen it on the next read rather than queueing every later
+	// command behind the one that never came back.
+	onStall func()
 
 	statusMu  sync.Mutex
 	mainFrame cdp.FrameID
@@ -557,18 +597,104 @@ func (t *BrowserTab) Screenshot() ([]byte, error) {
 	return image, nil
 }
 
-// run executes actions against the tab, one caller at a time.
-func (t *BrowserTab) run(actions ...chromedp.Action) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return chromedp.Run(t.ctx, actions...)
+// commandTimeout bounds one command issued to the tab.
+func (t *BrowserTab) commandTimeout() time.Duration {
+	if t.timeout > 0 {
+		return t.timeout
+	}
+	return browserCommandTimeout
 }
 
-// close closes the tab.
+// gate is the tab's one-command-at-a-time admission channel, created on first
+// use so a zero-value tab needs no constructor.
+func (t *BrowserTab) gate() chan struct{} {
+	t.busyOnce.Do(func() { t.busy = make(chan struct{}, 1) })
+	return t.busy
+}
+
+// watchStalls registers what to do when a command on this tab times out.
+func (t *BrowserTab) watchStalls(onStall func()) {
+	t.statusMu.Lock()
+	defer t.statusMu.Unlock()
+	t.onStall = onStall
+}
+
+// stall reports that a command never came back, which retires the tab.
+func (t *BrowserTab) stall() {
+	t.statusMu.Lock()
+	onStall := t.onStall
+	t.statusMu.Unlock()
+	if onStall != nil {
+		onStall()
+	}
+}
+
+// acquire takes the tab for one command, waiting no longer than the command
+// timeout for the previous one to finish. A tab whose command has stopped
+// returning is reported as stalled rather than holding its caller for the rest
+// of the run: the poll loop reads GitHub through these tabs on its own
+// goroutine, so a command that never returns is what stops a watch dispatching
+// anything ever again (issue #472).
+func (t *BrowserTab) acquire(timeout time.Duration) (func(), error) {
+	gate := t.gate()
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	default:
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	var done <-chan struct{}
+	if t.ctx != nil {
+		done = t.ctx.Done()
+	}
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	case <-done:
+		return nil, t.ctx.Err()
+	case <-timer.C:
+		t.stall()
+		return nil, fmt.Errorf("browser tab is stuck: its previous command has not returned in %s", formatInterval(timeout))
+	}
+}
+
+// run executes actions against the tab, one caller at a time and under a
+// deadline. Without the deadline a page that never finishes loading, or a
+// renderer that stops answering, parks the caller forever; the caller is
+// usually the single goroutine that polls GitHub and dispatches work.
+func (t *BrowserTab) run(actions ...chromedp.Action) error {
+	timeout := t.commandTimeout()
+	release, err := t.acquire(timeout)
+	if err != nil {
+		return err
+	}
+	defer release()
+	parent := t.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	err = chromedp.Run(ctx, actions...)
+	// A deadline reached while the run itself is still healthy is this tab
+	// failing, not the run shutting down, so the tab is retired and the read
+	// fails with a description of what happened rather than with a bare
+	// context error.
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) && parent.Err() == nil {
+		t.stall()
+		return fmt.Errorf("browser tab did not respond within %s", formatInterval(timeout))
+	}
+	return err
+}
+
+// close closes the tab. It does not wait for a command in flight: a tab is
+// closed on shutdown and when it has stalled, and both want the command that
+// is running cancelled rather than waited out.
 func (t *BrowserTab) close() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.cancel()
+	if t.cancel != nil {
+		t.cancel()
+	}
 }
 
 // chromedp logs an error for every DOM event it has no case for in its own

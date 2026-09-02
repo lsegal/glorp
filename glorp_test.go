@@ -3668,3 +3668,53 @@ func TestRelayableCommentIgnoresHandoffChatter(t *testing.T) {
 		t.Fatal("a new comment was not relayable")
 	}
 }
+
+// TestWatchPollProgressReportsAStalledLoop checks a run whose poll loop has
+// stopped completing polls says so, once, and says so again when polling
+// resumes. A poll that finds nothing new logs nothing, so a wedged loop and a
+// quiet one used to read the same in the terminal: the run looked alive while
+// it picked nothing up for hours (issue #472).
+func TestWatchPollProgressReportsAStalledLoop(t *testing.T) {
+	var out bytes.Buffer
+	w := &Glorp{Out: &out}
+	last := time.Time{}
+	var mu sync.Mutex
+	lastPoll := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return last
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.watchPollProgress(ctx, 5*time.Millisecond, time.Now().Add(-2*time.Minute), lastPoll)
+	}()
+	waitForLog := func(want string) {
+		t.Helper()
+		for i := 0; i < 400; i++ {
+			w.logMu.Lock()
+			text := out.String()
+			w.logMu.Unlock()
+			if strings.Contains(text, want) {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("log never reported %q; got %q", want, out.String())
+	}
+	waitForLog("no poll has completed in")
+	mu.Lock()
+	last = time.Now()
+	mu.Unlock()
+	waitForLog("polling resumed")
+	cancel()
+	<-done
+	w.logMu.Lock()
+	stalls := strings.Count(out.String(), "no poll has completed in")
+	w.logMu.Unlock()
+	if stalls != 1 {
+		t.Fatalf("reported the stall %d times, want it reported once", stalls)
+	}
+}

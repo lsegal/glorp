@@ -297,3 +297,96 @@ func TestBrowserErrorfKeepsOtherErrors(t *testing.T) {
 		t.Fatalf("logged %q, want %q", got, want)
 	}
 }
+
+// TestBrowserTabStopsWaitingForAStuckCommand checks a tab whose command has
+// stopped returning fails the next read instead of joining it in blocking
+// forever. The poll loop reads GitHub on the goroutine that dispatches work, so
+// a command that never comes back used to stop a watch picking anything up for
+// the rest of the run (issue #472).
+func TestBrowserTabStopsWaitingForAStuckCommand(t *testing.T) {
+	tab := &BrowserTab{}
+	stalled := make(chan struct{}, 1)
+	tab.watchStalls(func() { stalled <- struct{}{} })
+	// Take the tab as a command that never returns would.
+	tab.gate() <- struct{}{}
+	release, err := tab.acquire(10 * time.Millisecond)
+	if err == nil {
+		release()
+		t.Fatal("a read of a stuck tab succeeded")
+	}
+	if !strings.Contains(err.Error(), "stuck") {
+		t.Fatalf("error %v, want one saying the tab is stuck", err)
+	}
+	select {
+	case <-stalled:
+	default:
+		t.Fatal("the stuck tab was not reported as stalled")
+	}
+}
+
+// TestBrowserTabAdmitsOneCommandAtATime checks the deadline did not cost the
+// tab its serialization: a single CDP target cannot service two commands at
+// once.
+func TestBrowserTabAdmitsOneCommandAtATime(t *testing.T) {
+	tab := &BrowserTab{}
+	release, err := tab.acquire(time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	release()
+	if _, err := tab.acquire(10 * time.Millisecond); err != nil {
+		t.Fatalf("acquire after release: %v", err)
+	}
+}
+
+// TestBrowserDropsUnresponsiveTab checks a stalled tab is dropped so the next
+// read of that target opens a fresh one, on the page the old one was showing,
+// rather than queueing behind a command that is never coming back.
+func TestBrowserDropsUnresponsiveTab(t *testing.T) {
+	closed := false
+	stuck := closedTab(&closed)
+	stuck.resumeAt("https://github.com/owner/repo/issues/7")
+	var logged []string
+	browser := &Browser{
+		tabs:   map[string]*BrowserTab{"comments": stuck},
+		used:   map[string]time.Time{"comments": time.Now()},
+		resume: map[string]string{},
+		logf:   func(format string, v ...interface{}) { logged = append(logged, fmt.Sprintf(format, v...)) },
+	}
+	browser.discardStalledTab("comments", stuck)
+	if _, ok := browser.tabs["comments"]; ok {
+		t.Fatal("the unresponsive tab is still held by the browser")
+	}
+	if got := browser.resume["comments"]; got != "https://github.com/owner/repo/issues/7" {
+		t.Fatalf("remembered page %q, want the page the dropped tab was showing", got)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "comments") {
+		t.Fatalf("logged %q, want one line naming the dropped tab", logged)
+	}
+	// Dropping the same tab twice must not drop its replacement.
+	replacement := &BrowserTab{}
+	browser.tabs["comments"] = replacement
+	browser.discardStalledTab("comments", stuck)
+	if browser.tabs["comments"] != replacement {
+		t.Fatal("a repeated drop took the replacement tab with it")
+	}
+}
+
+// TestBrowserTabCloseDoesNotWaitForACommand checks shutdown is not held up by a
+// command that has stopped returning: closing a tab cancels what it is doing
+// rather than waiting it out.
+func TestBrowserTabCloseDoesNotWaitForACommand(t *testing.T) {
+	closed := false
+	tab := closedTab(&closed)
+	tab.gate() <- struct{}{}
+	done := make(chan struct{})
+	go func() { tab.close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("closing a tab waited for the command in flight")
+	}
+	if !closed {
+		t.Fatal("the tab was not cancelled")
+	}
+}

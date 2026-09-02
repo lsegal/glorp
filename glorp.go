@@ -1228,6 +1228,45 @@ func (w *Glorp) forgetLogged(key string) bool {
 	return ok
 }
 
+// pollStallIntervals is how many poll intervals may pass with no poll
+// completing before the run reports that it has stopped making progress. A
+// poll that finds nothing new logs nothing, so a wedged loop and a quiet one
+// read the same in the terminal; this is what tells them apart (issue #472).
+const pollStallIntervals = 4
+
+// watchPollProgress reports a run whose poll loop has stopped completing polls,
+// and reports it once rather than on every check. Every GitHub read the loop
+// makes is bounded, so a stall this long means something else is holding it;
+// saying so is what keeps a watch that has stopped dispatching from looking
+// merely idle.
+func (w *Glorp) watchPollProgress(ctx context.Context, interval time.Duration, started time.Time, lastPoll func() time.Time) {
+	if interval <= 0 {
+		return
+	}
+	stalledAfter := interval * pollStallIntervals
+	if stalledAfter < time.Minute {
+		stalledAfter = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		last := lastPoll()
+		if last.IsZero() {
+			last = started
+		}
+		if idle := time.Since(last); idle >= stalledAfter {
+			w.logChanged("poll-stall", "stalled", "no poll has completed in %s; the watch is not picking up new work", formatInterval(idle.Round(time.Second)))
+		} else if w.forgetLogged("poll-stall") {
+			w.logf("polling resumed; the stall reported above is over")
+		}
+	}
+}
+
 func (w *Glorp) Run(ctx context.Context) error {
 	// Ownership handshakes wait out their grace window off the poll loop, so
 	// a run that is shutting down waits for them here rather than leaving
@@ -1851,6 +1890,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 	}
 	probeBoards(ctx)
 	var ticker *time.Ticker
+	go w.watchPollProgress(watchCtx, w.periodicPollInterval(), time.Now(), func() time.Time {
+		jobMu.Lock()
+		defer jobMu.Unlock()
+		return lastPoll
+	})
 	var tick <-chan time.Time
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
