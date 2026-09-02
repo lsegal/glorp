@@ -450,6 +450,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 	}
 	var issue struct {
 		State string `json:"state"`
+		Body  string `json:"body"`
 	}
 	if err := json.Unmarshal(output, &issue); err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("decode issue #%d state: %w", number, err)
@@ -474,7 +475,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 	if err := json.Unmarshal(output, &events); err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("decode issue #%d timeline: %w", number, err)
 	}
-	state := OriginatingWorkState{IssueState: issue.State}
+	state := OriginatingWorkState{IssueState: issue.State, IssueBody: issue.Body}
 	for _, event := range events {
 		pullRequest := event.Source.Issue
 		if event.Event != "cross-referenced" || pullRequest.PullRequest == nil || !closesIssue(pullRequest.Body, repo, number) {
@@ -1467,6 +1468,12 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		if !isDiscussionTarget(target) && r.Identity != "" {
 			prompt += " identity:/glorp:" + string(r.Identity)
 		}
+		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	} else if session.Update != "" {
+		// The session is being resumed to relay a change made to the issue
+		// while it was running (issue #469), so the change itself is the
+		// prompt rather than a bare "continue".
+		prompt = session.Update
 		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	} else {
 		prompt += "\n\nRecover the existing work. If this issue has a draft pull request, inspect it and pull its branch before continuing."
