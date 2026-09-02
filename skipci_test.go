@@ -106,3 +106,30 @@ func triggerBlock(t *testing.T, workflow, name string) string {
 	}
 	return strings.Join(block, "\n")
 }
+
+// The production tag hides the whole shipped frontend path -- the webui/dist
+// embed, the SPA file server, and the release build's no-op StartFrontend --
+// from an untagged `go test`/`go vet`, so CI must compile and run it too, and
+// only after the frontend build that produces the embedded directory.
+func TestCICoversTheProductionTag(t *testing.T) {
+	body := readWorkflow(t, "ci.yml")
+
+	for _, step := range []string{"go vet -tags production ./...", "go test -tags production ./..."} {
+		if !strings.Contains(body, step) {
+			t.Errorf("ci.yml must run %q so the released build is compiled and tested", step)
+		}
+	}
+
+	build := strings.Index(body, "pnpm run build")
+	if build < 0 {
+		t.Fatal("ci.yml no longer builds the frontend the production embed needs")
+	}
+	check := strings.Index(body, "webui/dist/index.html")
+	if check < 0 {
+		t.Fatal("ci.yml must check for webui/dist before the production-tagged steps, so a missing embed fails clearly")
+	}
+	vet := strings.Index(body, "go vet -tags production")
+	if !(build < check && check < vet) {
+		t.Error("ci.yml must order the frontend build, the webui/dist check, and the production-tagged steps in that order")
+	}
+}
