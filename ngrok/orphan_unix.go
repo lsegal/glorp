@@ -1,11 +1,13 @@
 //go:build !windows
 
-package main
+package ngrok
 
 import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/lsegal/glorp/process"
 )
 
 // orphanKillGrace is how long a leftover agent gets to shut itself down before
@@ -19,7 +21,7 @@ const orphanKillGrace = 2 * time.Second
 // owns. BSD-style flags are used because they are what macOS and Linux agree
 // on.
 func platformRunningProcesses() ([]processEntry, error) {
-	output, err := outputChildProcess(exec.Command("ps", "-axo", "pid=,ppid=,command="))
+	output, err := process.Output(exec.Command("ps", "-axo", "pid=,ppid=,command="))
 	if err != nil && len(output) == 0 {
 		return nil, err
 	}

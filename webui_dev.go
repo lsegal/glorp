@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/lsegal/glorp/process"
 )
 
 const viteDevURL = "http://127.0.0.1:5173"
@@ -29,10 +31,10 @@ func startWebUIFrontend(ctx context.Context, output io.Writer) (func(), error) {
 	command.Dir = "web"
 	command.Stdout = output
 	command.Stderr = output
-	if err := startChildProcess(command); err != nil {
+	if err := process.Start(command); err != nil {
 		return nil, err
 	}
-	return func() { _ = stopChildProcess(command) }, nil
+	return func() { _ = process.Stop(command) }, nil
 }
 
 func ensureViteInstalled(ctx context.Context, output io.Writer) error {
@@ -47,7 +49,7 @@ func ensureViteInstalled(ctx context.Context, output io.Writer) error {
 	command.Dir = "web"
 	command.Stdout = output
 	command.Stderr = output
-	if err := runChildProcess(command); err != nil {
+	if err := process.Run(command); err != nil {
 		return fmt.Errorf("install web UI dependencies: %w", err)
 	}
 	return nil

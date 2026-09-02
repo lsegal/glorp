@@ -1,4 +1,4 @@
-package main
+package process
 
 import (
 	"bytes"
@@ -143,7 +143,7 @@ func (s *processSpawner) start(cmd *exec.Cmd) error {
 	return <-result
 }
 
-// startChildProcess starts cmd as an owned subprocess: it runs in its own
+// Start starts cmd as an owned subprocess: it runs in its own
 // process group so the processes it spawns are terminated with it, it is
 // tracked so glorp kills the whole tree before exiting, and the kernel is asked
 // to tear it down should glorp die without running any cleanup at all.
@@ -152,7 +152,7 @@ func (s *processSpawner) start(cmd *exec.Cmd) error {
 // already exists, the child is created in a state where it has not run yet and
 // adoptOrphanedProcess releases it; a child that cannot be released is killed
 // rather than handed back to the caller suspended forever.
-func startChildProcess(cmd *exec.Cmd) error {
+func Start(cmd *exec.Cmd) error {
 	isolateProcessTree(cmd)
 	guardOrphanedProcess(cmd)
 	if err := spawner.start(cmd); err != nil {
@@ -161,55 +161,55 @@ func startChildProcess(cmd *exec.Cmd) error {
 	childProcesses.track(cmd)
 	if err := adoptOrphanedProcess(cmd); err != nil {
 		_ = signalProcessTree(cmd, killSignal)
-		_ = waitChildProcess(cmd)
+		_ = Wait(cmd)
 		return err
 	}
 	return nil
 }
 
-// waitChildProcess waits for a tracked child and stops tracking it.
-func waitChildProcess(cmd *exec.Cmd) error {
+// Wait waits for a tracked child and stops tracking it.
+func Wait(cmd *exec.Cmd) error {
 	err := cmd.Wait()
 	childProcesses.forget(cmd)
 	return err
 }
 
-// runChildProcess runs a tracked child to completion.
-func runChildProcess(cmd *exec.Cmd) error {
-	if err := startChildProcess(cmd); err != nil {
+// Run runs a tracked child to completion.
+func Run(cmd *exec.Cmd) error {
+	if err := Start(cmd); err != nil {
 		return err
 	}
-	return waitChildProcess(cmd)
+	return Wait(cmd)
 }
 
-// outputChildProcess runs a tracked child and returns what it wrote to standard
+// Output runs a tracked child and returns what it wrote to standard
 // output, the tracked equivalent of exec.Cmd.Output.
-func outputChildProcess(cmd *exec.Cmd) ([]byte, error) {
+func Output(cmd *exec.Cmd) ([]byte, error) {
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	err := runChildProcess(cmd)
+	err := Run(cmd)
 	return stdout.Bytes(), err
 }
 
-// combinedOutputChildProcess runs a tracked child and returns its standard
+// CombinedOutput runs a tracked child and returns its standard
 // output and standard error interleaved, the tracked equivalent of
 // exec.Cmd.CombinedOutput.
-func combinedOutputChildProcess(cmd *exec.Cmd) ([]byte, error) {
+func CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
-	err := runChildProcess(cmd)
+	err := Run(cmd)
 	return output.Bytes(), err
 }
 
-// stopChildProcess terminates a tracked child's process tree and reaps it,
+// Stop terminates a tracked child's process tree and reaps it,
 // asking politely first so the child can shut itself down cleanly.
-func stopChildProcess(cmd *exec.Cmd) error {
+func Stop(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
 	_ = signalProcessTree(cmd, terminateSignal)
 	exited := make(chan error, 1)
-	go func() { exited <- waitChildProcess(cmd) }()
+	go func() { exited <- Wait(cmd) }()
 	select {
 	case err := <-exited:
 		return stopError(err)
@@ -229,14 +229,14 @@ func stopError(err error) error {
 	return err
 }
 
-// reapChildProcesses terminates every owned subprocess. It is safe to call more
+// ReapAll terminates every owned subprocess. It is safe to call more
 // than once, so shutdown paths can call it defensively.
-func reapChildProcesses() { childProcesses.reap() }
+func ReapAll() { childProcesses.reap() }
 
-// exitAfterReaping terminates every owned subprocess before exiting, because
+// ExitAfterReaping terminates every owned subprocess before exiting, because
 // os.Exit runs no deferred cleanup.
-func exitAfterReaping(code int) {
-	reapChildProcesses()
+func ExitAfterReaping(code int) {
+	ReapAll()
 	os.Exit(code)
 }
 
@@ -245,11 +245,11 @@ func exitAfterReaping(code int) {
 // down instead of leaving them behind.
 var shutdownSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 
-// shutdownContext returns a context that is canceled by the first shutdown
+// ShutdownContext returns a context that is canceled by the first shutdown
 // signal, giving glorp a chance to stop its subprocesses in order. A second
 // signal means "now": every owned subprocess is killed and glorp exits
 // immediately, so an impatient second Ctrl-C cannot leave an orphan behind.
-func shutdownContext() (context.Context, func()) {
+func ShutdownContext() (context.Context, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	signals := make(chan os.Signal, len(shutdownSignals))
 	signal.Notify(signals, shutdownSignals...)
@@ -261,7 +261,7 @@ func shutdownContext() (context.Context, func()) {
 			return
 		}
 		<-signals
-		exitAfterReaping(1)
+		ExitAfterReaping(1)
 	}()
 	return ctx, func() {
 		signal.Stop(signals)

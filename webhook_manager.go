@@ -9,6 +9,9 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/lsegal/glorp/ngrok"
+	"github.com/lsegal/glorp/process"
 )
 
 var errProjectWebhookUnavailable = errors.New("project push webhook unavailable")
@@ -92,7 +95,7 @@ func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpo
 			}
 			continue
 		}
-		if ngrokURL(hook.Config.URL) {
+		if ngrok.IsURL(hook.Config.URL) {
 			if _, err := g.api(ctx, fmt.Sprintf("%s/%d", spec.apiPath, hook.ID), "DELETE"); err != nil {
 				return false, webhookAccessError(fmt.Sprintf("remove old ngrok webhook %d from", hook.ID), spec, err)
 			}
@@ -373,7 +376,7 @@ func (g GHCLI) api(ctx context.Context, path, method string, body ...string) ([]
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	output, err := outputChildProcess(cmd)
+	output, err := process.Output(cmd)
 	if err != nil {
 		detail := strings.TrimSpace(stderr.String())
 		if detail != "" {

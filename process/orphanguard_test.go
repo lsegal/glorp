@@ -1,6 +1,6 @@
 //go:build !windows
 
-package main
+package process
 
 import (
 	"bufio"
@@ -22,10 +22,10 @@ import (
 // running. Churn threads hard and prove the child is untouched.
 func TestOwnedChildSurvivesThreadChurn(t *testing.T) {
 	cmd := exec.Command("sleep", "60")
-	if err := startChildProcess(cmd); err != nil {
+	if err := Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
-	t.Cleanup(func() { _ = stopChildProcess(cmd) })
+	t.Cleanup(func() { _ = Stop(cmd) })
 	pid := cmd.Process.Pid
 
 	var wg sync.WaitGroup
@@ -58,11 +58,11 @@ func TestSpawnerStartsChildrenFromEveryGoroutine(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			cmd := exec.Command("sh", "-c", "exit 0")
-			if err := startChildProcess(cmd); err != nil {
+			if err := Start(cmd); err != nil {
 				t.Errorf("start child process: %v", err)
 				return
 			}
-			if err := waitChildProcess(cmd); err != nil {
+			if err := Wait(cmd); err != nil {
 				t.Errorf("wait child process: %v", err)
 			}
 		}()
@@ -72,7 +72,7 @@ func TestSpawnerStartsChildrenFromEveryGoroutine(t *testing.T) {
 
 func TestSpawnerReportsStartFailures(t *testing.T) {
 	cmd := exec.Command("glorp-no-such-binary-exists")
-	if err := startChildProcess(cmd); err == nil {
+	if err := Start(cmd); err == nil {
 		t.Fatalf("starting a missing binary succeeded")
 	}
 	if isTracked(cmd) {
@@ -152,7 +152,7 @@ func TestOrphanGuardHelperProcess(t *testing.T) {
 		t.Skip("helper process for TestKilledParentTakesItsChildrenDown")
 	}
 	cmd := exec.Command("sleep", "60")
-	if err := startChildProcess(cmd); err != nil {
+	if err := Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
 	fmt.Printf("child-pid %d\n", cmd.Process.Pid)

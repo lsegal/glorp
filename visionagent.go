@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/lsegal/glorp/browser"
+	"github.com/lsegal/glorp/process"
 )
 
 // visionAgentRunner adapts the run's agent runner to the one-shot invocation
@@ -35,6 +36,6 @@ func (v visionAgentRunner) RunAgent(ctx context.Context, binary string, args []s
 	cmd.Dir = os.TempDir()
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
-	err := runChildProcess(cmd)
+	err := process.Run(cmd)
 	return output.String(), err
 }

@@ -1,6 +1,6 @@
 //go:build !linux && !windows
 
-package main
+package process
 
 import (
 	"fmt"
@@ -16,13 +16,13 @@ import (
 func startReapTarget(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("sleep", "60")
-	if err := startChildProcess(cmd); err != nil {
+	if err := Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
 	reaped := make(chan struct{})
 	go func() {
 		defer close(reaped)
-		_ = waitChildProcess(cmd)
+		_ = Wait(cmd)
 	}()
 	t.Cleanup(func() {
 		_ = signalProcessTree(cmd, killSignal)
@@ -107,13 +107,13 @@ func TestOrphanReaperIgnoresAnotherInstancesTree(t *testing.T) {
 // glorp has already cleaned up.
 func TestOwnedProcessGroupIsReleasedWhenChildIsForgotten(t *testing.T) {
 	cmd := exec.Command("sleep", "60")
-	if err := startChildProcess(cmd); err != nil {
+	if err := Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
 	if !ownedProcessGroupRecorded(cmd) {
 		t.Fatalf("running child was not recorded with the reaper")
 	}
-	if err := stopChildProcess(cmd); err != nil {
+	if err := Stop(cmd); err != nil {
 		t.Fatalf("stop child process: %v", err)
 	}
 	if ownedProcessGroupRecorded(cmd) {
