@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mattn/go-isatty"
 )
@@ -887,5 +888,52 @@ func TestCommandArgsPromptResumedSessionWithIssueUpdate(t *testing.T) {
 	plain := commandArgsForSession(runner, Issue{Number: 7, Target: "o/r"}, AgentSession{ID: "sess-1", Agent: "claude", Resume: true})
 	if !strings.Contains(plain[len(plain)-1], "Recover the existing work") {
 		t.Fatalf("plain resume lost its recovery prompt: %q", plain[len(plain)-1])
+	}
+}
+
+// TestGHCLIBoundsEveryCommand checks each `gh` call carries a deadline of its
+// own. Every read the poll loop makes against GitHub is one of these calls, so
+// an invocation that hangs used to park the goroutine that dispatches work for
+// the rest of the run (issue #472).
+func TestGHCLIBoundsEveryCommand(t *testing.T) {
+	var deadline time.Time
+	var bounded bool
+	gh := GHCLI{runCommand: func(ctx context.Context, args ...string) ([]byte, error) {
+		deadline, bounded = ctx.Deadline()
+		return nil, nil
+	}}
+	if _, err := gh.run(context.Background(), "api", "user"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !bounded {
+		t.Fatal("the gh call ran with no deadline")
+	}
+	if left := time.Until(deadline); left <= 0 || left > ghCommandTimeout {
+		t.Fatalf("deadline in %s, want one within the %s command timeout", left, ghCommandTimeout)
+	}
+}
+
+// TestGHCLIReportsATimedOutCommand checks a `gh` call that runs out of time
+// fails with a description of what happened rather than a bare context error,
+// and that a run being shut down is not reported as one.
+func TestGHCLIReportsATimedOutCommand(t *testing.T) {
+	previous := ghCommandTimeout
+	ghCommandTimeout = 20 * time.Millisecond
+	defer func() { ghCommandTimeout = previous }()
+	gh := GHCLI{runCommand: func(ctx context.Context, args ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	_, err := gh.run(context.Background(), "issue", "list")
+	if err == nil || !strings.Contains(err.Error(), "did not finish within") {
+		t.Fatalf("error %v, want one naming the command that ran out of time", err)
+	}
+	if !strings.Contains(err.Error(), "gh issue list") {
+		t.Fatalf("error %v, want it to name the gh call", err)
+	}
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := gh.run(stopped, "issue", "list"); err == nil || strings.Contains(err.Error(), "did not finish within") {
+		t.Fatalf("error %v, want the shutdown reported as a cancellation", err)
 	}
 }

@@ -48,6 +48,13 @@ const (
 	// answering the DevTools endpoint by the time it is asked, so the window is
 	// normally there on the first read; past this it is not coming.
 	browserTargetTimeout = 2 * time.Second
+	// browserCommandTimeout bounds a single command sent to a tab: a
+	// navigation, a reload, a script evaluation, a screenshot. GitHub pages
+	// are large and a run paces its loads, so this is deliberately generous;
+	// what it exists to catch is a page or a renderer that has stopped
+	// answering altogether, which would otherwise park the poll loop for the
+	// rest of the run (issue #472).
+	browserCommandTimeout = 2 * time.Minute
 )
 
 // browserBinaryNames are the Chromium-based executables looked for on PATH, in

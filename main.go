@@ -435,11 +435,37 @@ type GHCLI struct {
 	selfLoginCache *sync.Map
 }
 
+// ghCommandTimeout bounds a single `gh` invocation. Every read and write glorp
+// makes against GitHub goes through one, including the issue listing the poll
+// loop blocks on, so a subprocess that hangs -- a stuck TLS connection, a
+// prompt nobody answers -- would otherwise stop the watch dispatching anything
+// for the rest of the run (issue #472). It is generous enough that no ordinary
+// call reaches it, and a variable only so tests need not spend it.
+var ghCommandTimeout = 2 * time.Minute
+
 func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
+	// The deadline is the command's own, and is applied before the runner is
+	// chosen so every implementation of the call is bounded by it. For the
+	// real one it is also the child process's: CommandContext kills it when
+	// the deadline expires, so a hung `gh` is reaped rather than left behind.
+	runCtx, cancel := context.WithTimeout(ctx, ghCommandTimeout)
+	defer cancel()
 	if g.runCommand != nil {
-		return g.runCommand(ctx, args...)
+		output, err := g.runCommand(runCtx, args...)
+		return output, g.timedOut(ctx, runCtx, args, err)
 	}
-	return combinedOutputChildProcess(exec.CommandContext(ctx, g.Binary, args...))
+	output, err := combinedOutputChildProcess(exec.CommandContext(runCtx, g.Binary, args...))
+	return output, g.timedOut(ctx, runCtx, args, err)
+}
+
+// timedOut replaces the bare context error of a `gh` call that ran out of time
+// with one naming the call and the deadline, and leaves every other outcome
+// alone. A run being shut down is not a timeout, however the command ended.
+func (g GHCLI) timedOut(ctx, runCtx context.Context, args []string, err error) error {
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		return fmt.Errorf("gh %s did not finish within %s", strings.Join(args, " "), formatInterval(ghCommandTimeout))
+	}
+	return err
 }
 
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
