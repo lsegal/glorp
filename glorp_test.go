@@ -3490,3 +3490,181 @@ func TestGlorpDoesNotStarveAQuietTargetBehindABusyOne(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// waitForSession drains the next session the runner was launched with, so a
+// test can tell the run it dispatched from the one it was resumed with.
+func waitForSession(t *testing.T, runner *fakeSessionRunner) AgentSession {
+	t.Helper()
+	select {
+	case session := <-runner.sessions:
+		return session
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the agent to be launched")
+		return AgentSession{}
+	}
+}
+
+func TestGlorpRelaysClosedWorkIntoTheSameSession(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	src.state = OriginatingWorkState{IssueState: "OPEN", IssueBody: "original"}
+	runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4)}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	first := waitForSession(t, runner)
+	if first.Resume || first.Update != "" {
+		t.Fatalf("first launch resumed or carried an update: %+v", first)
+	}
+	src.mu.Lock()
+	src.state = OriginatingWorkState{IssueState: "closed", IssueBody: "original"}
+	src.mu.Unlock()
+
+	resumed := waitForSession(t, runner)
+	if !resumed.Resume || resumed.ID != first.ID {
+		t.Fatalf("closure did not resume the same session: first=%+v resumed=%+v", first, resumed)
+	}
+	if !strings.Contains(resumed.Update, "Stop working on issue #7") || !strings.Contains(resumed.Update, "Clean up") {
+		t.Fatalf("closure did not ask the agent to clean up: %q", resumed.Update)
+	}
+	// The cleanup run must not be interrupted again by the closure that
+	// started it, and the work must not be recorded as failed.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("cleanup run was interrupted again: %+v", extra)
+	default:
+	}
+	state, err := loadWorkState(statePath)
+	if err != nil || state[7].Status != "active" {
+		t.Fatalf("relayed closure did not leave the work active, state=%v err=%v", state, err)
+	}
+}
+
+func TestGlorpRelaysChangedDescriptionIntoTheSameSession(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	src.state = OriginatingWorkState{IssueState: "OPEN", IssueBody: "original"}
+	runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4)}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	first := waitForSession(t, runner)
+	src.mu.Lock()
+	src.state = OriginatingWorkState{IssueState: "OPEN", IssueBody: "rewritten"}
+	src.mu.Unlock()
+
+	resumed := waitForSession(t, runner)
+	if !resumed.Resume || resumed.ID != first.ID {
+		t.Fatalf("description change did not resume the same session: first=%+v resumed=%+v", first, resumed)
+	}
+	if !strings.Contains(resumed.Update, "description of issue #7 changed") {
+		t.Fatalf("description change was not relayed: %q", resumed.Update)
+	}
+}
+
+func TestGlorpRelaysNewCommentsIntoTheSameSession(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	src.state = OriginatingWorkState{IssueState: "OPEN", IssueBody: "original"}
+	runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4)}
+	comments := newFakeCommentClient()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+		Comments: comments, Identity: "SELF",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	first := waitForSession(t, runner)
+	comments.inject("o/r", 7, Comment{Body: "Please also handle the empty case.", Author: "lsegal", CreatedAt: time.Now().Add(2 * time.Second)})
+	resumed := waitForSession(t, runner)
+	if !resumed.Resume || resumed.ID != first.ID {
+		t.Fatalf("new comment did not resume the same session: first=%+v resumed=%+v", first, resumed)
+	}
+	if !strings.Contains(resumed.Update, "new comment was added to issue #7") {
+		t.Fatalf("new comment was not relayed: %q", resumed.Update)
+	}
+}
+
+func TestWebhookEventUpdatesActiveWork(t *testing.T) {
+	for _, test := range []struct {
+		event WebhookEvent
+		want  bool
+	}{
+		{WebhookEvent{Kind: "issues", Action: "edited", Repository: "o/r", IssueNumber: 7}, true},
+		{WebhookEvent{Kind: "issues", Action: "closed", Repository: "o/r", IssueNumber: 7}, true},
+		{WebhookEvent{Kind: "issues", Action: "labeled", Repository: "o/r", IssueNumber: 7}, false},
+		{WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7}, true},
+		{WebhookEvent{Kind: "issue_comment", Action: "deleted", Repository: "o/r", IssueNumber: 7}, false},
+		{WebhookEvent{Kind: "push", Repository: "o/r", IssueNumber: 7}, false},
+		{WebhookEvent{Kind: "issues", Action: "edited", Repository: "o/r"}, false},
+	} {
+		if got := webhookEventUpdatesActiveWork(test.event); got != test.want {
+			t.Fatalf("webhookEventUpdatesActiveWork(%+v) = %v, want %v", test.event, got, test.want)
+		}
+	}
+}
+
+func TestNudgesForIssueMatchesTargetScopedKeys(t *testing.T) {
+	nudges := map[string]chan struct{}{
+		"o/r#7":   make(chan struct{}, 1),
+		"o/r#8":   make(chan struct{}, 1),
+		"x/y#7":   make(chan struct{}, 1),
+		"garbage": make(chan struct{}, 1),
+	}
+	if got := nudgesForIssue(nudges, "o/r", 7); len(got) != 1 {
+		t.Fatalf("nudgesForIssue matched %d runs, want 1", len(got))
+	}
+	if got := nudgesForIssue(nudges, "o/r", 9); len(got) != 0 {
+		t.Fatalf("nudgesForIssue matched %d runs for an idle issue, want 0", len(got))
+	}
+	if got := nudgesForIssue(nudges, "", 7); len(got) != 0 {
+		t.Fatalf("nudgesForIssue matched %d runs with no repository, want 0", len(got))
+	}
+}
+
+func TestRelayableCommentIgnoresHandoffChatter(t *testing.T) {
+	since := time.Now()
+	// The handshake (issue #214) posts its claims on the same conversation
+	// every instance watching the issue reads, so relaying them would restart
+	// the agent on glorp's own bookkeeping.
+	for _, body := range []string{signComment(startingClaimBody, "OTHER"), signComment(presenceClaimBody, "SELF"), signComment(askClaimBody, "OTHER")} {
+		if relayableComment(Comment{Body: body, CreatedAt: since.Add(time.Second)}, since) {
+			t.Fatalf("handoff claim %q was treated as a relayable comment", body)
+		}
+	}
+	if relayableComment(Comment{Body: "Please also handle the empty case.", CreatedAt: since.Add(-time.Second)}, since) {
+		t.Fatal("a comment posted before the run started was treated as new")
+	}
+	if relayableComment(Comment{Body: "Please also handle the empty case."}, since) {
+		t.Fatal("a comment with no readable timestamp was treated as new")
+	}
+	if !relayableComment(Comment{Body: "Please also handle the empty case.", CreatedAt: since.Add(time.Second)}, since) {
+		t.Fatal("a new comment was not relayable")
+	}
+}

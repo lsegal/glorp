@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"io"
@@ -423,5 +424,29 @@ func TestBrowserTabIdleTimeout(t *testing.T) {
 		if got := browserTabIdleTimeout(c.interval); got != c.want {
 			t.Errorf("browserTabIdleTimeout(%s) = %s, want %s", c.interval, got, c.want)
 		}
+	}
+}
+
+// TestBrowserSourcesForwardOriginatingWorkState covers browser mode's half of
+// issue #469: nothing on a rendered page reports that an in-flight issue was
+// closed or that its description changed, so the run loop's watcher reads that
+// state through the API client the browser sources wrap. Before this the
+// browser issue source implemented no WorkClosureChecker at all, so the run
+// loop's `w.Issues.(WorkClosureChecker)` assertion failed and browser mode
+// watched nothing while an agent was working.
+func TestBrowserSourcesForwardOriginatingWorkState(t *testing.T) {
+	want := OriginatingWorkState{IssueState: "closed", IssueBody: "body"}
+	source := browserWatchIssues{Work: &fakeClosureSource{state: want}}
+	guard := browserSignInGuard{source: source}
+	checker, ok := IssueSource(guard).(WorkClosureChecker)
+	if !ok {
+		t.Fatal("browser mode's issue source does not report work state")
+	}
+	got, err := checker.OriginatingWorkState(context.Background(), "o/r", 7)
+	if err != nil || got.IssueState != want.IssueState || got.IssueBody != want.IssueBody {
+		t.Fatalf("OriginatingWorkState = %+v, %v; want %+v", got, err, want)
+	}
+	if _, err := (browserWatchIssues{}).OriginatingWorkState(context.Background(), "o/r", 7); err == nil {
+		t.Fatal("expected an error when no work state source is configured")
 	}
 }

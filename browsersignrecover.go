@@ -185,6 +185,18 @@ type browserSignInGuard struct {
 	recovery *browserSignInRecovery
 }
 
+// OriginatingWorkState passes the active-work check through to the wrapped
+// source. The guard exists to recover a signed-out *page* read; this check is
+// an API read that cannot come back signed out, so it is forwarded untouched
+// rather than being lost because the guard does not implement it (issue #469).
+func (g browserSignInGuard) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
+	checker, ok := g.source.(WorkClosureChecker)
+	if !ok {
+		return OriginatingWorkState{}, fmt.Errorf("read issue #%d state: %T cannot report work state", number, g.source)
+	}
+	return checker.OriginatingWorkState(ctx, repo, number)
+}
+
 func (g browserSignInGuard) ListIssues(ctx context.Context, target string) ([]Issue, error) {
 	issues, err := g.source.ListIssues(ctx, target)
 	if err != nil {

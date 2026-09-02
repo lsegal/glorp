@@ -759,6 +759,21 @@ type browserWatchIssues struct {
 	Repos IssueSource
 	// Board reads a project's rendered Projects v2 page (issue #378).
 	Board *BrowserBoard
+	// Work answers the per-issue state the run loop watches while an agent is
+	// working: whether the ticket closed and what its description now says
+	// (issue #469). Neither page reader produces it, and a closed issue drops
+	// out of the rendered list rather than reporting itself closed, so it is
+	// read through the API the same way posting a comment is.
+	Work WorkClosureChecker
+}
+
+// OriginatingWorkState forwards the active-work check to the API client, so
+// browser mode watches an in-flight issue the same way poll mode does.
+func (s browserWatchIssues) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
+	if s.Work == nil {
+		return OriginatingWorkState{}, fmt.Errorf("read issue #%d state: no work state source configured", number)
+	}
+	return s.Work.OriginatingWorkState(ctx, repo, number)
 }
 
 func (s browserWatchIssues) ListIssues(ctx context.Context, target string) ([]Issue, error) {

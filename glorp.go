@@ -57,6 +57,40 @@ type jobActionRequest struct {
 // always wins, so the losing instance cooperatively stops.
 var errWorkClaimedByOther = errors.New("work claimed by another instance")
 
+// errWorkUpdated signals that the issue an agent is working changed on GitHub
+// while the run was in flight (issue #469). Unlike the other cancellation
+// causes it is not the end of the work: the run loop stops the agent's current
+// prompt and immediately resumes the same session with workUpdate's
+// instruction, so the closure, edited description, or new comment reaches the
+// agent already holding the ticket.
+var errWorkUpdated = errors.New("work updated")
+
+// workUpdate is the errWorkUpdated cause, carrying the instruction to prompt
+// the resumed session with.
+type workUpdate struct {
+	instruction string
+	// summary is the short form logged when the run is interrupted; the
+	// instruction itself is written for the agent, not for the log.
+	summary string
+	// closed marks the update a closure raised, so the cleanup run it starts
+	// is not interrupted again by the same closure.
+	closed bool
+}
+
+func (u *workUpdate) Error() string { return errWorkUpdated.Error() + ": " + u.summary }
+
+func (u *workUpdate) Unwrap() error { return errWorkUpdated }
+
+// workUpdateFor returns the update a run was interrupted to deliver, if it was
+// interrupted for one at all.
+func workUpdateFor(cause error) (*workUpdate, bool) {
+	var update *workUpdate
+	if errors.As(cause, &update) {
+		return update, true
+	}
+	return nil, false
+}
+
 // isCooperativeCancellation reports whether cause is one of the run
 // cancellation reasons that reflect another party taking over the work
 // rather than an actual runner failure.
@@ -121,7 +155,11 @@ type PullRequestWorkState struct {
 }
 
 type OriginatingWorkState struct {
-	IssueState   string
+	IssueState string
+	// IssueBody is the issue's description, compared between checks so an
+	// edit made while an agent is working is relayed into its session
+	// (issue #469).
+	IssueBody    string
 	PullRequests []PullRequestWorkState
 }
 
@@ -152,6 +190,12 @@ type AgentSession struct {
 	Agent             string
 	CheckoutDirectory string
 	Resume            bool
+	// Update carries a change made to the issue while the agent was working
+	// it (issue #469). A resumed session that has one is prompted with it
+	// instead of the generic "continue", so the closure, edited description,
+	// or new comment reaches the agent that is already holding the work
+	// rather than being noticed only after the run ends.
+	Update string
 }
 type SessionAgentRunner interface {
 	RunSession(context.Context, Issue, AgentSession, func(AgentSession)) error
@@ -748,14 +792,56 @@ func (w *Glorp) pollDiscussions(ctx context.Context, n int, targets []string, se
 	}
 }
 
-func (w *Glorp) watchForClosedWork(ctx context.Context, checker WorkClosureChecker, issue Issue, cancel context.CancelCauseFunc, ready chan<- struct{}) {
+// issueWatch describes the run watchForIssueUpdates is watching for, so a
+// resumed run does not re-deliver what interrupted its predecessor.
+type issueWatch struct {
+	// since is when the run started; only comments posted after it are news
+	// to the agent.
+	since time.Time
+	// resumable reports whether this run can be interrupted and resumed in
+	// place. It is a function rather than a flag because an agent that names
+	// its own session only reports it after launch, so a run can become
+	// resumable partway through. A run that is not resumable keeps the
+	// historical behaviour: a closure stops it outright rather than asking it
+	// to clean up in a session that cannot be reopened, and an edit or a
+	// comment leaves it alone entirely.
+	resumable func() bool
+	// closed reports that the issue was already closed when this run began,
+	// which is true of the cleanup run a closure itself started. Without it
+	// that run would be interrupted by the very closure it was resumed to
+	// handle.
+	closed bool
+	// nudge asks for an immediate check instead of waiting out the tick, so a
+	// webhook delivery reaches the running agent as promptly in push mode as
+	// the poll notices it in poll mode.
+	nudge <-chan struct{}
+}
+
+// canRelay reports whether this run can be resumed in place right now.
+func (watch issueWatch) canRelay() bool {
+	return watch.resumable != nil && watch.resumable()
+}
+
+// watchForIssueUpdates polls the issue an agent is working and interrupts the
+// run when GitHub says something about it changed (issue #469). A run that can
+// be resumed is interrupted with a workUpdate the run loop replays into the
+// same session; one that cannot keeps the original behaviour of stopping on a
+// closure. Closure and description changes are read from the closure checker,
+// new comments from the comment client, so browser mode watches the rendered
+// pages the rest of the run already reads and poll mode watches the API.
+func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChecker, issue Issue, watch issueWatch, cancel context.CancelCauseFunc, ready chan<- struct{}) {
 	repo := issueRepository(issue.Target, issue)
-	previous, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
-	if err != nil && ctx.Err() == nil {
-		w.logf("issue #%d initial closure check failed: %v", issue.Number, err)
+	var previous OriginatingWorkState
+	var err error
+	if checker != nil {
+		previous, err = checker.OriginatingWorkState(ctx, repo, issue.Number)
+		if err != nil && ctx.Err() == nil {
+			w.logf("issue #%d initial closure check failed: %v", issue.Number, err)
+		}
 	}
+	seen := w.commentsSeen(ctx, repo, issue.Number)
 	close(ready)
-	if reason := closedWorkReason(OriginatingWorkState{}, previous, issue.Number); err == nil && strings.EqualFold(previous.IssueState, "closed") && reason != "" {
+	if reason := closedWorkReason(OriginatingWorkState{}, previous, issue.Number); checker != nil && err == nil && !watch.closed && strings.EqualFold(previous.IssueState, "closed") && reason != "" {
 		cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
 		w.logf("issue #%d stopping agent: %s", issue.Number, reason)
 		cancel(cause)
@@ -767,23 +853,109 @@ func (w *Glorp) watchForClosedWork(ctx context.Context, checker WorkClosureCheck
 		select {
 		case <-ctx.Done():
 			return
+		case <-watch.nudge:
 		case <-ticker.C:
-			current, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
-			if err != nil {
-				if ctx.Err() == nil {
-					w.logf("issue #%d closure check failed: %v", issue.Number, err)
-				}
-				continue
-			}
-			if reason := closedWorkReason(previous, current, issue.Number); reason != "" {
-				cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
-				w.logf("issue #%d stopping agent: %s", issue.Number, reason)
-				cancel(cause)
-				return
-			}
-			previous = current
 		}
+		if checker != nil {
+			current, checkErr := checker.OriginatingWorkState(ctx, repo, issue.Number)
+			if checkErr != nil {
+				if ctx.Err() == nil {
+					w.logf("issue #%d closure check failed: %v", issue.Number, checkErr)
+				}
+			} else {
+				if reason := closedWorkReason(previous, current, issue.Number); reason != "" {
+					if !watch.canRelay() {
+						cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
+						w.logf("issue #%d stopping agent: %s", issue.Number, reason)
+						cancel(cause)
+						return
+					}
+					w.logf("issue #%d interrupting agent: %s; asking it to clean up in the same session", issue.Number, reason)
+					cancel(&workUpdate{summary: reason, closed: true, instruction: closedWorkCleanupPrompt(issue, reason)})
+					return
+				}
+				if watch.canRelay() && previous.IssueBody != "" && current.IssueBody != previous.IssueBody {
+					w.logf("issue #%d interrupting agent: its description changed; relaying it into the same session", issue.Number)
+					cancel(&workUpdate{summary: fmt.Sprintf("issue #%d description changed", issue.Number), instruction: changedDescriptionPrompt(issue)})
+					return
+				}
+				previous = current
+			}
+		}
+		if w.Comments == nil || !watch.canRelay() {
+			continue
+		}
+		comments, listErr := w.Comments.ListComments(ctx, repo, issue.Number)
+		if listErr != nil {
+			if ctx.Err() == nil {
+				w.logf("issue #%d comment check failed: %v", issue.Number, listErr)
+			}
+			continue
+		}
+		added := 0
+		for _, comment := range comments {
+			if relayableComment(comment, watch.since) && !seen[commentKey(comment)] {
+				added++
+			}
+		}
+		if added == 0 {
+			continue
+		}
+		w.logf("issue #%d interrupting agent: %d new comment(s); relaying them into the same session", issue.Number, added)
+		cancel(&workUpdate{summary: fmt.Sprintf("issue #%d has %d new comment(s)", issue.Number, added), instruction: newCommentsPrompt(issue, added)})
+		return
 	}
+}
+
+// commentsSeen snapshots the conversation a run starts from, so only what is
+// posted after it counts as news for that run.
+func (w *Glorp) commentsSeen(ctx context.Context, repo string, number int) map[string]bool {
+	seen := map[string]bool{}
+	if w.Comments == nil {
+		return seen
+	}
+	comments, err := w.Comments.ListComments(ctx, repo, number)
+	if err != nil {
+		if ctx.Err() == nil {
+			w.logf("issue #%d initial comment check failed: %v", number, err)
+		}
+		return seen
+	}
+	for _, comment := range comments {
+		seen[commentKey(comment)] = true
+	}
+	return seen
+}
+
+func commentKey(comment Comment) string {
+	return comment.CreatedAt.UTC().Format(time.RFC3339Nano) + "\x00" + comment.Author + "\x00" + comment.Body
+}
+
+// relayableComment reports whether a comment is worth interrupting an agent
+// for. The handoff handshake (issue #214) posts claims on the same
+// conversation, and every instance watching the issue reads them, so relaying
+// those would restart the agent on glorp's own bookkeeping.
+func relayableComment(comment Comment, since time.Time) bool {
+	if _, _, ok := parseClaim(comment.Body); ok {
+		return false
+	}
+	return !comment.CreatedAt.IsZero() && comment.CreatedAt.After(since)
+}
+
+func closedWorkCleanupPrompt(issue Issue, reason string) string {
+	return fmt.Sprintf("Stop working on issue #%d: %s.\n\nDo not implement it any further and do not reopen it. Clean up what this session already started instead: close the pull request you opened for it if it is still open, delete the branch and the isolated clone if they are no longer needed, and report what you cleaned up.", issue.Number, reason)
+}
+
+func changedDescriptionPrompt(issue Issue) string {
+	return fmt.Sprintf("The description of issue #%d changed while you were working on it.\n\nReread the issue from GitHub, then reconcile the work in progress with what it now asks for before continuing. Say what changed and what you adjusted.", issue.Number)
+}
+
+func newCommentsPrompt(issue Issue, added int) string {
+	noun := "comment was"
+	if added > 1 {
+		noun = "comments were"
+	}
+	return fmt.Sprintf("%d new %s added to issue #%d while you were working on it.\n\nReread the issue's conversation from GitHub, treat the new comments as part of the request, and take them into account before continuing.", added, noun, issue.Number)
 }
 
 func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) string {
@@ -1107,6 +1279,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 	var workMu sync.Mutex
 	active := make(map[string]string)
 	cancellations := make(map[string]context.CancelCauseFunc)
+	// nudges lets a webhook delivery about an issue an agent is working ask
+	// that run's watcher to check GitHub now rather than on its next tick, so
+	// push mode relays the change as promptly as it dispatches new work
+	// (issue #469). The delivery is only a nudge: what actually interrupts the
+	// run is still read back from GitHub.
+	nudges := make(map[string]chan struct{})
 	directMentions := make(map[string]bool)
 	workFinished := make(chan struct{}, 1)
 	jobs := make(map[string]JobSnapshot)
@@ -1363,33 +1541,16 @@ func (w *Glorp) Run(ctx context.Context) error {
 					default:
 					}
 				}()
-				runCtx, cancelRun := context.WithCancelCause(ctx)
-				defer cancelRun(nil)
 				key := issueKey(i)
+				nudge := make(chan struct{}, 1)
 				workMu.Lock()
-				cancellations[key] = cancelRun
+				nudges[key] = nudge
 				workMu.Unlock()
 				defer func() {
 					workMu.Lock()
-					delete(cancellations, key)
+					delete(nudges, key)
 					workMu.Unlock()
 				}()
-				var closureReady <-chan struct{}
-				if closureChecker != nil {
-					ready := make(chan struct{})
-					closureReady = ready
-					go w.watchForClosedWork(runCtx, closureChecker, i, cancelRun, ready)
-				}
-				if closureReady != nil {
-					select {
-					case <-closureReady:
-					case <-runCtx.Done():
-					}
-				}
-				if w.Comments != nil {
-					target := ownershipTargetFor(runCtx, closureChecker, i)
-					go w.watchForCompetingClaim(runCtx, target, i.Number, time.Now(), cancelRun)
-				}
 				w.logf("issue #%d started (tasks: %d running, %d queued)", i.Number, running, queued)
 				jobOutput := jobOutputWriter{write: func(text string) {
 					jobMu.Lock()
@@ -1432,24 +1593,81 @@ func (w *Glorp) Run(ctx context.Context) error {
 					publish()
 				}
 				var runErr error
-				activeRunner := w.runner()
-				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) {
-					runErr = cause
-				} else if w.UI != nil {
-					if runner, ok := activeRunner.(SessionAgentOutputRunner); ok {
-						runErr = runner.RunSessionWithOutput(runCtx, i, agentSession, updateSession, jobOutput)
-					} else if runner, ok := activeRunner.(AgentOutputRunner); ok {
-						runErr = runner.RunWithOutput(runCtx, i, jobOutput)
+				// A run that changes nothing about the ticket runs once. One
+				// interrupted because the issue changed under it is resumed in
+				// place with what changed, so the agent already holding the
+				// work receives it rather than the change waiting out the run
+				// (issue #469).
+				alreadyClosed := false
+				for {
+					runCtx, cancelRun := context.WithCancelCause(ctx)
+					workMu.Lock()
+					cancellations[key] = cancelRun
+					workMu.Unlock()
+					watch := issueWatch{since: time.Now(), closed: alreadyClosed, nudge: nudge, resumable: func() bool {
+						workMu.Lock()
+						defer workMu.Unlock()
+						state := work[key]
+						return state.SessionID != "" && state.Agent != ""
+					}}
+					var closureReady <-chan struct{}
+					if closureChecker != nil || w.Comments != nil {
+						ready := make(chan struct{})
+						closureReady = ready
+						go w.watchForIssueUpdates(runCtx, closureChecker, i, watch, cancelRun, ready)
+					}
+					if closureReady != nil {
+						select {
+						case <-closureReady:
+						case <-runCtx.Done():
+						}
+					}
+					if w.Comments != nil {
+						target := ownershipTargetFor(runCtx, closureChecker, i)
+						go w.watchForCompetingClaim(runCtx, target, i.Number, time.Now(), cancelRun)
+					}
+					activeRunner := w.runner()
+					if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) || errors.Is(cause, errWorkUpdated) {
+						runErr = cause
+					} else if w.UI != nil {
+						if runner, ok := activeRunner.(SessionAgentOutputRunner); ok {
+							runErr = runner.RunSessionWithOutput(runCtx, i, agentSession, updateSession, jobOutput)
+						} else if runner, ok := activeRunner.(AgentOutputRunner); ok {
+							runErr = runner.RunWithOutput(runCtx, i, jobOutput)
+						} else {
+							runErr = activeRunner.Run(runCtx, i)
+						}
+					} else if runner, ok := activeRunner.(SessionAgentRunner); ok {
+						runErr = runner.RunSession(runCtx, i, agentSession, updateSession)
 					} else {
 						runErr = activeRunner.Run(runCtx, i)
 					}
-				} else if runner, ok := activeRunner.(SessionAgentRunner); ok {
-					runErr = runner.RunSession(runCtx, i, agentSession, updateSession)
-				} else {
-					runErr = activeRunner.Run(runCtx, i)
-				}
-				if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) {
-					runErr = cause
+					cause := context.Cause(runCtx)
+					if isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) || errors.Is(cause, errWorkUpdated) {
+						runErr = cause
+					}
+					cancelRun(nil)
+					workMu.Lock()
+					delete(cancellations, key)
+					state := work[key]
+					workMu.Unlock()
+					update, updated := workUpdateFor(cause)
+					if !updated || ctx.Err() != nil {
+						break
+					}
+					// The session identity is read back from the work state so
+					// a run whose agent reported its own session ID after
+					// launch is resumed with that one rather than the
+					// placeholder it was dispatched with.
+					if state.SessionID == "" || state.Agent == "" {
+						w.logf("issue #%d cannot resume its session to deliver the update; stopping instead", i.Number)
+						break
+					}
+					alreadyClosed = alreadyClosed || update.closed
+					agentSession = AgentSession{ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory, Resume: true, Update: update.instruction}
+					runErr = nil
+					w.logf("issue #%d resuming session %s with the update", i.Number, state.SessionID)
+					publish()
 				}
 				if runErr != nil {
 					if w.Status != nil {
@@ -1790,6 +2008,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 		case event := <-w.Events:
 			w.logWebhookEvent(event)
 			respondToOwnershipAsk(ctx, event)
+			// A delivery about an issue an agent is already working is not new
+			// work to dispatch; it is a change that agent needs to hear about,
+			// so its watcher is asked to check GitHub now (issue #469).
+			if webhookEventUpdatesActiveWork(event) {
+				workMu.Lock()
+				pending := nudgesForIssue(nudges, event.Repository, event.IssueNumber)
+				workMu.Unlock()
+				for _, nudge := range pending {
+					select {
+					case nudge <- struct{}{}:
+						w.logf("issue #%d %s delivery concerns work in flight; checking it now", event.IssueNumber, webhookEventLabel(event))
+					default:
+					}
+				}
+			}
 			if event.Kind == "issue_comment" && event.Action == "created" && mentionedIdentity(event.CommentBody, w.Identity) {
 				// A mention in the webhook payload alone is not enough to trigger a
 				// run (issue #294): the mentioning comment must also be the current
@@ -2027,6 +2260,44 @@ func webhookEventNeedsRefresh(event WebhookEvent) bool {
 	default:
 		return true
 	}
+}
+
+// webhookEventUpdatesActiveWork reports whether a delivery could have changed
+// the issue itself under an agent already working it (issue #469). These are
+// deliberately the deliveries webhookEventNeedsRefresh ignores: an edited
+// description and a new comment change nothing about which issues are
+// dispatchable, but they change what the agent holding this one was asked to
+// do. A closure is both, and counts here as well.
+func webhookEventUpdatesActiveWork(event WebhookEvent) bool {
+	if event.Repository == "" || event.IssueNumber <= 0 {
+		return false
+	}
+	switch event.Kind {
+	case "issue_comment":
+		return event.Action == "created" || event.Action == "edited"
+	case "issues":
+		return event.Action == "edited" || event.Action == "closed"
+	default:
+		return false
+	}
+}
+
+// nudgesForIssue returns the nudge channels of the runs working repo#number.
+// The keys are target scoped, so a project board target watching the same
+// issue is matched by the repository it resolves to rather than by the key.
+func nudgesForIssue(nudges map[string]chan struct{}, repo string, number int) []chan struct{} {
+	if repo == "" || number <= 0 {
+		return nil
+	}
+	var matched []chan struct{}
+	for key, nudge := range nudges {
+		target, keyNumber, ok := parseIssueWorkKey(key)
+		if !ok || keyNumber != number || !strings.EqualFold(issueRepository(target, Issue{}), repo) {
+			continue
+		}
+		matched = append(matched, nudge)
+	}
+	return matched
 }
 
 // webhookContinuationSweep identifies referenced issues that should be

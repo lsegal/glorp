@@ -868,3 +868,24 @@ func runFakeAgent(log string, args []string) int {
 	fmt.Println("started")
 	return 0
 }
+
+func TestCommandArgsPromptResumedSessionWithIssueUpdate(t *testing.T) {
+	runner := CommandRunner{Agent: "claude", Repo: "o/r", Identity: "SELF"}
+	session := AgentSession{ID: "sess-1", Agent: "claude", Resume: true, Update: "The description of issue #7 changed while you were working on it."}
+	args := commandArgsForSession(runner, Issue{Number: 7, Target: "o/r"}, session)
+	prompt := args[len(args)-1]
+	if !strings.HasPrefix(prompt, session.Update) {
+		t.Fatalf("resumed prompt did not lead with the update: %q", prompt)
+	}
+	if strings.Contains(prompt, "Recover the existing work") {
+		t.Fatalf("resumed prompt used the generic recovery text: %q", prompt)
+	}
+	if !slices.Contains(args, "--resume") || !slices.Contains(args, "sess-1") {
+		t.Fatalf("update was not delivered to the existing session: %v", args)
+	}
+	// A resume with no update keeps the generic continuation prompt.
+	plain := commandArgsForSession(runner, Issue{Number: 7, Target: "o/r"}, AgentSession{ID: "sess-1", Agent: "claude", Resume: true})
+	if !strings.Contains(plain[len(plain)-1], "Recover the existing work") {
+		t.Fatalf("plain resume lost its recovery prompt: %q", plain[len(plain)-1])
+	}
+}
