@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lsegal/glorp/browser"
 )
 
 // parseWatchFlags parses a watch command line the way runWatch does, so the
@@ -290,18 +292,18 @@ func TestDisplayServerAvailable(t *testing.T) {
 // browserPageReaders unwraps the sign-in guard browser mode's issue source is
 // wrapped in and returns the page readers underneath, so the wiring tests keep
 // asserting on the readers rather than on the guard (issue #379).
-func browserPageReaders(t *testing.T, source IssueSource) browserWatchIssues {
+func browserPageReaders(t *testing.T, source IssueSource) browser.WatchIssues {
 	t.Helper()
-	guard, ok := source.(browserSignInGuard)
+	guard, ok := source.(browser.SignInGuard)
 	if !ok {
-		t.Fatalf("Issues = %T, want browserSignInGuard", source)
+		t.Fatalf("Issues = %T, want browser.SignInGuard", source)
 	}
-	if guard.recovery == nil {
+	if guard.Recovery() == nil {
 		t.Fatal("the issue source has no sign-in recovery, so a signed-out profile is never recovered")
 	}
-	issues, ok := guard.source.(browserWatchIssues)
+	issues, ok := guard.Source().(browser.WatchIssues)
 	if !ok {
-		t.Fatalf("guarded source = %T, want browserWatchIssues", guard.source)
+		t.Fatalf("guarded source = %T, want browser.WatchIssues", guard.Source())
 	}
 	return issues
 }
@@ -313,24 +315,24 @@ func browserPageReaders(t *testing.T, source IssueSource) browserWatchIssues {
 func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 	gh := GHCLI{Binary: "gh", Filter: "is:issue state:open", AllIssues: true}
 	w := &Glorp{Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Out: io.Discard}
-	applyBrowserSources(w, &Browser{}, browserWatchOptions{Enabled: true}, gh)
+	applyBrowserSources(w, &browser.Browser{}, browserWatchOptions{Enabled: true}, gh)
 
 	issues := browserPageReaders(t, w.Issues)
-	repos, ok := issues.Repos.(*browserIssueSource)
+	repos, ok := issues.Repos.(*browser.IssueSource)
 	if !ok {
-		t.Fatalf("Issues.Repos = %T, want *browserIssueSource", issues.Repos)
+		t.Fatalf("Issues.Repos = %T, want *browser.IssueSource", issues.Repos)
 	}
-	if repos.filter != gh.Filter || !repos.allIssues {
-		t.Fatalf("issue source filter = %q, allIssues = %v; want the run's -filter and -all-issues", repos.filter, repos.allIssues)
+	if repos.Filter() != gh.Filter || !repos.AllIssues() {
+		t.Fatalf("issue source filter = %q, allIssues = %v; want the run's -filter and -all-issues", repos.Filter(), repos.AllIssues())
 	}
-	if repos.pageFor == nil {
+	if !repos.ReadsPages() {
 		t.Fatal("issue source has no tab opener, so it cannot read a page")
 	}
-	if repos.hydrate == nil || repos.handled == nil {
+	if !repos.Hydrates() {
 		t.Fatal("issue source cannot hydrate dispatch metadata, so candidates would reach dispatch without a body")
 	}
 	// The screenshot fallback is opt-in: -browser alone must not attach it.
-	if repos.vision != nil {
+	if repos.Vision() != nil {
 		t.Fatal("the screenshot fallback is attached without -browser-vision")
 	}
 	if issues.Board == nil {
@@ -355,15 +357,15 @@ func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 	// Comment reads move onto the conversation page (issue #441), but the
 	// reader has to keep the API client: it posts every comment and answers
 	// any read the page could not.
-	comments, ok := w.Comments.(*browserCommentSource)
+	comments, ok := w.Comments.(*browser.CommentSource)
 	if !ok {
-		t.Fatalf("Comments = %T, want *browserCommentSource", w.Comments)
+		t.Fatalf("Comments = %T, want *browser.CommentSource", w.Comments)
 	}
-	if comments.pageFor == nil {
+	if !comments.ReadsPages() {
 		t.Fatal("comment source has no tab opener, so it cannot read a conversation")
 	}
-	if _, ok := comments.api.(GHCLI); !ok {
-		t.Fatalf("comment source api = %T, want GHCLI", comments.api)
+	if _, ok := comments.API().(GHCLI); !ok {
+		t.Fatalf("comment source api = %T, want GHCLI", comments.API())
 	}
 	if _, ok := w.Status.(GHCLI); !ok {
 		t.Fatalf("Status = %T, want GHCLI", w.Status)
@@ -375,14 +377,14 @@ func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 func TestApplyBrowserSourcesAttachesVisionFallback(t *testing.T) {
 	gh := GHCLI{Binary: "gh"}
 	w := &Glorp{Issues: gh, Projects: gh, Out: io.Discard}
-	applyBrowserSources(w, &Browser{}, browserWatchOptions{Enabled: true, Vision: true}, gh)
+	applyBrowserSources(w, &browser.Browser{}, browserWatchOptions{Enabled: true, Vision: true}, gh)
 
 	issues := browserPageReaders(t, w.Issues)
-	repos, ok := issues.Repos.(*browserIssueSource)
+	repos, ok := issues.Repos.(*browser.IssueSource)
 	if !ok {
-		t.Fatalf("Issues.Repos = %T, want *browserIssueSource", issues.Repos)
+		t.Fatalf("Issues.Repos = %T, want *browser.IssueSource", issues.Repos)
 	}
-	if repos.vision == nil {
+	if repos.Vision() == nil {
 		t.Fatal("-browser-vision did not reach the injected issue source")
 	}
 }
@@ -436,8 +438,8 @@ func TestBrowserTabIdleTimeout(t *testing.T) {
 // watched nothing while an agent was working.
 func TestBrowserSourcesForwardOriginatingWorkState(t *testing.T) {
 	want := OriginatingWorkState{IssueState: "closed", IssueBody: "body"}
-	source := browserWatchIssues{Work: &fakeClosureSource{state: want}}
-	guard := browserSignInGuard{source: source}
+	source := browser.WatchIssues{Work: &fakeClosureSource{state: want}}
+	guard := browser.NewSignInGuard(source, nil)
 	checker, ok := IssueSource(guard).(WorkClosureChecker)
 	if !ok {
 		t.Fatal("browser mode's issue source does not report work state")
@@ -446,7 +448,23 @@ func TestBrowserSourcesForwardOriginatingWorkState(t *testing.T) {
 	if err != nil || got.IssueState != want.IssueState || got.IssueBody != want.IssueBody {
 		t.Fatalf("OriginatingWorkState = %+v, %v; want %+v", got, err, want)
 	}
-	if _, err := (browserWatchIssues{}).OriginatingWorkState(context.Background(), "o/r", 7); err == nil {
+	if _, err := (browser.WatchIssues{}).OriginatingWorkState(context.Background(), "o/r", 7); err == nil {
 		t.Fatal("expected an error when no work state source is configured")
+	}
+}
+
+// The acceptance test for the wiring: a browser-mode run's browser paces its
+// page loads on the interval the run actually polls at.
+func TestApplyBrowserSourcesAttachesLoadQueue(t *testing.T) {
+	gh := GHCLI{Binary: "gh"}
+	w := &Glorp{Interval: 45 * time.Second, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Out: io.Discard}
+	driver := &browser.Browser{}
+	applyBrowserSources(w, driver, browserWatchOptions{Enabled: true}, gh)
+	queue := driver.LoadQueue()
+	if queue == nil {
+		t.Fatal("browser mode left its page loads unpaced")
+	}
+	if queue.Interval() != 45*time.Second {
+		t.Fatalf("queue interval = %s, want the run's own 45s poll interval", queue.Interval())
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/lsegal/glorp/core"
 	"io"
 	"net"
 	"net/http"
@@ -24,6 +23,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lsegal/glorp/browser"
+	"github.com/lsegal/glorp/core"
 
 	"github.com/mattn/go-isatty"
 )
@@ -156,19 +158,19 @@ func runWatch(args []string) int {
 	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
 	// cleanup did not run before the daemon returns (issue #260).
 	defer reapChildProcesses()
-	var browser *Browser
+	var driver *browser.Browser
 	if browserOptions.Enabled {
 		// One browser for the whole run: every target gets a tab on it rather
 		// than a browser of its own. A browser that cannot start is fatal, since
 		// quietly falling back to the API path would answer a request for
 		// browser mode with something else entirely.
-		started, err := startBrowser(ctx, browserOptions.config())
+		started, err := browser.Start(ctx, browserOptions.config())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		browser = started
-		defer func() { _ = browser.Close() }()
+		driver = started
+		defer func() { _ = driver.Close() }()
 	}
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), allIssues
@@ -252,7 +254,7 @@ func runWatch(args []string) int {
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
-	applyBrowserSources(w, browser, browserOptions, gh)
+	applyBrowserSources(w, driver, browserOptions, gh)
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)

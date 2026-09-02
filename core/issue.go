@@ -79,3 +79,13 @@ type OriginatingWorkState struct {
 type WorkClosureChecker interface {
 	OriginatingWorkState(context.Context, string, int) (OriginatingWorkState, error)
 }
+
+// ProjectStateSource returns a cheap fingerprint of a project board's
+// dispatchable state. GitHub publishes no projects_v2 webhook for user-owned
+// Projects, so board-only edits (dragging an issue onto the board, moving a
+// card into the ready column) produce no delivery at all. Push mode probes
+// this fingerprint on a short interval and only pays for a full poll when it
+// actually changes, instead of waiting out the fallback interval.
+type ProjectStateSource interface {
+	ProjectState(context.Context, string) (string, error)
+}

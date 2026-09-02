@@ -5,10 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/lsegal/glorp/core"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 )
 
 // Identity uniquely names one running glorp instance. It lives only in

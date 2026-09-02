@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/lsegal/glorp/core"
 	"io"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"

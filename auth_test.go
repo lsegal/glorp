@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lsegal/glorp/browser"
 )
 
 // fakeAuthPage stands in for the tab `glorp auth` drives: it records where it
@@ -68,11 +70,11 @@ func withHeadedEnvironment(t *testing.T, err error) {
 }
 
 // withAuthSession swaps in a session backed by the given page for one test.
-func withAuthSession(t *testing.T, page *fakeAuthPage, err error) *[]browserConfig {
+func withAuthSession(t *testing.T, page *fakeAuthPage, err error) *[]browser.Config {
 	t.Helper()
-	var configs []browserConfig
+	var configs []browser.Config
 	original := openAuthSession
-	openAuthSession = func(_ context.Context, config browserConfig) (*authSession, error) {
+	openAuthSession = func(_ context.Context, config browser.Config) (*authSession, error) {
 		configs = append(configs, config)
 		if err != nil {
 			return nil, err
@@ -148,7 +150,7 @@ func TestAuthStatusSignedIn(t *testing.T) {
 	page := &fakeAuthPage{logins: []string{"octocat"}}
 	configs := withAuthSession(t, page, nil)
 	var out strings.Builder
-	signedIn, err := authStatus(context.Background(), browserConfig{Profile: "/profiles/glorp"}, &out)
+	signedIn, err := authStatus(context.Background(), browser.Config{Profile: "/profiles/glorp"}, &out)
 	if err != nil {
 		t.Fatalf("authStatus: %v", err)
 	}
@@ -172,7 +174,7 @@ func TestAuthStatusSignedIn(t *testing.T) {
 func TestAuthStatusSignedOut(t *testing.T) {
 	withAuthSession(t, &fakeAuthPage{logins: []string{""}}, nil)
 	var out strings.Builder
-	signedIn, err := authStatus(context.Background(), browserConfig{}, &out)
+	signedIn, err := authStatus(context.Background(), browser.Config{}, &out)
 	if err != nil {
 		t.Fatalf("authStatus: %v", err)
 	}
@@ -187,7 +189,7 @@ func TestAuthStatusSignedOut(t *testing.T) {
 func TestAuthStatusReportsLaunchFailure(t *testing.T) {
 	withAuthSession(t, nil, errors.New("no Chrome installed"))
 	var out strings.Builder
-	if _, err := authStatus(context.Background(), browserConfig{}, &out); err == nil {
+	if _, err := authStatus(context.Background(), browser.Config{}, &out); err == nil {
 		t.Fatal("authStatus succeeded with no browser to launch")
 	}
 }
@@ -197,7 +199,7 @@ func TestAuthLoginOpensHeadedWindowAtLoginPage(t *testing.T) {
 	page := &fakeAuthPage{logins: []string{"octocat"}}
 	configs := withAuthSession(t, page, nil)
 	var out strings.Builder
-	login, err := authLogin(context.Background(), browserConfig{Profile: "/profiles/glorp"}, &out, time.Second)
+	login, err := authLogin(context.Background(), browser.Config{Profile: "/profiles/glorp"}, &out, time.Second)
 	if err != nil {
 		t.Fatalf("authLogin: %v", err)
 	}
@@ -281,7 +283,7 @@ func TestAuthLoginRefusesWithoutADisplayServer(t *testing.T) {
 	withHeadedEnvironment(t, errors.New("no display server"))
 	configs := withAuthSession(t, &fakeAuthPage{logins: []string{"octocat"}}, nil)
 	var out strings.Builder
-	if _, err := authLogin(context.Background(), browserConfig{}, &out, time.Second); err == nil {
+	if _, err := authLogin(context.Background(), browser.Config{}, &out, time.Second); err == nil {
 		t.Fatal("authLogin opened a window on a machine with no display server")
 	}
 	if len(*configs) != 0 {
@@ -351,28 +353,5 @@ func TestRunAuthCommandPassesBrowserFlagsThrough(t *testing.T) {
 	}
 	if got := (*configs)[0]; got.Profile != "/tmp/p" || got.Binary != "/tmp/chrome" {
 		t.Fatalf("config %+v, want the -browser-profile and -browser-binary values", got)
-	}
-}
-
-func TestBrowserLaunchArgsHeaded(t *testing.T) {
-	args := browserLaunchArgs("/profiles/glorp", 4321, true)
-	for _, unwanted := range []string{"--headless=new", "--disable-gpu"} {
-		for _, arg := range args {
-			if arg == unwanted {
-				t.Fatalf("headed launch still passes %s: %v", unwanted, args)
-			}
-		}
-	}
-	want := map[string]bool{
-		"--no-first-run":                  true,
-		"--no-default-browser-check":      true,
-		"--user-data-dir=/profiles/glorp": true,
-		"--remote-debugging-port=4321":    true,
-	}
-	for _, arg := range args {
-		delete(want, arg)
-	}
-	if len(want) != 0 {
-		t.Fatalf("headed launch is missing %v: %v", want, args)
 	}
 }

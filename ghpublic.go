@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/lsegal/glorp/core"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 )
 
 // publicAPIDoer performs a single unauthenticated GET against the public

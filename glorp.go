@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/lsegal/glorp/core"
 	"io"
 	"maps"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 )
 
 const (
@@ -132,15 +133,7 @@ type (
 	WorkClosureChecker   = core.WorkClosureChecker
 )
 
-// ProjectStateSource returns a cheap fingerprint of a project board's
-// dispatchable state. GitHub publishes no projects_v2 webhook for user-owned
-// Projects, so board-only edits (dragging an issue onto the board, moving a
-// card into the ready column) produce no delivery at all. Push mode probes
-// this fingerprint on a short interval and only pays for a full poll when it
-// actually changes, instead of waiting out the fallback interval.
-type ProjectStateSource interface {
-	ProjectState(context.Context, string) (string, error)
-}
+type ProjectStateSource = core.ProjectStateSource
 type IssueStatuser interface {
 	SetIssueStatus(context.Context, string, Issue, string) error
 }
@@ -2460,71 +2453,12 @@ func (w *Glorp) resetFailedWork(ctx context.Context, work map[string]workState) 
 	return nil
 }
 
-func issueBlocked(issue Issue) (bool, string) {
-	if issue.HasSubIssues {
-		return true, "has sub-issues"
-	}
-	blocked := make([]string, 0)
-	for _, dependency := range issue.DependsOn {
-		if !strings.EqualFold(dependency.State, "closed") {
-			if dependency.State == "" {
-				blocked = append(blocked, fmt.Sprintf("depends on #%d", dependency.Number))
-			} else {
-				blocked = append(blocked, fmt.Sprintf("depends on #%d (%s)", dependency.Number, strings.ToLower(dependency.State)))
-			}
-		}
-	}
-	if len(blocked) == 0 {
-		return false, ""
-	}
-	return true, strings.Join(blocked, ", ")
-}
-
 func issueNumbers(issues []Issue) string {
 	numbers := make([]string, len(issues))
 	for i, issue := range issues {
 		numbers[i] = fmt.Sprintf("#%d", issue.Number)
 	}
 	return strings.Join(numbers, ", ")
-}
-
-// shouldDispatchIssue decides whether a repository or project issue that is
-// not already active locally is a dispatch candidate. Remote ownership can
-// no longer be read synchronously for repository issues (no label survives
-// to check), so a never-seen issue is always a candidate, and one this
-// instance has already seen is a candidate again only if it wasn't already
-// completed; negotiateContestedIssues is what asks, via comments, whether
-// another instance already owns a reappearing candidate.
-func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, wasCompleted, seen bool, readyState string) bool {
-	if isActive {
-		return false
-	}
-	if wasActive {
-		return true
-	}
-	if isProjectTarget(repo) {
-		if projectStatusAllowsDispatch(issue.ProjectStatus, readyState) {
-			return true
-		}
-		// An item parked at "In Progress" is claimed work: either this
-		// instance's own reappearing item, or work stranded in that column by
-		// an instance that died mid-run and left this one no local record to
-		// recognize it by. Both are dispatch candidates;
-		// negotiateContestedIssues is what asks, through the comment protocol,
-		// whether another live instance still owns it before it is reclaimed.
-		return projectItemInProgress(repo, issue)
-	}
-	if !seen {
-		return true
-	}
-	return !wasCompleted
-}
-
-// projectItemInProgress reports whether issue is a project item currently
-// parked in the "In Progress" column, which is how a glorp instance marks
-// work it has claimed.
-func projectItemInProgress(target string, issue Issue) bool {
-	return isProjectTarget(target) && strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress")
 }
 
 func workStateMatchesRemote(target string, issue Issue, state workState) bool {
@@ -2551,33 +2485,6 @@ func workStateMatchesRemote(target string, issue Issue, state workState) bool {
 	default:
 		return true
 	}
-}
-
-func remoteIssueAllowsDispatch(target string, issue Issue, readyState string) bool {
-	if !isProjectTarget(target) {
-		return true
-	}
-	return strings.EqualFold(strings.TrimSpace(issue.ProjectStatus), "In Progress") ||
-		projectStatusAllowsDispatch(issue.ProjectStatus, readyState)
-}
-
-func projectStatusAllowsDispatch(status, readyState string) bool {
-	status = strings.TrimSpace(status)
-	readyState = strings.TrimSpace(readyState)
-	if readyState != "" {
-		return strings.EqualFold(status, readyState)
-	}
-	return strings.EqualFold(status, "Todo") || strings.EqualFold(status, "Ready")
-}
-
-func projectReadyState(configured, current string) string {
-	if configured = strings.TrimSpace(configured); configured != "" {
-		return configured
-	}
-	if current = strings.TrimSpace(current); projectStatusAllowsDispatch(current, "") {
-		return current
-	}
-	return "Todo"
 }
 
 func newSessionID() (string, error) {
@@ -2835,4 +2742,28 @@ func saveScopedWorkState(path string, state map[string]workState, targets []stri
 		return err
 	}
 	return os.WriteFile(path, append(b, '\n'), 0600)
+}
+
+// The dispatch predicates live in package core, shared with the browser
+// driver's board reader.
+func issueBlocked(issue Issue) (bool, string) { return core.IssueBlocked(issue) }
+
+func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, wasCompleted, seen bool, readyState string) bool {
+	return core.ShouldDispatchIssue(repo, issue, isActive, wasActive, wasCompleted, seen, readyState)
+}
+
+func projectItemInProgress(target string, issue Issue) bool {
+	return core.ProjectItemInProgress(target, issue)
+}
+
+func remoteIssueAllowsDispatch(target string, issue Issue, readyState string) bool {
+	return core.RemoteIssueAllowsDispatch(target, issue, readyState)
+}
+
+func projectStatusAllowsDispatch(status, readyState string) bool {
+	return core.ProjectStatusAllowsDispatch(status, readyState)
+}
+
+func projectReadyState(configured, current string) string {
+	return core.ProjectReadyState(configured, current)
 }

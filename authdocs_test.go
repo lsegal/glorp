@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lsegal/glorp/browser"
 )
 
 func readDoc(t *testing.T, path string) string {
@@ -51,20 +53,20 @@ func TestReadmeDocumentsEveryAuthFlag(t *testing.T) {
 func TestReadmeAuthProfilePathsMatchLauncher(t *testing.T) {
 	section := authSection(t)
 	for _, path := range []string{
-		"~/Library/Application Support/glorp/" + browserProfileName,
-		`%AppData%\glorp\` + browserProfileName,
-		"~/.config/glorp/" + browserProfileName,
+		"~/Library/Application Support/glorp/" + browser.ProfileName,
+		`%AppData%\glorp\` + browser.ProfileName,
+		"~/.config/glorp/" + browser.ProfileName,
 	} {
 		if !strings.Contains(section, path) {
 			t.Errorf("README `glorp auth` section does not document the profile path %s", path)
 		}
 	}
-	dir, err := browserProfileDir("")
+	dir, err := browser.ProfileDir("")
 	if err != nil {
 		t.Fatalf("browserProfileDir: %v", err)
 	}
-	if got := filepath.Base(dir); got != browserProfileName {
-		t.Errorf("browserProfileDir(\"\") ends in %q, want %q", got, browserProfileName)
+	if got := filepath.Base(dir); got != browser.ProfileName {
+		t.Errorf("browserProfileDir(\"\") ends in %q, want %q", got, browser.ProfileName)
 	}
 	if got := filepath.Base(filepath.Dir(dir)); got != "glorp" {
 		t.Errorf("browserProfileDir(\"\") parent is %q, want \"glorp\"", got)
