@@ -150,7 +150,7 @@ func browserTabIdleTimeout(interval time.Duration) time.Duration {
 // hydrate newly seen candidates through gh, sharing one memo so an issue costs
 // its REST calls once for the run whichever page found it (issues #381 and
 // #395), and the screenshot fallback is attached only when -browser-vision asked for
-// it (issue #384). One browserVision is built and shared by the repository
+// it (issue #384). One browser.Vision is built and shared by the repository
 // source and the board, so its per-run cap is a single budget for the run
 // rather than one per page kind (issue #393).
 func applyBrowserSources(w *Glorp, driver *browser.Browser, options browserWatchOptions, gh GHCLI) {

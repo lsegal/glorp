@@ -1130,7 +1130,7 @@ func projectItemListError(output []byte, err error) error {
 // through apiGET, so a public repository is read on the unauthenticated API
 // and spends none of the token's rate limit. No GraphQL query is issued.
 //
-// Callers are responsible for the request budget: browserIssueSource calls
+// Callers are responsible for the request budget: the browser package.s issue source calls
 // this once per newly seen dispatch candidate, never per tick and never for
 // the whole list.
 func (g GHCLI) HydrateIssue(ctx context.Context, repo string, issue *Issue) error {

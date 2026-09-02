@@ -49,7 +49,7 @@ func TestReadmeDocumentsEveryAuthFlag(t *testing.T) {
 }
 
 // TestReadmeAuthProfilePathsMatchLauncher pins the per-OS profile paths in the
-// docs to the directory browserProfileDir actually builds.
+// docs to the directory browser.ProfileDir actually builds.
 func TestReadmeAuthProfilePathsMatchLauncher(t *testing.T) {
 	section := authSection(t)
 	for _, path := range []string{
@@ -63,13 +63,13 @@ func TestReadmeAuthProfilePathsMatchLauncher(t *testing.T) {
 	}
 	dir, err := browser.ProfileDir("")
 	if err != nil {
-		t.Fatalf("browserProfileDir: %v", err)
+		t.Fatalf("browser.ProfileDir: %v", err)
 	}
 	if got := filepath.Base(dir); got != browser.ProfileName {
-		t.Errorf("browserProfileDir(\"\") ends in %q, want %q", got, browser.ProfileName)
+		t.Errorf("browser.ProfileDir(\"\") ends in %q, want %q", got, browser.ProfileName)
 	}
 	if got := filepath.Base(filepath.Dir(dir)); got != "glorp" {
-		t.Errorf("browserProfileDir(\"\") parent is %q, want \"glorp\"", got)
+		t.Errorf("browser.ProfileDir(\"\") parent is %q, want \"glorp\"", got)
 	}
 }
 

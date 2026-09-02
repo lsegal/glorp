@@ -188,7 +188,7 @@ func (e *ExtractionError) Is(target error) bool { return target == ErrExtraction
 
 // issuesURL builds the issues-page URL for a repository, carrying the
 // same filter the API path searches with as the page's own ?q= value, built by
-// the same issueSearchTerms helper. The "@me" qualifiers are left as they are:
+// the same core.IssueSearchTerms helper. The "@me" qualifiers are left as they are:
 // the browser is signed in as the user, which is exactly who "@me" means to
 // GitHub's own search.
 func issuesURL(repo, filter string, allIssues bool) string {

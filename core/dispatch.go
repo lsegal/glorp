@@ -9,6 +9,9 @@ import (
 // issue is work: they are shared with the browser driver, which reads the same
 // project statuses off a rendered board that the API path reads from GraphQL.
 
+// IssueBlocked reports whether an issue is not work yet, and why: it either
+// has sub-issues of its own, which makes it a tracking issue, or it depends on
+// an issue that is not closed.
 func IssueBlocked(issue Issue) (bool, string) {
 	if issue.HasSubIssues {
 		return true, "has sub-issues"

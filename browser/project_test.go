@@ -312,7 +312,7 @@ func TestBoardStopsScrollingWhenNoRowsAreLeft(t *testing.T) {
 	}
 }
 
-// TestBoardURL covers all three project target shapes parseTarget accepts, and
+// TestBoardURL covers all three project target shapes core.ParseTarget accepts, and
 // the filter being handed to the page rather than applied after the fact.
 func TestBoardURL(t *testing.T) {
 	tests := []struct {
@@ -385,7 +385,7 @@ func TestBoardURL(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			parsed, err := core.ParseTarget(test.target)
 			if err != nil {
-				t.Fatalf("parseTarget(%q): %v", test.target, err)
+				t.Fatalf("core.ParseTarget(%q): %v", test.target, err)
 			}
 			if got := boardURL(parsed, test.filter, test.allIssues); got != test.want {
 				t.Errorf("boardURL = %q, want %q", got, test.want)

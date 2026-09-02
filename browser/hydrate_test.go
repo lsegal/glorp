@@ -311,7 +311,7 @@ func TestBoardItemsReportBlocked(t *testing.T) {
 			}
 			blocked, reason := core.IssueBlocked(issues[0])
 			if !blocked || reason != test.want {
-				t.Fatalf("issueBlocked() = %v, %q, want true, %q", blocked, reason, test.want)
+				t.Fatalf("core.IssueBlocked() = %v, %q, want true, %q", blocked, reason, test.want)
 			}
 		})
 	}

@@ -1,3 +1,13 @@
+// Package browser drives the headless Chrome that browser mode reads GitHub
+// through. It owns the browser process and its tabs, paces their page loads,
+// reads a repository's issues page, a Projects board, and an issue's
+// conversation off the rendered markup, recovers a signed-out profile by
+// opening a login window, and falls back to asking a coding agent about a
+// screenshot when a page's markup is no longer recognisable.
+//
+// Everything it hands back is a core type, and everything it needs from the
+// rest of glorp -- child-process ownership, the agent to ask, the login flow --
+// is handed in, so the driver never reaches back into the root package.
 package browser
 
 import (
