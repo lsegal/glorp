@@ -3632,9 +3632,9 @@ func TestWebhookEventUpdatesActiveWork(t *testing.T) {
 
 func TestNudgesForIssueMatchesTargetScopedKeys(t *testing.T) {
 	nudges := map[string]chan struct{}{
-		"o/r#7":  make(chan struct{}, 1),
-		"o/r#8":  make(chan struct{}, 1),
-		"x/y#7":  make(chan struct{}, 1),
+		"o/r#7":   make(chan struct{}, 1),
+		"o/r#8":   make(chan struct{}, 1),
+		"x/y#7":   make(chan struct{}, 1),
 		"garbage": make(chan struct{}, 1),
 	}
 	if got := nudgesForIssue(nudges, "o/r", 7); len(got) != 1 {

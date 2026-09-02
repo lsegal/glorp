@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"io"
@@ -441,11 +442,11 @@ func TestBrowserSourcesForwardOriginatingWorkState(t *testing.T) {
 	if !ok {
 		t.Fatal("browser mode's issue source does not report work state")
 	}
-	got, err := checker.OriginatingWorkState(t.Context(), "o/r", 7)
+	got, err := checker.OriginatingWorkState(context.Background(), "o/r", 7)
 	if err != nil || got.IssueState != want.IssueState || got.IssueBody != want.IssueBody {
 		t.Fatalf("OriginatingWorkState = %+v, %v; want %+v", got, err, want)
 	}
-	if _, err := (browserWatchIssues{}).OriginatingWorkState(t.Context(), "o/r", 7); err == nil {
+	if _, err := (browserWatchIssues{}).OriginatingWorkState(context.Background(), "o/r", 7); err == nil {
 		t.Fatal("expected an error when no work state source is configured")
 	}
 }
