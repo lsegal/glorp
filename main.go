@@ -468,7 +468,6 @@ func (g GHCLI) timedOut(ctx, runCtx context.Context, args []string, err error) e
 	return err
 }
 
-
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
 	public := g.isPublicRepo(ctx, repo)
 	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number))
