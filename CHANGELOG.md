@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.31 - 2026-09-02
+
 - Compile and run the production build in CI, instead of leaving the code a released binary actually ships untested until release day. `go test ./...` and `go vet ./...` run untagged there, so everything behind `//go:build production` -- the `webui/dist` embed, the SPA file server that backs every client-side dashboard route, the release build's no-op `StartFrontend`, and the `TestReleaseAssetsServeEmbeddedFrontend` covering them -- was never compiled, let alone run: the only build that touched that path was the release workflow itself, where a wrong embed path or a dashboard that serves nothing is far more expensive to find. The Linux job now runs `go vet -tags production ./...` and `go test -tags production ./...` after the frontend `pnpm run build` that produces `webui/dist`, and checks that directory is there first so a missing frontend build fails saying so rather than as an opaque `pattern dist/*: no matching files found` from the embed.
 
 ## v1.2.30 - 2026-09-02
