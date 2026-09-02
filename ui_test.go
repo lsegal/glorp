@@ -597,7 +597,7 @@ func TestDeliveryTextReportsLastPollInPushMode(t *testing.T) {
 }
 
 // TestFormatInterval pins the shared interval spelling. The same table is run
-// against the web dashboard's formatInterval in web/src/dashboard.test.js, so
+// against the web dashboard's formatInterval in webui/src/dashboard.test.js, so
 // the two status bars cannot drift apart again (issue #449).
 func TestFormatInterval(t *testing.T) {
 	cases := []struct {

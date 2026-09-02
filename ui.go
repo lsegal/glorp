@@ -368,7 +368,7 @@ func renderScrollbar(view viewport.Model) string {
 // nanosecond value into whole seconds (`3600s`), so one run read differently
 // depending on which status bar was open (issue #449). Zero components are
 // dropped so short intervals stay as short as they read (`20s`, not `0h0m20s`),
-// and the web dashboard's formatInterval in web/src/dashboard.js mirrors this
+// and the web dashboard's formatInterval in webui/src/dashboard.js mirrors this
 // exactly; the two are covered by the same table of cases on each side.
 func formatInterval(d time.Duration) string { return core.FormatInterval(d) }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -29,6 +30,18 @@ func (execSupervisor) Stop(cmd *exec.Cmd) error {
 }
 
 func TestFrontendStartsViteInDevelopment(t *testing.T) {
+	// A development build runs from the repository root and resolves the Vite
+	// project at FrontendDir relative to it, but `go test` runs this package
+	// from its own directory, so step back up before starting the frontend.
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(".."); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(root) })
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stop, err := StartFrontend(ctx, io.Discard, execSupervisor{})

@@ -36,9 +36,9 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          cache-dependency-path: webui/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-        working-directory: web
+        working-directory: webui
       - run: go test ./...
       - run: go vet ./...
       - name: Select release tag
