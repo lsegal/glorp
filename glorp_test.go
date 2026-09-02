@@ -3493,10 +3493,10 @@ func TestGlorpDoesNotStarveAQuietTargetBehindABusyOne(t *testing.T) {
 
 // waitForSession drains the next session the runner was launched with, so a
 // test can tell the run it dispatched from the one it was resumed with.
-func waitForSession(t *testing.T, runner *fakeSessionRunner) AgentSession {
+func waitForSession(t *testing.T, sessions <-chan AgentSession) AgentSession {
 	t.Helper()
 	select {
-	case session := <-runner.sessions:
+	case session := <-sessions:
 		return session
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for the agent to be launched")
@@ -3521,7 +3521,7 @@ func TestGlorpRelaysClosedWorkIntoTheSameSession(t *testing.T) {
 		<-done
 	}()
 
-	first := waitForSession(t, runner)
+	first := waitForSession(t, runner.sessions)
 	if first.Resume || first.Update != "" {
 		t.Fatalf("first launch resumed or carried an update: %+v", first)
 	}
@@ -3529,7 +3529,7 @@ func TestGlorpRelaysClosedWorkIntoTheSameSession(t *testing.T) {
 	src.state = OriginatingWorkState{IssueState: "closed", IssueBody: "original"}
 	src.mu.Unlock()
 
-	resumed := waitForSession(t, runner)
+	resumed := waitForSession(t, runner.sessions)
 	if !resumed.Resume || resumed.ID != first.ID {
 		t.Fatalf("closure did not resume the same session: first=%+v resumed=%+v", first, resumed)
 	}
@@ -3567,12 +3567,12 @@ func TestGlorpRelaysChangedDescriptionIntoTheSameSession(t *testing.T) {
 		<-done
 	}()
 
-	first := waitForSession(t, runner)
+	first := waitForSession(t, runner.sessions)
 	src.mu.Lock()
 	src.state = OriginatingWorkState{IssueState: "OPEN", IssueBody: "rewritten"}
 	src.mu.Unlock()
 
-	resumed := waitForSession(t, runner)
+	resumed := waitForSession(t, runner.sessions)
 	if !resumed.Resume || resumed.ID != first.ID {
 		t.Fatalf("description change did not resume the same session: first=%+v resumed=%+v", first, resumed)
 	}
@@ -3600,9 +3600,9 @@ func TestGlorpRelaysNewCommentsIntoTheSameSession(t *testing.T) {
 		<-done
 	}()
 
-	first := waitForSession(t, runner)
+	first := waitForSession(t, runner.sessions)
 	comments.inject("o/r", 7, Comment{Body: "Please also handle the empty case.", Author: "lsegal", CreatedAt: time.Now().Add(2 * time.Second)})
-	resumed := waitForSession(t, runner)
+	resumed := waitForSession(t, runner.sessions)
 	if !resumed.Resume || resumed.ID != first.ID {
 		t.Fatalf("new comment did not resume the same session: first=%+v resumed=%+v", first, resumed)
 	}
@@ -3716,5 +3716,122 @@ func TestWatchPollProgressReportsAStalledLoop(t *testing.T) {
 	w.logMu.Unlock()
 	if stalls != 1 {
 		t.Fatalf("reported the stall %d times, want it reported once", stalls)
+	}
+}
+
+// finishingSessionRunner returns from the first finish runs immediately, the
+// way an agent that timed out or stopped early does, and blocks on later ones
+// so a test can observe the continuation without racing a hot loop.
+type finishingSessionRunner struct {
+	agent    string
+	sessions chan AgentSession
+	finish   int
+	mu       sync.Mutex
+	calls    int
+}
+
+func (f *finishingSessionRunner) AgentName() string                { return f.agent }
+func (f *finishingSessionRunner) Run(context.Context, Issue) error { return nil }
+func (f *finishingSessionRunner) RunSession(ctx context.Context, _ Issue, session AgentSession, _ func(AgentSession)) error {
+	f.sessions <- session
+	f.mu.Lock()
+	f.calls++
+	n := f.calls
+	f.mu.Unlock()
+	if n <= f.finish {
+		return nil
+	}
+	<-ctx.Done()
+	return nil
+}
+
+func TestGlorpContinuesAnAgentThatFinishedWithTheIssueStillOpen(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	src.state = OriginatingWorkState{IssueState: "OPEN", IssueBody: "original"}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	out := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: out, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	first := waitForSession(t, runner.sessions)
+	if first.Resume {
+		t.Fatalf("first launch resumed: %+v", first)
+	}
+	continued := waitForSession(t, runner.sessions)
+	if !continued.Resume || continued.ID != first.ID {
+		t.Fatalf("unfinished work did not continue the same session: first=%+v continued=%+v", first, continued)
+	}
+	if !strings.Contains(continued.Update, "issue #7") || !strings.Contains(continued.Update, "still reports the issue as open") {
+		t.Fatalf("continuation prompt did not say the issue is still open: %q", continued.Update)
+	}
+	if !strings.Contains(out.String(), "keepalive") {
+		t.Fatalf("no keepalive was logged: %q", out.String())
+	}
+	state, err := loadWorkState(statePath)
+	if err != nil || state[7].Status != "active" {
+		t.Fatalf("continued work was not left active, state=%v err=%v", state, err)
+	}
+}
+
+func TestGlorpCompletesWhenTheIssueIsActuallyClosed(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	// Closed behind a merged pull request, which is what a finished run looks
+	// like; the merge keeps the watcher from reading the closure as an abort.
+	src.state = OriginatingWorkState{IssueState: "closed", PullRequests: []PullRequestWorkState{{Number: 8, State: "merged", Merged: true}}}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitForSession(t, runner.sessions)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("closed issue was not recorded as completed, state=%v err=%v", state, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("a closed issue relaunched its agent: %+v", extra)
+	default:
+	}
+}
+
+func TestConfirmIssueClosedReportsAnUnansweredCheck(t *testing.T) {
+	w := &Glorp{Out: &syncBuffer{}, closureInterval: time.Millisecond}
+	src := &fakeClosureSource{fakeSource: &fakeSource{}, err: errors.New("boom")}
+	if closed, answered := w.confirmIssueClosed(context.Background(), src, Issue{Number: 7, Repository: "o/r"}); closed || answered {
+		t.Fatalf("confirmIssueClosed(err) = (%v, %v), want (false, false)", closed, answered)
+	}
+	src.mu.Lock()
+	src.err = nil
+	src.state = OriginatingWorkState{IssueState: "OPEN"}
+	src.mu.Unlock()
+	if closed, answered := w.confirmIssueClosed(context.Background(), src, Issue{Number: 7, Repository: "o/r"}); closed || !answered {
+		t.Fatalf("confirmIssueClosed(open) = (%v, %v), want (false, true)", closed, answered)
 	}
 }
