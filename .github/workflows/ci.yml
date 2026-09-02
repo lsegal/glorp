@@ -54,6 +54,20 @@ jobs:
       # macOS has no runner here, so cross-compile its process handling to keep
       # it from breaking unnoticed. Windows has its own job below.
       - run: GOOS=darwin go vet ./...
+      # Everything behind the production tag -- the webui/dist embed, the SPA
+      # file server, the no-op StartFrontend -- is invisible to the untagged
+      # steps above, and it is what a released binary actually ships. The embed
+      # needs the frontend build from the pnpm step above, so check that its
+      # output is there first: a missing webui/dist would otherwise surface as
+      # an opaque "pattern dist/*: no matching files found".
+      - name: Check the frontend build output the production embed needs
+        run: |
+          if [ ! -f webui/dist/index.html ]; then
+            echo "webui/dist/index.html is missing: run pnpm run build in webui/ before the production-tagged steps" >&2
+            exit 1
+          fi
+      - run: go vet -tags production ./...
+      - run: go test -tags production ./...
 
   test-windows:
     # Draft pull requests are skipped so the empty `[skip ci]` commit that opens
