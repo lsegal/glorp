@@ -1,5 +1,5 @@
 {
-	"name": "glorp-web-ui",
+	"name": "glorp-webui",
 	"private": true,
 	"version": "0.0.0",
 	"packageManager": "pnpm@10.34.4",

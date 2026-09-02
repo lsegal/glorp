@@ -268,3 +268,14 @@ func ShutdownContext() (context.Context, func()) {
 		cancel()
 	}
 }
+
+// Supervisor adapts the tracked child-process helpers to an interface value,
+// for callers such as the webui package that start a subprocess of their own
+// and need it reaped along with every other subprocess glorp owns.
+type Supervisor struct{}
+
+func (Supervisor) Start(cmd *exec.Cmd) error { return Start(cmd) }
+
+func (Supervisor) Run(cmd *exec.Cmd) error { return Run(cmd) }
+
+func (Supervisor) Stop(cmd *exec.Cmd) error { return Stop(cmd) }

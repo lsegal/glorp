@@ -1,4 +1,4 @@
-package main
+package webui
 
 import (
 	"bytes"
@@ -10,9 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/lsegal/glorp/core"
 )
 
-func TestListenForWebUIUsesNextAvailablePort(t *testing.T) {
+func TestListenUsesNextAvailablePort(t *testing.T) {
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -20,7 +22,7 @@ func TestListenForWebUIUsesNextAvailablePort(t *testing.T) {
 	defer occupied.Close()
 	start := occupied.Addr().(*net.TCPAddr).Port
 
-	listener, port, err := listenForWebUI(start)
+	listener, port, err := Listen(start)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,18 +32,18 @@ func TestListenForWebUIUsesNextAvailablePort(t *testing.T) {
 	}
 }
 
-func TestListenForWebUIRejectsInvalidPort(t *testing.T) {
-	if _, _, err := listenForWebUI(0); err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
+func TestListenRejectsInvalidPort(t *testing.T) {
+	if _, _, err := Listen(0); err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
 		t.Fatalf("error = %v, want port range error", err)
 	}
 }
 
-func TestWebUIStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
-	ui, err := NewWebUI("v1.2.3")
+func TestStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
+	ui, err := New("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ui.Snapshot(GlorpSnapshot{Running: 2, Targets: []string{"owner/repo"}})
+	ui.Snapshot(core.Snapshot{Running: 2, Targets: []string{"owner/repo"}})
 	for i := 0; i < 205; i++ {
 		ui.Log("line " + strconv.Itoa(i))
 	}
@@ -49,7 +51,7 @@ func TestWebUIStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/state", nil)
 	response := httptest.NewRecorder()
 	ui.ServeHTTP(response, request)
-	var state webUIState
+	var state State
 	if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
@@ -64,8 +66,8 @@ func TestWebUIStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
 	}
 }
 
-func TestWebUIRejectsUnsupportedMethods(t *testing.T) {
-	ui, err := NewWebUI("v1.2.3")
+func TestServerRejectsUnsupportedMethods(t *testing.T) {
+	ui, err := New("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,13 +78,13 @@ func TestWebUIRejectsUnsupportedMethods(t *testing.T) {
 	}
 }
 
-func TestWebUIHandlesJobActions(t *testing.T) {
-	ui, err := NewWebUI("v1.2.3")
+func TestServerHandlesJobActions(t *testing.T) {
+	ui, err := New("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got jobAction
-	ui.SetJobActionHandler(func(_ context.Context, action jobAction) error {
+	var got core.JobAction
+	ui.SetJobActionHandler(func(_ context.Context, action core.JobAction) error {
 		got = action
 		return nil
 	})
@@ -92,13 +94,13 @@ func TestWebUIHandlesJobActions(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("POST action = %d, body = %q", response.Code, response.Body.String())
 	}
-	if got != (jobAction{Action: "retry", Target: "o/r", Number: 7}) {
+	if got != (core.JobAction{Action: "retry", Target: "o/r", Number: 7}) {
 		t.Fatalf("action = %#v", got)
 	}
 }
 
-func TestWebUIRejectsUnavailableJobActions(t *testing.T) {
-	ui, err := NewWebUI("v1.2.3")
+func TestServerRejectsUnavailableJobActions(t *testing.T) {
+	ui, err := New("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,41 +109,5 @@ func TestWebUIRejectsUnavailableJobActions(t *testing.T) {
 	ui.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("POST action = %d, want %d", response.Code, http.StatusServiceUnavailable)
-	}
-}
-
-type recordingReporter struct {
-	snapshots int
-	logs      []string
-}
-
-func (r *recordingReporter) Snapshot(GlorpSnapshot) { r.snapshots++ }
-func (r *recordingReporter) Log(line string)        { r.logs = append(r.logs, line) }
-
-func TestCombineUIReportersFansOutUpdates(t *testing.T) {
-	first, second := &recordingReporter{}, &recordingReporter{}
-	reporter := combineUIReporters(nil, first, second)
-	reporter.Snapshot(GlorpSnapshot{})
-	reporter.Log("ready")
-	if first.snapshots != 1 || second.snapshots != 1 || first.logs[0] != "ready" || second.logs[0] != "ready" {
-		t.Fatalf("updates were not sent to both reporters: %#v %#v", first, second)
-	}
-}
-
-func TestCombineUIReportersDropsTypedNilReporters(t *testing.T) {
-	var webUI *WebUI
-	terminal := &recordingReporter{}
-	reporter := combineUIReporters(terminal, webUI)
-	reporter.Snapshot(GlorpSnapshot{})
-	reporter.Log("watching o/r")
-	if terminal.snapshots != 1 || len(terminal.logs) != 1 {
-		t.Fatalf("updates were not sent to the terminal reporter: %#v", terminal)
-	}
-}
-
-func TestCombineUIReportersReturnsNilWhenOnlyTypedNils(t *testing.T) {
-	var webUI *WebUI
-	if reporter := combineUIReporters(nil, webUI); reporter != nil {
-		t.Fatalf("combineUIReporters(nil, (*WebUI)(nil)) = %#v, want nil", reporter)
 	}
 }

@@ -1789,7 +1789,7 @@ func TestClaudeToolUseSummaryAddsContext(t *testing.T) {
 		{name: "read shows file", tool: "Read", input: `{"file_path":"main.go","limit":20}`, want: "Read main.go"},
 		{name: "edit shows file not contents", tool: "Edit", input: `{"file_path":"ui.go","old_string":"a","new_string":"b"}`, want: "Edit ui.go"},
 		{name: "notebook shows path", tool: "NotebookEdit", input: `{"notebook_path":"run.ipynb"}`, want: "NotebookEdit run.ipynb"},
-		{name: "grep shows pattern", tool: "Grep", input: `{"pattern":"Running:","path":"web/src"}`, want: "Grep Running:"},
+		{name: "grep shows pattern", tool: "Grep", input: `{"pattern":"Running:","path":"webui/src"}`, want: "Grep Running:"},
 		{name: "glob shows pattern", tool: "Glob", input: `{"pattern":"**/*.go"}`, want: "Glob **/*.go"},
 		{name: "fetch shows url", tool: "WebFetch", input: `{"url":"https://example.com/a","prompt":"summarize"}`, want: "WebFetch https://example.com/a"},
 		{name: "search shows query", tool: "WebSearch", input: `{"query":"go stream json"}`, want: "WebSearch go stream json"},

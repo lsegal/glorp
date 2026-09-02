@@ -2,8 +2,8 @@
 glorp
 glorp.exe
 /dist/
-web/node_modules/
-web/dist/
+webui/node_modules/
+webui/dist/
 public/
 resources/
 .hugo_build.lock

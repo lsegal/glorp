@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lsegal/glorp/webui"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -23,7 +25,7 @@ func dashboardServer(t *testing.T, snapshot GlorpSnapshot) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(webUIState{Snapshot: snapshot, Logs: []string{}})
+		_ = json.NewEncoder(w).Encode(webui.State{Snapshot: snapshot, Logs: []string{}})
 	}))
 	t.Cleanup(server.Close)
 	return server
