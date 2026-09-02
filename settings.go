@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/lsegal/glorp/core"
 )
 
 // maxConcurrencyPermits bounds how high --concurrency can be raised at
@@ -77,25 +79,12 @@ func (s *concurrencySemaphore) resize(newLimit int) {
 	}
 }
 
-// SettingsUpdate carries a partial update to glorp's live-editable runtime
-// settings (issue #341). Nil fields are left unchanged.
-type SettingsUpdate struct {
-	Concurrency       *int      `json:"concurrency,omitempty"`
-	ReadyState        *string   `json:"readyState,omitempty"`
-	AllowedCommenters *[]string `json:"allowedCommenters,omitempty"`
-	Agent             *string   `json:"agent,omitempty"`
-}
+// SettingsUpdate and SettingsSnapshot live in package core so the browser
+// dashboard's settings modal (issue #341) can speak them without importing the
+// root package.
+type SettingsUpdate = core.SettingsUpdate
 
-// SettingsSnapshot reports the settings a running glorp instance can change
-// on the fly, and their current values.
-type SettingsSnapshot struct {
-	Concurrency       int      `json:"concurrency"`
-	ReadyState        string   `json:"readyState"`
-	ReadyStateDefault string   `json:"readyStateDefault"`
-	AllowedCommenters []string `json:"allowedCommenters"`
-	Agent             string   `json:"agent"`
-	Agents            []string `json:"agents"`
-}
+type SettingsSnapshot = core.SettingsSnapshot
 
 type settingsRequest struct {
 	update SettingsUpdate

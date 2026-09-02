@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -22,43 +23,11 @@ const jobGridColumns = 2
 const jobCardHeight = 13
 const dashboardGap = 1
 
-type JobSnapshot struct {
-	Number            int
-	Target            string
-	Title             string
-	Status            string
-	CheckoutDirectory string
-	SessionID         string
-	Agent             string
-	Model             string
-	Effort            string
-	Started           time.Time
-	Log               string
-}
+// JobSnapshot and GlorpSnapshot live in package core so the browser dashboard
+// in package webui can render the same published state as this one.
+type JobSnapshot = core.JobSnapshot
 
-type GlorpSnapshot struct {
-	Targets     []string
-	IssueCounts map[string]int
-	Running     int
-	Queued      int
-	Completed   int
-	Failed      int
-	Concurrency int
-	NextPoll    time.Time
-	// LastPoll is when the most recent poll of GitHub finished. The poll loop
-	// only logs what it found when that changes (issue #413), so this is the
-	// run's standing evidence that it is still checking (issue #447).
-	LastPoll      time.Time
-	Interval      time.Duration
-	UseWebhooks   bool
-	WebhookURL    string
-	WebhookOnline bool
-	TokensUsed    int
-	TokenLimit    int
-	Quota         string
-	Quotas        map[string]string
-	Jobs          []JobSnapshot
-}
+type GlorpSnapshot = core.Snapshot
 
 type snapshotMsg GlorpSnapshot
 type logMsg string
@@ -597,4 +566,49 @@ func formatTargets(targets []string, counts map[string]int) []string {
 		result[i] = fmt.Sprintf("%s (%d issues)", target, counts[target])
 	}
 	return result
+}
+
+type multiUIReporter []UIReporter
+
+func (reporters multiUIReporter) Snapshot(snapshot GlorpSnapshot) {
+	for _, reporter := range reporters {
+		if !isNilUIReporter(reporter) {
+			reporter.Snapshot(snapshot)
+		}
+	}
+}
+
+func (reporters multiUIReporter) Log(line string) {
+	for _, reporter := range reporters {
+		if !isNilUIReporter(reporter) {
+			reporter.Log(line)
+		}
+	}
+}
+
+// isNilUIReporter reports whether a reporter is unusable, including a typed-nil
+// pointer such as a (*webui.Server)(nil) stored in the UIReporter interface.
+func isNilUIReporter(reporter UIReporter) bool {
+	if reporter == nil {
+		return true
+	}
+	switch value := reflect.ValueOf(reporter); value.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func combineUIReporters(reporters ...UIReporter) UIReporter {
+	combined := make(multiUIReporter, 0, len(reporters))
+	for _, reporter := range reporters {
+		if !isNilUIReporter(reporter) {
+			combined = append(combined, reporter)
+		}
+	}
+	if len(combined) == 0 {
+		return nil
+	}
+	return combined
 }

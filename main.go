@@ -26,6 +26,7 @@ import (
 
 	"github.com/lsegal/glorp/browser"
 	"github.com/lsegal/glorp/core"
+	"github.com/lsegal/glorp/webui"
 
 	"github.com/mattn/go-isatty"
 )
@@ -47,7 +48,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("ngrok-api", "http://127.0.0.1:4040", "deprecated and ignored: the tunnel URL is read from ngrok's own log")
 	flags.String("ui", "web", "user interface: web, tui, or none")
 	flags.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
-	flags.Int("web-ui-port", defaultWebUIPort, "starting port for the browser UI")
+	flags.Int("web-ui-port", webui.DefaultPort, "starting port for the browser UI")
 	flags.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	flags.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	flags.Var(agents, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
@@ -192,16 +193,16 @@ func runWatch(args []string) int {
 		output = ui.Writer()
 		go func() { _ = ui.Run(ctx) }()
 	}
-	var webUI *WebUI
+	var webUI *webui.Server
 	var webServer *http.Server
 	if mode == "web" {
 		var err error
-		webUI, err = NewWebUI(version)
+		webUI, err = webui.New(version)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		listener, port, err := listenForWebUI(webUIPort)
+		listener, port, err := webui.Listen(webUIPort)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -214,7 +215,7 @@ func runWatch(args []string) int {
 		}
 		defer removeRecord()
 		webServer = &http.Server{Handler: webUI}
-		stopFrontend, err := startWebUIFrontend(ctx, output)
+		stopFrontend, err := webui.StartFrontend(ctx, output, childProcessSupervisor{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "start web UI frontend: %v\n", err)
 			return 1

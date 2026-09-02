@@ -1,4 +1,9 @@
-package main
+// Package webui is glorp's browser dashboard: the HTTP server that publishes a
+// run's state and job actions, and the Vite frontend beside it that renders
+// them. Both halves live here so the dashboard is one package rather than Go
+// files in the root package serving assets built from a separate directory
+// (issue #479).
+package webui
 
 import (
 	"context"
@@ -6,36 +11,45 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"reflect"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/lsegal/glorp/core"
 )
 
-const defaultWebUIPort = 8765
+// DefaultPort is the first localhost port the dashboard tries to bind.
+const DefaultPort = 8765
 
-type webUIState struct {
+// State is the JSON payload the dashboard's /api/state endpoint publishes. It
+// is exported because `glorp ui` reads it back when probing localhost for
+// running dashboards.
+type State struct {
 	Version  string        `json:"version"`
-	Snapshot GlorpSnapshot `json:"snapshot"`
+	Snapshot core.Snapshot `json:"snapshot"`
 	Logs     []string      `json:"logs"`
 }
 
-// WebUI keeps the browser dashboard's state and serves its frontend.
-type WebUI struct {
+// Server keeps the browser dashboard's state and serves its frontend.
+type Server struct {
 	mu       sync.RWMutex
 	version  string
-	snapshot GlorpSnapshot
+	snapshot core.Snapshot
 	logs     []string
 	assets   http.Handler
-	action   func(context.Context, jobAction) error
-	settings func(context.Context, SettingsUpdate) (SettingsSnapshot, error)
+	action   func(context.Context, core.JobAction) error
+	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 }
 
-func NewWebUI(version string) (*WebUI, error) {
-	return &WebUI{version: version, assets: newWebUIAssets()}, nil
+// New builds a dashboard server that reports version.
+func New(version string) (*Server, error) {
+	return &Server{version: version, assets: newAssets()}, nil
 }
 
-func (ui *WebUI) SetJobActionHandler(handler func(context.Context, jobAction) error) {
+// SetJobActionHandler wires the dashboard's retry and stop buttons to a
+// function that performs them.
+func (ui *Server) SetJobActionHandler(handler func(context.Context, core.JobAction) error) {
 	ui.mu.Lock()
 	ui.action = handler
 	ui.mu.Unlock()
@@ -43,19 +57,19 @@ func (ui *WebUI) SetJobActionHandler(handler func(context.Context, jobAction) er
 
 // SetSettingsHandler wires the modal dialog (issue #341) to a function that
 // reads or applies live-editable runtime settings.
-func (ui *WebUI) SetSettingsHandler(handler func(context.Context, SettingsUpdate) (SettingsSnapshot, error)) {
+func (ui *Server) SetSettingsHandler(handler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)) {
 	ui.mu.Lock()
 	ui.settings = handler
 	ui.mu.Unlock()
 }
 
-func (ui *WebUI) Snapshot(snapshot GlorpSnapshot) {
+func (ui *Server) Snapshot(snapshot core.Snapshot) {
 	ui.mu.Lock()
 	ui.snapshot = snapshot
 	ui.mu.Unlock()
 }
 
-func (ui *WebUI) Log(line string) {
+func (ui *Server) Log(line string) {
 	ui.mu.Lock()
 	ui.logs = append(ui.logs, line)
 	if len(ui.logs) > 200 {
@@ -64,7 +78,7 @@ func (ui *WebUI) Log(line string) {
 	ui.mu.Unlock()
 }
 
-func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/state" {
 		ui.serveState(w, r)
 		return
@@ -85,12 +99,12 @@ func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ui.assets.ServeHTTP(w, r)
 }
 
-func (ui *WebUI) serveJobAction(w http.ResponseWriter, r *http.Request) {
+func (ui *Server) serveJobAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var action jobAction
+	var action core.JobAction
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&action); err != nil || action.Number <= 0 || action.Target == "" || (action.Action != "retry" && action.Action != "stop") {
@@ -114,12 +128,12 @@ func (ui *WebUI) serveJobAction(w http.ResponseWriter, r *http.Request) {
 // serveSettings backs the settings modal (issue #341). GET reports the
 // current live-editable settings; POST applies a partial update and reports
 // the resulting settings.
-func (ui *WebUI) serveSettings(w http.ResponseWriter, r *http.Request) {
+func (ui *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var update SettingsUpdate
+	var update core.SettingsUpdate
 	if r.Method == http.MethodPost {
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 		decoder.DisallowUnknownFields()
@@ -145,20 +159,22 @@ func (ui *WebUI) serveSettings(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(snapshot)
 }
 
-func (ui *WebUI) serveState(w http.ResponseWriter, r *http.Request) {
+func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	ui.mu.RLock()
-	state := webUIState{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...)}
+	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...)}
 	ui.mu.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(state)
 }
 
-func listenForWebUI(startPort int) (net.Listener, int, error) {
+// Listen binds the first free localhost port at or above startPort and reports
+// the listener along with the port it took.
+func Listen(startPort int) (net.Listener, int, error) {
 	if startPort < 1 || startPort > 65535 {
 		return nil, 0, fmt.Errorf("web-ui-port must be between 1 and 65535")
 	}
@@ -175,47 +191,17 @@ func listenForWebUI(startPort int) (net.Listener, int, error) {
 	return nil, 0, fmt.Errorf("no web UI port available at or above %d", startPort)
 }
 
-type multiUIReporter []UIReporter
+// FrontendDir is where this package's Vite project sits relative to the
+// repository root, which is the working directory a development build runs
+// from.
+const FrontendDir = "webui"
 
-func (reporters multiUIReporter) Snapshot(snapshot GlorpSnapshot) {
-	for _, reporter := range reporters {
-		if !isNilUIReporter(reporter) {
-			reporter.Snapshot(snapshot)
-		}
-	}
-}
-
-func (reporters multiUIReporter) Log(line string) {
-	for _, reporter := range reporters {
-		if !isNilUIReporter(reporter) {
-			reporter.Log(line)
-		}
-	}
-}
-
-// isNilUIReporter reports whether a reporter is unusable, including a typed-nil
-// pointer such as a (*WebUI)(nil) stored in the UIReporter interface.
-func isNilUIReporter(reporter UIReporter) bool {
-	if reporter == nil {
-		return true
-	}
-	switch value := reflect.ValueOf(reporter); value.Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
-func combineUIReporters(reporters ...UIReporter) UIReporter {
-	combined := make(multiUIReporter, 0, len(reporters))
-	for _, reporter := range reporters {
-		if !isNilUIReporter(reporter) {
-			combined = append(combined, reporter)
-		}
-	}
-	if len(combined) == 0 {
-		return nil
-	}
-	return combined
+// Supervisor starts and stops the Vite dev server. glorp tracks every
+// subprocess it owns so none outlive the run (issue #260), so the caller
+// supplies that tracking rather than this package spawning processes behind
+// its back.
+type Supervisor interface {
+	Start(*exec.Cmd) error
+	Run(*exec.Cmd) error
+	Stop(*exec.Cmd) error
 }

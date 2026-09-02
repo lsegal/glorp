@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lsegal/glorp/webui"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -56,7 +58,7 @@ func (d dashboardInstance) Label() string {
 
 func uiFlagSet() *flag.FlagSet {
 	flags := flag.NewFlagSet("ui", flag.ExitOnError)
-	flags.Int("port", defaultWebUIPort, "first localhost port to scan for a dashboard")
+	flags.Int("port", webui.DefaultPort, "first localhost port to scan for a dashboard")
 	return flags
 }
 
@@ -195,7 +197,7 @@ func probeDashboard(ctx context.Context, client *http.Client, base string, port 
 	if _, ok := raw["logs"]; !ok {
 		return dashboardInstance{}, false
 	}
-	var state webUIState
+	var state webui.State
 	if err := json.Unmarshal(body, &state); err != nil {
 		return dashboardInstance{}, false
 	}
