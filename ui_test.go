@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lsegal/glorp/webui"
+
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -595,7 +597,7 @@ func TestDeliveryTextReportsLastPollInPushMode(t *testing.T) {
 }
 
 // TestFormatInterval pins the shared interval spelling. The same table is run
-// against the web dashboard's formatInterval in web/src/dashboard.test.js, so
+// against the web dashboard's formatInterval in webui/src/dashboard.test.js, so
 // the two status bars cannot drift apart again (issue #449).
 func TestFormatInterval(t *testing.T) {
 	cases := []struct {
@@ -628,5 +630,41 @@ func TestFormatInterval(t *testing.T) {
 func TestDeliveryTextFormatsWholeHour(t *testing.T) {
 	if got := deliveryText(GlorpSnapshot{Interval: time.Hour}); got != "polling every 1h" {
 		t.Errorf("deliveryText = %q, want %q", got, "polling every 1h")
+	}
+}
+
+type recordingReporter struct {
+	snapshots int
+	logs      []string
+}
+
+func (r *recordingReporter) Snapshot(GlorpSnapshot) { r.snapshots++ }
+func (r *recordingReporter) Log(line string)        { r.logs = append(r.logs, line) }
+
+func TestCombineUIReportersFansOutUpdates(t *testing.T) {
+	first, second := &recordingReporter{}, &recordingReporter{}
+	reporter := combineUIReporters(nil, first, second)
+	reporter.Snapshot(GlorpSnapshot{})
+	reporter.Log("ready")
+	if first.snapshots != 1 || second.snapshots != 1 || first.logs[0] != "ready" || second.logs[0] != "ready" {
+		t.Fatalf("updates were not sent to both reporters: %#v %#v", first, second)
+	}
+}
+
+func TestCombineUIReportersDropsTypedNilReporters(t *testing.T) {
+	var webUI *webui.Server
+	terminal := &recordingReporter{}
+	reporter := combineUIReporters(terminal, webUI)
+	reporter.Snapshot(GlorpSnapshot{})
+	reporter.Log("watching o/r")
+	if terminal.snapshots != 1 || len(terminal.logs) != 1 {
+		t.Fatalf("updates were not sent to the terminal reporter: %#v", terminal)
+	}
+}
+
+func TestCombineUIReportersReturnsNilWhenOnlyTypedNils(t *testing.T) {
+	var webUI *webui.Server
+	if reporter := combineUIReporters(nil, webUI); reporter != nil {
+		t.Fatalf("combineUIReporters(nil, (*webui.Server)(nil)) = %#v, want nil", reporter)
 	}
 }

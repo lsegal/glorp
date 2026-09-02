@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lsegal/glorp/webui"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -206,7 +208,7 @@ func TestGlorpRunnerAppliesLiveAgentOverride(t *testing.T) {
 }
 
 func TestWebUIHandlesSettings(t *testing.T) {
-	ui, err := NewWebUI("v1.2.3")
+	ui, err := webui.New("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +236,7 @@ func TestWebUIHandlesSettings(t *testing.T) {
 }
 
 func TestWebUIRejectsUnavailableSettings(t *testing.T) {
-	ui, err := NewWebUI("v1.2.3")
+	ui, err := webui.New("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +249,7 @@ func TestWebUIRejectsUnavailableSettings(t *testing.T) {
 }
 
 func TestWebUIRejectsInvalidSettingsUpdate(t *testing.T) {
-	ui, err := NewWebUI("v1.2.3")
+	ui, err := webui.New("v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}

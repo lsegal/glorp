@@ -268,3 +268,14 @@ func shutdownContext() (context.Context, func()) {
 		cancel()
 	}
 }
+
+// childProcessSupervisor adapts glorp's tracked child-process helpers to the
+// webui package's Supervisor, so the Vite dev server it starts is reaped along
+// with every other subprocess glorp owns.
+type childProcessSupervisor struct{}
+
+func (childProcessSupervisor) Start(cmd *exec.Cmd) error { return startChildProcess(cmd) }
+
+func (childProcessSupervisor) Run(cmd *exec.Cmd) error { return runChildProcess(cmd) }
+
+func (childProcessSupervisor) Stop(cmd *exec.Cmd) error { return stopChildProcess(cmd) }

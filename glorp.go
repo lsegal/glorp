@@ -42,11 +42,7 @@ var errWorkClosedByUser = errors.New("work closed by user")
 
 var errWorkStoppedFromWebUI = errors.New("work stopped from web UI")
 
-type jobAction struct {
-	Action string `json:"action"`
-	Target string `json:"target"`
-	Number int    `json:"number"`
-}
+type jobAction = core.JobAction
 
 type jobActionRequest struct {
 	action jobAction
@@ -164,10 +160,7 @@ type SessionAgentOutputRunner interface {
 type AgentIdentifier interface {
 	AgentName() string
 }
-type UIReporter interface {
-	Snapshot(GlorpSnapshot)
-	Log(string)
-}
+type UIReporter = core.UIReporter
 type Glorp struct {
 	Repo        string
 	Targets     []string
