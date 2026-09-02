@@ -18,20 +18,66 @@ func projectItemsResponse(repos ...string) []byte {
 	return []byte(fmt.Sprintf(`{"data":{"user":{"projectV2":{"items":{"nodes":[%s],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}}`, strings.Join(nodes, ",")))
 }
 
+func orgProjectItemsResponse(repos ...string) []byte {
+	return []byte(strings.Replace(string(projectItemsResponse(repos...)), `"user"`, `"organization"`, 1))
+}
+
+// An organization project keeps its projects_v2_item hook and gains a narrow
+// issue hook on each repository backing the board, so a change to an issue an
+// agent is working is delivered instead of waiting out the poll (issue #471).
 func TestWebhookSpecsSupportOrganizationProjects(t *testing.T) {
 	target, err := parseTarget("https://github.com/orgs/example/projects/3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	specs, err := (GHCLI{}).webhookSpecs(context.Background(), target)
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] != "api" || args[1] != "graphql" {
+			return nil, fmt.Errorf("unexpected command %v", args)
+		}
+		return orgProjectItemsResponse("example/beta", "example/alpha", "example/beta"), nil
+	}}
+	specs, err := gh.webhookSpecs(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 1 {
+	if len(specs) != 3 {
 		t.Fatalf("webhook specs = %#v", specs)
 	}
 	if specs[0].apiPath != "orgs/example/hooks" || specs[0].name != "organization project example" || !reflect.DeepEqual(specs[0].events, []string{"projects_v2_item"}) {
 		t.Fatalf("webhook spec = %#v", specs[0])
+	}
+	if specs[1].apiPath != "repos/example/alpha/hooks" || specs[2].apiPath != "repos/example/beta/hooks" {
+		t.Fatalf("webhook specs = %#v", specs)
+	}
+	if !reflect.DeepEqual(specs[1].events, []string{"issues", "issue_comment", "ping"}) {
+		t.Fatalf("webhook spec events = %#v", specs[1].events)
+	}
+}
+
+// A board whose repositories cannot be listed still keeps the board hook the
+// whole target depends on; the repositories are retried on the next cycle.
+func TestWebhookSpecsKeepOrganizationBoardHookWhenRepositoriesUnavailable(t *testing.T) {
+	target, err := parseTarget("https://github.com/orgs/example/projects/3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		return nil, errors.New("HTTP 502")
+	}}
+	specs, err := gh.webhookSpecs(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 || specs[0].apiPath != "orgs/example/hooks" {
+		t.Fatalf("webhook specs = %#v", specs)
+	}
+}
+
+// The narrow project issue hook must not shrink a repository target's own
+// hook when both watch the same repository.
+func TestProjectIssueWebhookEventsAreASubsetOfRepositoryEvents(t *testing.T) {
+	if missing := missingWebhookEvents(repositoryWebhookSpec("owner/repo").events, projectIssueWebhookSpec("owner/repo").events); len(missing) > 0 {
+		t.Fatalf("project issue events missing from repository events: %v", missing)
 	}
 }
 

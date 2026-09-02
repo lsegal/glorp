@@ -214,8 +214,13 @@ func (r *webhookReconciler) reconcile(ctx context.Context) {
 	}
 }
 
-// webhookSpecs lists every webhook a target needs. A repository target and an
-// organization-owned project each need exactly one. GitHub publishes no
+// webhookSpecs lists every webhook a target needs. A repository target needs
+// exactly one. An organization-owned project needs its own projects_v2_item
+// hook for board changes, plus a narrow issue hook on each repository backing
+// the board: projects_v2_item says nothing about an issue being edited,
+// commented on, or closed, so without those the runs working the board's
+// issues learn about a change only on the watcher's next poll instead of
+// being nudged immediately (issue #471). GitHub publishes no
 // projects_v2 webhook for user-owned projects, so those fall back to a
 // repository webhook on each repository currently backing the board's items;
 // that pushes new issues immediately instead of leaving the whole target to
@@ -233,14 +238,26 @@ func (g GHCLI) webhookSpecs(ctx context.Context, target target) ([]webhookSpec, 
 	if err != nil {
 		return nil, err
 	}
+	target.projectOwnerType = ownerType
 	if ownerType == "orgs" {
-		return []webhookSpec{{
+		specs := []webhookSpec{{
 			apiPath: "orgs/" + target.owner + "/hooks",
 			name:    "organization project " + target.owner,
 			events:  []string{"projects_v2_item"},
-		}}, nil
+		}}
+		repos, err := g.projectRepositories(ctx, target)
+		if err != nil {
+			// The board's repositories are re-enumerated on every
+			// reconciliation cycle, so a listing that fails now costs the
+			// issue hooks a cycle rather than the projects_v2_item
+			// subscription the whole target depends on.
+			return specs, nil
+		}
+		for _, repo := range repos {
+			specs = append(specs, projectIssueWebhookSpec(repo))
+		}
+		return specs, nil
 	}
-	target.projectOwnerType = ownerType
 	repos, err := g.projectRepositories(ctx, target)
 	if err != nil {
 		return nil, err
@@ -260,6 +277,21 @@ func repositoryWebhookSpec(repo string) webhookSpec {
 		apiPath: "repos/" + repo + "/hooks",
 		name:    repo,
 		events:  []string{"issues", "pull_request", "push", "ping", "issue_comment"},
+	}
+}
+
+// projectIssueWebhookSpec is the repository webhook a project-board target
+// needs beside its own board hook. It subscribes only to the issue traffic
+// the board's in-flight runs have to hear about, rather than the full
+// repository set: a board target dispatches from the board, so pushes and
+// pull-request activity are not its business. A repository that is also
+// watched as a repository target shares the one hook and keeps its wider
+// event set, because this narrower spec asks for nothing it is missing.
+func projectIssueWebhookSpec(repo string) webhookSpec {
+	return webhookSpec{
+		apiPath: "repos/" + repo + "/hooks",
+		name:    repo + " project issues",
+		events:  []string{"issues", "issue_comment", "ping"},
 	}
 }
 
