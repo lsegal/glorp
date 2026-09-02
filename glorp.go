@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lsegal/glorp/core"
 	"io"
 	"maps"
 	"os"
@@ -98,41 +99,18 @@ func isCooperativeCancellation(cause error) bool {
 	return errors.Is(cause, errWorkClosedByUser) || errors.Is(cause, errWorkClaimedByOther)
 }
 
-type Issue struct {
-	Number        int               `json:"number"`
-	Repository    string            `json:"repository,omitempty"`
-	Title         string            `json:"title,omitempty"`
-	Body          string            `json:"body,omitempty"`
-	State         string            `json:"state,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt,omitempty"`
-	Labels        []IssueLabel      `json:"labels,omitempty"`
-	DependsOn     []IssueDependency `json:"dependsOn,omitempty"`
-	HasSubIssues  bool              `json:"hasSubIssues,omitempty"`
-	ProjectStatus string            `json:"projectStatus,omitempty"`
-	ProjectItemID string            `json:"-"`
-	Target        string            `json:"-"`
-}
+// Issue and its parts live in package core so the browser driver can produce
+// them without importing the root package.
+type (
+	Issue           = core.Issue
+	IssueLabel      = core.IssueLabel
+	IssueDependency = core.IssueDependency
+	IssueSource     = core.IssueSource
+)
 
+// issueRepository resolves the OWNER/REPO an issue belongs to.
 func issueRepository(target string, issue Issue) string {
-	if issue.Repository != "" {
-		return issue.Repository
-	}
-	parsed, err := parseTarget(target)
-	if err == nil && parsed.repo != "" {
-		return parsed.repo
-	}
-	return target
-}
-
-type IssueLabel struct {
-	Name string `json:"name"`
-}
-type IssueDependency struct {
-	Number int    `json:"number"`
-	State  string `json:"state"`
-}
-type IssueSource interface {
-	ListIssues(context.Context, string) ([]Issue, error)
+	return core.IssueRepository(target, issue)
 }
 
 // Discussion is a top-level GitHub Discussion thread that has not yet
@@ -148,24 +126,11 @@ type DiscussionSource interface {
 	ListUnansweredDiscussions(context.Context, string) ([]Discussion, error)
 }
 
-type PullRequestWorkState struct {
-	Number int
-	State  string
-	Merged bool
-}
-
-type OriginatingWorkState struct {
-	IssueState string
-	// IssueBody is the issue's description, compared between checks so an
-	// edit made while an agent is working is relayed into its session
-	// (issue #469).
-	IssueBody    string
-	PullRequests []PullRequestWorkState
-}
-
-type WorkClosureChecker interface {
-	OriginatingWorkState(context.Context, string, int) (OriginatingWorkState, error)
-}
+type (
+	PullRequestWorkState = core.PullRequestWorkState
+	OriginatingWorkState = core.OriginatingWorkState
+	WorkClosureChecker   = core.WorkClosureChecker
+)
 
 // ProjectStateSource returns a cheap fingerprint of a project board's
 // dispatchable state. GitHub publishes no projects_v2 webhook for user-owned
@@ -431,7 +396,7 @@ func (w *Glorp) pushedBoardTargets(targets []string) []string {
 // project URL does not say who owns the board, so both keep probing.
 func boardPushesChanges(repo string) bool {
 	target, err := parseTarget(repo)
-	return err == nil && target.isProject && target.projectOwnerType == "orgs"
+	return err == nil && target.IsProject && target.ProjectOwnerType == "orgs"
 }
 
 // watchDescription names the refresh strategy in the startup log. Push mode
@@ -2661,15 +2626,9 @@ func issuesFromProjectItems(items []projectItem) []Issue {
 	return issues
 }
 
-func isProjectTarget(repo string) bool {
-	target, err := parseTarget(repo)
-	return err == nil && target.isProject
-}
+func isProjectTarget(repo string) bool { return core.IsProjectTarget(repo) }
 
-func isDiscussionTarget(repo string) bool {
-	target, err := parseTarget(repo)
-	return err == nil && target.isDiscussion
-}
+func isDiscussionTarget(repo string) bool { return core.IsDiscussionTarget(repo) }
 
 func decodeProjectItems(data []byte, err error) ([]projectItem, error) {
 	if err != nil {

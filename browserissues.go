@@ -222,14 +222,14 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 	if err != nil {
 		return nil, err
 	}
-	if parsed.repo == "" || parsed.isProject || parsed.isDiscussion {
+	if parsed.Repo == "" || parsed.IsProject || parsed.IsDiscussion {
 		return nil, fmt.Errorf("browser mode lists issues for an OWNER/REPO target only, not %q", target)
 	}
 	page, err := s.pageFor(target)
 	if err != nil {
 		return nil, err
 	}
-	next := browserIssuesURL(parsed.repo, s.filter, s.allIssues)
+	next := browserIssuesURL(parsed.Repo, s.filter, s.allIssues)
 	var issues []Issue
 	seen := map[string]bool{}
 	for visited := 0; visited < browserIssuesPageLimit && next != ""; visited++ {
@@ -244,12 +244,12 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 				return nil, err
 			}
 			for _, ref := range recovered {
-				key := parsed.repo + "#" + strconv.Itoa(ref.Number)
+				key := parsed.Repo + "#" + strconv.Itoa(ref.Number)
 				if seen[key] {
 					continue
 				}
 				seen[key] = true
-				issues = append(issues, issueFromBrowserRow(browserIssueRow{Number: ref.Number}, parsed.repo))
+				issues = append(issues, issueFromBrowserRow(browserIssueRow{Number: ref.Number}, parsed.Repo))
 			}
 			break
 		}
@@ -262,7 +262,7 @@ func (s *browserIssueSource) ListIssues(ctx context.Context, target string) ([]I
 				continue
 			}
 			seen[key] = true
-			issues = append(issues, issueFromBrowserRow(row, parsed.repo))
+			issues = append(issues, issueFromBrowserRow(row, parsed.Repo))
 		}
 		next = nextBrowserIssuesURL(list.Next)
 	}

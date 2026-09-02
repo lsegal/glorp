@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/lsegal/glorp/core"
 	"io"
 	"net/http"
 	"net/url"
@@ -176,41 +177,10 @@ func (g GHCLI) resolveSelfLogin(ctx context.Context) (string, error) {
 	return login, nil
 }
 
-// issueFilterTerms splits filter into the terms a search is actually built
-// from, dropping every qualifier that names the kind or the state of what to
-// look for.
-//
-// glorp only ever dispatches an open issue: a closed one has nothing left to
-// do and a pull request is not work it can pick up, so "is:issue" and the open
-// state are appended to every query rather than being defaults a --filter can
-// displace. They are therefore not part of the filter a user is shown or
-// overrides, and a filter that names its own kind or state has that term
-// dropped here instead of contradicting the qualifiers glorp adds.
-//
-// It is shared with projectItemQuery, which appends the same two qualifiers in
-// a project board's own narrower vocabulary.
-func issueFilterTerms(filter string) []string {
-	var terms []string
-	for _, term := range strings.Fields(filter) {
-		switch {
-		case strings.HasPrefix(term, "state:"), strings.HasPrefix(term, "is:"), strings.HasPrefix(term, "type:"):
-			continue
-		}
-		terms = append(terms, term)
-	}
-	return terms
-}
+func issueFilterTerms(filter string) []string { return core.IssueFilterTerms(filter) }
 
-// issueSearchTerms builds the search terms for filter, the query body shared by
-// the API path and the browser mode's page URL. "is:issue" and "state:open"
-// always open the query; see issueFilterTerms.
-//
-// allIssues drops the filter entirely, leaving the bare qualifiers.
 func issueSearchTerms(filter string, allIssues bool) []string {
-	if allIssues {
-		filter = ""
-	}
-	return append([]string{"is:issue", "state:open"}, issueFilterTerms(filter)...)
+	return core.IssueSearchTerms(filter, allIssues)
 }
 
 // publicIssueSearchQuery builds the GitHub search-syntax query equivalent to

@@ -239,7 +239,7 @@ func (b *BrowserBoard) readRows(ctx context.Context, target string) ([]boardRow,
 	if err != nil {
 		return nil, err
 	}
-	if !parsed.isProject {
+	if !parsed.IsProject {
 		return nil, fmt.Errorf("project board extraction requires a project target, got %q", target)
 	}
 	page, err := b.Page(target)
@@ -408,10 +408,10 @@ func appendBoardRows(into *[]boardRow, seen map[string]bool, rows []boardRow, li
 // items the GraphQL query does.
 func boardURL(t target, filter string, allIssues bool) string {
 	base := "https://github.com/"
-	if t.projectOwnerType != "" {
-		base += t.projectOwnerType + "/" + t.owner + "/projects/" + t.projectID
+	if t.ProjectOwnerType != "" {
+		base += t.ProjectOwnerType + "/" + t.Owner + "/projects/" + t.ProjectID
 	} else {
-		base += t.repo + "/projects/" + t.projectID
+		base += t.Repo + "/projects/" + t.ProjectID
 	}
 	params := url.Values{"layout": {"table"}}
 	if query := projectItemQuery(filter, allIssues); query != "" {
