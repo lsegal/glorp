@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/lsegal/glorp/browser"
 )
 
 // browserWatchOptions is the resolved `-browser` configuration for a watch run:
@@ -28,8 +30,8 @@ type browserWatchOptions struct {
 }
 
 // config converts the flag values into the launcher's configuration.
-func (o browserWatchOptions) config() browserConfig {
-	return browserConfig{Binary: o.Binary, Profile: o.Profile, Headed: o.Headed}
+func (o browserWatchOptions) config() browser.Config {
+	return browser.Config{Binary: o.Binary, Profile: o.Profile, Headed: o.Headed}
 }
 
 // noHeadlessEnvironmentCheck refuses -no-headless where no window could ever
@@ -43,14 +45,7 @@ var noHeadlessEnvironmentCheck = func() error {
 	return fmt.Errorf("-no-headless needs a display server to show the browser window, and neither DISPLAY nor WAYLAND_DISPLAY is set: drop -no-headless to keep watching headlessly, or run glorp from a desktop session")
 }
 
-// browserWatchInterval is the poll interval browser mode defaults to. Reading a
-// page glorp already has a tab open on is far cheaper than the API path's `gh`
-// invocations, so browser mode can poll faster than the half-minute the API
-// default is chosen to stay inside rate limits. It is not free, though: a tick
-// reloads every watched target's page, waits out GitHub's client-side render,
-// and re-reads the conversation of every issue an agent is working, none of
-// which fits in the five seconds this was first set to (issue #441).
-const browserWatchInterval = 20 * time.Second
+const browserWatchInterval = browser.DefaultWatchInterval
 
 // browserExclusiveFlags are the webhook-transport flags browser mode can never
 // honour: it never starts a webhook server and never opens an ngrok tunnel, so
@@ -155,41 +150,41 @@ func browserTabIdleTimeout(interval time.Duration) time.Duration {
 // hydrate newly seen candidates through gh, sharing one memo so an issue costs
 // its REST calls once for the run whichever page found it (issues #381 and
 // #395), and the screenshot fallback is attached only when -browser-vision asked for
-// it (issue #384). One browserVision is built and shared by the repository
+// it (issue #384). One browser.Vision is built and shared by the repository
 // source and the board, so its per-run cap is a single budget for the run
 // rather than one per page kind (issue #393).
-func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions, gh GHCLI) {
-	if w == nil || browser == nil {
+func applyBrowserSources(w *Glorp, driver *browser.Browser, options browserWatchOptions, gh GHCLI) {
+	if w == nil || driver == nil {
 		return
 	}
 	// Every page load the run makes goes through one queue, so a tick that
 	// reloads many targets staggers its requests rather than firing them all
 	// at once (issue #450). It is attached to the browser rather than to any
 	// reader because the burst is the sum of what all the readers do.
-	browser.SetLoadQueue(newBrowserLoadQueue(w.Interval, w.logf))
+	driver.SetLoadQueue(browser.NewLoadQueue(w.Interval, w.logf))
 	// A tab glorp has stopped reading is closed rather than left open for the
 	// rest of the run (issue #461). Every watched target is re-read on every
 	// tick, so what ages out is the conversation of an issue nothing is
 	// working any more.
-	browser.SetTabIdleTimeout(browserTabIdleTimeout(w.Interval), w.logf)
-	var vision *browserVision
+	driver.SetTabIdleTimeout(browserTabIdleTimeout(w.Interval), w.logf)
+	var vision *browser.Vision
 	if options.Vision {
 		runner, _ := w.Runner.(CommandRunner)
-		vision = newBrowserVision(runner, w.logf)
+		vision = browser.NewVision(visionAgentRunner{runner: runner}, w.logf)
 	}
-	repos := newBrowserIssueSource(browser, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf)
-	board := newBrowserBoard(browser, gh.Filter, gh.AllIssues, vision, repos.browserHydration)
+	repos := browser.NewIssueSource(driver, gh, w.issueHandled, gh.Filter, gh.AllIssues, vision, w.logf)
+	board := browser.NewBoard(driver, gh.Filter, gh.AllIssues, vision, repos.Hydration)
 	// A read that came back signed out is recovered in place: the run stops
 	// the headless browser, opens a login window on the same profile, and
 	// starts polling again once the sign-in lands (issue #379). The guard
 	// wraps the source rather than living inside it because both page readers
 	// reach the same conclusion the same way.
-	w.Issues = browserSignInGuard{
-		source:   browserWatchIssues{Repos: repos, Board: board, Work: gh},
-		recovery: newBrowserSignInRecovery(browser, options.config(), w.logf),
-	}
+	w.Issues = browser.NewSignInGuard(
+		browser.WatchIssues{Repos: repos, Board: board, Work: gh},
+		browser.NewSignInRecovery(driver, options.config(), authSignIn(), w.logf),
+	)
 	w.Projects = board
 	if w.Comments != nil {
-		w.Comments = newBrowserComments(browser, w.Comments, w.logf)
+		w.Comments = browser.NewCommentSource(driver, w.Comments, w.logf)
 	}
 }

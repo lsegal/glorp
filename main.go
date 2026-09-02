@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -24,6 +23,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lsegal/glorp/browser"
+	"github.com/lsegal/glorp/core"
 
 	"github.com/mattn/go-isatty"
 )
@@ -156,19 +158,19 @@ func runWatch(args []string) int {
 	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
 	// cleanup did not run before the daemon returns (issue #260).
 	defer reapChildProcesses()
-	var browser *Browser
+	var driver *browser.Browser
 	if browserOptions.Enabled {
 		// One browser for the whole run: every target gets a tab on it rather
 		// than a browser of its own. A browser that cannot start is fatal, since
 		// quietly falling back to the API path would answer a request for
 		// browser mode with something else entirely.
-		started, err := startBrowser(ctx, browserOptions.config())
+		started, err := browser.Start(ctx, browserOptions.config())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		browser = started
-		defer func() { _ = browser.Close() }()
+		driver = started
+		defer func() { _ = driver.Close() }()
 	}
 	gh := GHCLI{Binary: "gh", ReadyState: strings.TrimSpace(readyState), publicRepoCache: &sync.Map{}, selfLoginCache: &sync.Map{}}
 	gh.Filter, gh.AllIssues = filter.String(), allIssues
@@ -252,7 +254,7 @@ func runWatch(args []string) int {
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
-	applyBrowserSources(w, browser, browserOptions, gh)
+	applyBrowserSources(w, driver, browserOptions, gh)
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
@@ -528,7 +530,7 @@ func closesIssue(body, repo string, number int) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
-const defaultIssueFilter = "assignee:@me author:@me"
+const defaultIssueFilter = core.DefaultIssueFilter
 
 type filterFlag struct {
 	values []string
@@ -744,20 +746,20 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 	if err != nil {
 		return nil, err
 	}
-	if target.isProject && target.projectOwnerType != "" {
+	if target.IsProject && target.ProjectOwnerType != "" {
 		items, err := g.listProjectItems(ctx, target, g.Filter, g.AllIssues)
 		if err != nil {
 			return nil, err
 		}
 		issues := issuesFromProjectItems(items)
 		for i := range issues {
-			if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+			if err := g.loadDependencies(ctx, target.Repo, &issues[i]); err != nil {
 				return nil, err
 			}
 		}
 		return issues, nil
 	}
-	if target.isProject {
+	if target.IsProject {
 		// A repository-scoped project board (owner/repo/projects/N) leaves
 		// projectOwnerType unset; it still needs the GraphQL-only Projects
 		// v2 API, which has no REST equivalent.
@@ -766,7 +768,7 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 			return nil, err
 		}
 		for i := range issues {
-			if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+			if err := g.loadDependencies(ctx, target.Repo, &issues[i]); err != nil {
 				return nil, err
 			}
 		}
@@ -775,20 +777,20 @@ func (g GHCLI) ListIssues(ctx context.Context, repo string) ([]Issue, error) {
 
 	var issues []Issue
 	usedPublicAPI := false
-	if g.isPublicRepo(ctx, target.repo) {
-		if got, ok := g.listPublicIssues(ctx, target.repo, g.Filter, g.AllIssues); ok {
+	if g.isPublicRepo(ctx, target.Repo) {
+		if got, ok := g.listPublicIssues(ctx, target.Repo, g.Filter, g.AllIssues); ok {
 			issues, usedPublicAPI = got, true
 		}
 	}
 	if !usedPublicAPI {
-		got, err := g.listAuthenticatedIssues(ctx, target.repo, g.Filter, g.AllIssues)
+		got, err := g.listAuthenticatedIssues(ctx, target.Repo, g.Filter, g.AllIssues)
 		if err != nil {
 			return nil, err
 		}
 		issues = got
 	}
 	for i := range issues {
-		if err := g.loadDependencies(ctx, target.repo, &issues[i]); err != nil {
+		if err := g.loadDependencies(ctx, target.Repo, &issues[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -839,27 +841,27 @@ func (g GHCLI) ListUnansweredDiscussions(ctx context.Context, repo string) ([]Di
 	if err != nil {
 		return nil, err
 	}
-	if !target.isDiscussion {
+	if !target.IsDiscussion {
 		return nil, fmt.Errorf("target %q is not a GitHub Discussions board", repo)
 	}
-	owner, name, ok := strings.Cut(target.repo, "/")
+	owner, name, ok := strings.Cut(target.Repo, "/")
 	if !ok {
-		return nil, fmt.Errorf("invalid repository %q", target.repo)
+		return nil, fmt.Errorf("invalid repository %q", target.Repo)
 	}
 	output, err := g.run(ctx, "api", "graphql", "-f", "query="+discussionsQuery, "-F", "owner="+owner, "-F", "name="+name)
 	if err != nil {
-		return nil, fmt.Errorf("list discussions for %s: %w: %s", target.repo, err, strings.TrimSpace(string(output)))
+		return nil, fmt.Errorf("list discussions for %s: %w: %s", target.Repo, err, strings.TrimSpace(string(output)))
 	}
 	var response discussionsGraphQLResponse
 	if err := json.Unmarshal(output, &response); err != nil {
-		return nil, fmt.Errorf("decode discussions for %s: %w", target.repo, err)
+		return nil, fmt.Errorf("decode discussions for %s: %w", target.Repo, err)
 	}
 	discussions := make([]Discussion, 0)
 	for _, node := range response.Data.Repository.Discussions.Nodes {
 		if node.Comments.TotalCount > 0 {
 			continue
 		}
-		if !matchesDiscussionCategory(target.discussionCategory, node.Category.Slug, node.Category.Name) {
+		if !matchesDiscussionCategory(target.DiscussionCategory, node.Category.Slug, node.Category.Name) {
 			continue
 		}
 		discussions = append(discussions, Discussion{Number: node.Number, Title: node.Title, Body: node.Body, CreatedAt: node.CreatedAt})
@@ -875,15 +877,9 @@ func matchesDiscussionCategory(want, slug, name string) bool {
 	return want == "" || strings.EqualFold(want, slug) || strings.EqualFold(want, name)
 }
 
-type target struct {
-	repo, owner, projectID string
-	projectOwnerType       string
-	isProject              bool
-	isDiscussion           bool
-	// discussionCategory is the slug of the single Discussions category a
-	// discussion target watches. Empty means every category.
-	discussionCategory string
-}
+// target and the syntax it parses live in package core, shared with the
+// browser driver.
+type target = core.Target
 
 // expandTargetShorthand rewrites the compact `projects:` and `discussions:`
 // target forms into the canonical GitHub URLs parseTarget understands:
@@ -967,32 +963,7 @@ func parseGitHubRemote(remote string) (string, bool) {
 	}
 }
 
-func parseTarget(value string) (target, error) {
-	if validRepo(value) {
-		return target{repo: value}, nil
-	}
-	u, err := url.Parse(value)
-	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.RawQuery != "" || u.Fragment != "" {
-		return target{}, fmt.Errorf("target must be OWNER/REPO or a GitHub repository/project URL")
-	}
-	parts := strings.Split(strings.Trim(path.Clean(u.Path), "/"), "/")
-	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-		return target{repo: parts[0] + "/" + strings.TrimSuffix(parts[1], ".git")}, nil
-	}
-	if len(parts) == 4 && (parts[0] == "users" || parts[0] == "orgs") && parts[2] == "projects" && parts[1] != "" && parts[3] != "" {
-		return target{owner: parts[1], projectID: parts[3], projectOwnerType: parts[0], isProject: true}, nil
-	}
-	if len(parts) == 4 && parts[2] == "projects" && parts[0] != "" && parts[1] != "" && parts[3] != "" {
-		return target{repo: parts[0] + "/" + parts[1], owner: parts[0], projectID: parts[3], isProject: true}, nil
-	}
-	if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == "discussions" {
-		return target{repo: parts[0] + "/" + parts[1], isDiscussion: true}, nil
-	}
-	if len(parts) == 5 && parts[0] != "" && parts[1] != "" && parts[2] == "discussions" && parts[3] == "categories" && parts[4] != "" {
-		return target{repo: parts[0] + "/" + parts[1], isDiscussion: true, discussionCategory: parts[4]}, nil
-	}
-	return target{}, fmt.Errorf("target must be OWNER/REPO or a GitHub repository/project URL")
-}
+func parseTarget(value string) (target, error) { return core.ParseTarget(value) }
 
 // projectListArgs builds a `gh project item-list` invocation. Every `gh
 // project` subcommand queries GraphQL under the hood, unavoidably: GitHub
@@ -1000,26 +971,12 @@ func parseTarget(value string) (target, error) {
 // project board target (owner/repo/projects/N), never for ordinary
 // issue-repo polling.
 func projectListArgs(t target, filter string, allIssues bool) []string {
-	args := []string{"project", "item-list", t.projectID, "--owner", t.owner, "--format", "json", "--limit", "1000"}
+	args := []string{"project", "item-list", t.ProjectID, "--owner", t.Owner, "--format", "json", "--limit", "1000"}
 	return append(args, "--query", projectItemQuery(filter, allIssues))
 }
 
-// projectItemQuery builds the item filter a project board is asked for, both
-// as the board page's ?filterQuery= and as the GraphQL/`gh project item-list`
-// item query.
-//
-// The kind and state qualifiers always open the query, exactly as
-// issueSearchTerms does for the issues page, and a filter naming its own is
-// stripped of it by issueFilterTerms rather than contradicting them.
-//
-// A board speaks a narrower search vocabulary than the issues page: it knows
-// "is:open"/"is:closed" but not "state:open", so the open state is named the
-// board's own way here.
 func projectItemQuery(filter string, allIssues bool) string {
-	if allIssues || filter == defaultIssueFilter {
-		filter = ""
-	}
-	return strings.Join(append([]string{"is:issue", "is:open"}, issueFilterTerms(filter)...), " ")
+	return core.ProjectItemQuery(filter, allIssues)
 }
 
 func (g GHCLI) listProjectItems(ctx context.Context, target target, filter string, allIssues bool) ([]projectItem, error) {
@@ -1039,13 +996,13 @@ const (
 // calls left in glorp; see issue #276) because GitHub Projects (v2) has no
 // REST API. It only runs for a user/org-owned project board target.
 func (g GHCLI) listProjectItemFields(ctx context.Context, target target, filter string, allIssues bool, contentFields string) ([]projectItem, error) {
-	ownerField := target.projectOwnerType
+	ownerField := target.ProjectOwnerType
 	if ownerField == "users" {
 		ownerField = "user"
 	} else if ownerField == "orgs" {
 		ownerField = "organization"
 	} else {
-		return nil, fmt.Errorf("unknown project owner type %q", target.projectOwnerType)
+		return nil, fmt.Errorf("unknown project owner type %q", target.ProjectOwnerType)
 	}
 	query := fmt.Sprintf(`query($login:String!,$number:Int!,$first:Int!,$after:String,$itemQuery:String!,$statusField:String!){
   %s(login:$login){
@@ -1068,7 +1025,7 @@ func (g GHCLI) listProjectItemFields(ctx context.Context, target target, filter 
 	var items []projectItem
 	cursor := ""
 	for len(items) < 1000 {
-		args := []string{"api", "graphql", "-f", "query=" + query, "-F", "login=" + target.owner, "-F", "number=" + target.projectID, "-F", "first=100", "-F", "itemQuery=" + projectItemQuery(filter, allIssues), "-F", "statusField=Status"}
+		args := []string{"api", "graphql", "-f", "query=" + query, "-F", "login=" + target.Owner, "-F", "number=" + target.ProjectID, "-F", "first=100", "-F", "itemQuery=" + projectItemQuery(filter, allIssues), "-F", "statusField=Status"}
 		if cursor != "" {
 			args = append(args, "-F", "after="+cursor)
 		}
@@ -1122,11 +1079,11 @@ func (g GHCLI) ProjectState(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !target.isProject {
+	if !target.IsProject {
 		return "", fmt.Errorf("project state requires a project target, got %q", repo)
 	}
 	var items []projectItem
-	if target.projectOwnerType != "" {
+	if target.ProjectOwnerType != "" {
 		items, err = g.listProjectItemFields(ctx, target, g.Filter, g.AllIssues, projectItemKeyFields)
 	} else {
 		items, err = decodeProjectItems(g.run(ctx, projectListArgs(target, g.Filter, g.AllIssues)...))
@@ -1173,7 +1130,7 @@ func projectItemListError(output []byte, err error) error {
 // through apiGET, so a public repository is read on the unauthenticated API
 // and spends none of the token's rate limit. No GraphQL query is issued.
 //
-// Callers are responsible for the request budget: browserIssueSource calls
+// Callers are responsible for the request budget: the browser package.s issue source calls
 // this once per newly seen dispatch candidate, never per tick and never for
 // the whole list.
 func (g GHCLI) HydrateIssue(ctx context.Context, repo string, issue *Issue) error {
@@ -1306,16 +1263,16 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 	if err != nil {
 		return err
 	}
-	if !parsedTarget.isProject {
-		items, err := g.repositoryProjectItems(ctx, parsedTarget.repo, issue.Number)
+	if !parsedTarget.IsProject {
+		items, err := g.repositoryProjectItems(ctx, parsedTarget.Repo, issue.Number)
 		if err != nil {
 			return err
 		}
 		for _, item := range items {
 			projectTarget := target{
-				owner:     item.Project.Owner.Login,
-				projectID: strconv.Itoa(item.Project.Number),
-				isProject: true,
+				Owner:     item.Project.Owner.Login,
+				ProjectID: strconv.Itoa(item.Project.Number),
+				IsProject: true,
 			}
 			if err := g.setProjectItemStatus(ctx, projectTarget, item.ID, issue.Number, status); err != nil {
 				return err
@@ -1339,7 +1296,7 @@ func (g GHCLI) SetIssueStatus(ctx context.Context, repo string, issue Issue, sta
 		}
 	}
 	if itemID == "" {
-		return fmt.Errorf("%w: issue #%d is not in project %s", errProjectIssueNotFound, issue.Number, parsedTarget.projectID)
+		return fmt.Errorf("%w: issue #%d is not in project %s", errProjectIssueNotFound, issue.Number, parsedTarget.ProjectID)
 	}
 	return g.setProjectItemStatus(ctx, parsedTarget, itemID, issue.Number, status)
 }
@@ -1397,7 +1354,7 @@ func (g GHCLI) repositoryProjectItems(ctx context.Context, repo string, number i
 // runs when moving an issue's status on a project board.
 func (g GHCLI) setProjectItemStatus(ctx context.Context, target target, itemID string, issueNumber int, status string) error {
 
-	viewOutput, err := g.run(ctx, "project", "view", target.projectID, "--owner", target.owner, "--format", "json")
+	viewOutput, err := g.run(ctx, "project", "view", target.ProjectID, "--owner", target.Owner, "--format", "json")
 	if err != nil {
 		return fmt.Errorf("view project: %w: %s", err, strings.TrimSpace(string(viewOutput)))
 	}
@@ -1406,17 +1363,17 @@ func (g GHCLI) setProjectItemStatus(ctx context.Context, target target, itemID s
 		return fmt.Errorf("decode project: %w", err)
 	}
 	if view.ID == "" {
-		return fmt.Errorf("project %s has no ID", target.projectID)
+		return fmt.Errorf("project %s has no ID", target.ProjectID)
 	}
 
-	fieldsOutput, err := g.run(ctx, "project", "field-list", target.projectID, "--owner", target.owner, "--format", "json", "--limit", "1000")
+	fieldsOutput, err := g.run(ctx, "project", "field-list", target.ProjectID, "--owner", target.Owner, "--format", "json", "--limit", "1000")
 	fields, err := decodeProjectFields(fieldsOutput, err)
 	if err != nil {
 		return err
 	}
 	fieldID, optionID := projectStatusOption(fields, status, g.ReadyState == "")
 	if fieldID == "" || optionID == "" {
-		return fmt.Errorf("project %s has no Status option %q", target.projectID, status)
+		return fmt.Errorf("project %s has no Status option %q", target.ProjectID, status)
 	}
 
 	if output, err := g.run(ctx, "project", "item-edit", "--id", itemID, "--field-id", fieldID, "--project-id", view.ID, "--single-select-option-id", optionID); err != nil {
@@ -2045,7 +2002,7 @@ var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\
 
 func bugReportURL(repo string, issue Issue, args []string, output string) (string, error) {
 	target, err := parseTarget(repo)
-	if err != nil || target.isProject || target.repo == "" {
+	if err != nil || target.IsProject || target.Repo == "" {
 		if err == nil {
 			err = fmt.Errorf("bug reports require a repository target")
 		}
@@ -2054,8 +2011,8 @@ func bugReportURL(repo string, issue Issue, args []string, output string) (strin
 	values := url.Values{}
 	values.Set("template", "bug_report.md")
 	values.Set("title", fmt.Sprintf("Agent failed while handling issue #%d", issue.Number))
-	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n%s\n", target.repo, issue.Number, strings.Join(args, " "), bugReportOutputSection(output)))
-	return "https://github.com/" + target.repo + "/issues/new?" + values.Encode(), nil
+	values.Set("body", fmt.Sprintf("## Context\n\n- Repository: `%s`\n- Issue: #%d\n- Command: `%s`\n\n## Agent output\n\n%s\n", target.Repo, issue.Number, strings.Join(args, " "), bugReportOutputSection(output)))
+	return "https://github.com/" + target.Repo + "/issues/new?" + values.Encode(), nil
 }
 
 // bugReportOutputSection renders the captured agent output as a fenced block,
@@ -2071,7 +2028,4 @@ func bugReportOutputSection(output string) string {
 	}
 	return prefix + "```\n" + output + "\n```"
 }
-func validRepo(repo string) bool {
-	parts := strings.Split(repo, "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] != "" && !strings.ContainsAny(repo, " \t\r\n")
-}
+func validRepo(repo string) bool { return core.ValidRepo(repo) }

@@ -78,11 +78,9 @@ type fakeCommentClient struct {
 	mu       sync.Mutex
 	comments map[string][]Comment
 	posts    int
-	// lists counts the reads that reached this client, which is how the
-	// browser-mode comment reader's tests tell a page read from a fallback.
-	lists   int
-	postErr error
-	listErr error
+	lists    int
+	postErr  error
+	listErr  error
 }
 
 func newFakeCommentClient() *fakeCommentClient {

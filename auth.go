@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/lsegal/glorp/browser"
 )
 
 const (
@@ -43,15 +45,15 @@ const githubLoginJS = `(() => {
 // authSession is a browser opened on glorp's profile, the page to drive it
 // through, and the closer that stops the process again.
 type authSession struct {
-	page  browserPage
+	page  browser.Page
 	close func()
 }
 
 // openAuthSession launches a browser on the configured profile and opens the
 // tab the auth flow drives. It is a variable so tests can exercise the flow
 // without a browser installed and without opening a window.
-var openAuthSession = func(ctx context.Context, config browserConfig) (*authSession, error) {
-	browser, err := startBrowser(ctx, config)
+var openAuthSession = func(ctx context.Context, config browser.Config) (*authSession, error) {
+	browser, err := browser.Start(ctx, config)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +67,7 @@ var openAuthSession = func(ctx context.Context, config browserConfig) (*authSess
 
 // readGitHubLogin reports the login the current page is rendered for, or an
 // empty string when the profile is signed out.
-func readGitHubLogin(page browserPage) (string, error) {
+func readGitHubLogin(page browser.Page) (string, error) {
 	var login string
 	if err := page.Eval(githubLoginJS, &login); err != nil {
 		return "", fmt.Errorf("read GitHub sign-in state: %w", err)
@@ -75,7 +77,7 @@ func readGitHubLogin(page browserPage) (string, error) {
 
 // visitGitHubLogin navigates to a GitHub URL and reads the sign-in state off
 // the page it lands on.
-func visitGitHubLogin(page browserPage, url string) (string, error) {
+func visitGitHubLogin(page browser.Page, url string) (string, error) {
 	if err := page.Navigate(url); err != nil {
 		return "", fmt.Errorf("open %s: %w", url, err)
 	}
@@ -85,7 +87,7 @@ func visitGitHubLogin(page browserPage, url string) (string, error) {
 // describeAuthProfile names the profile directory being signed in, so the user
 // can tell which profile a status line is about when -browser-profile is used.
 func describeAuthProfile(override string) string {
-	dir, err := browserProfileDir(override)
+	dir, err := browser.ProfileDir(override)
 	if err != nil {
 		return "glorp's browser profile"
 	}
@@ -95,7 +97,7 @@ func describeAuthProfile(override string) string {
 // authStatus reports whether the configured profile is signed in to GitHub. It
 // reads the state headlessly: answering the question must not put a window on
 // the user's screen.
-func authStatus(ctx context.Context, config browserConfig, out io.Writer) (bool, error) {
+func authStatus(ctx context.Context, config browser.Config, out io.Writer) (bool, error) {
 	config.Headed = false
 	session, err := openAuthSession(ctx, config)
 	if err != nil {
@@ -119,7 +121,7 @@ func authStatus(ctx context.Context, config browserConfig, out io.Writer) (bool,
 // process per --user-data-dir, so this cannot run while `glorp watch -browser`
 // is driving the same profile; that is why the command exists as the manual,
 // documented path rather than something watch does on the side.
-func authLogin(ctx context.Context, config browserConfig, out io.Writer, timeout time.Duration) (string, error) {
+func authLogin(ctx context.Context, config browser.Config, out io.Writer, timeout time.Duration) (string, error) {
 	if err := headedEnvironmentCheck(); err != nil {
 		return "", err
 	}
@@ -142,7 +144,7 @@ func authLogin(ctx context.Context, config browserConfig, out io.Writer, timeout
 
 // waitForGitHubLogin re-reads the open window until it reports a signed-in
 // session or the deadline passes.
-func waitForGitHubLogin(ctx context.Context, page browserPage, timeout time.Duration) (string, error) {
+func waitForGitHubLogin(ctx context.Context, page browser.Page, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ticker := time.NewTicker(authPollInterval)
@@ -217,7 +219,7 @@ func runAuthCommand(args []string) int {
 		flags.Usage()
 		return 2
 	}
-	config := browserConfig{
+	config := browser.Config{
 		Binary:  flagValue[string](flags, "browser-binary"),
 		Profile: flagValue[string](flags, "browser-profile"),
 	}
@@ -241,4 +243,15 @@ func runAuthCommand(args []string) int {
 	}
 	fmt.Fprintf(os.Stdout, "Signed in to GitHub as %s.\n", login)
 	return 0
+}
+
+// authSignIn is the headed login flow browser mode's sign-in recovery hands a
+// signed-out profile to: the same one `glorp auth` runs, so a poll that hit a
+// signed-out page opens the window the user would have opened themselves.
+func authSignIn() browser.SignIn {
+	return browser.SignIn{
+		Login:   authLogin,
+		Headed:  headedEnvironmentCheck,
+		Timeout: authLoginTimeout,
+	}
 }

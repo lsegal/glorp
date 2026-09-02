@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -400,28 +401,7 @@ func renderScrollbar(view viewport.Model) string {
 // dropped so short intervals stay as short as they read (`20s`, not `0h0m20s`),
 // and the web dashboard's formatInterval in web/src/dashboard.js mirrors this
 // exactly; the two are covered by the same table of cases on each side.
-func formatInterval(d time.Duration) string {
-	d = d.Round(time.Millisecond)
-	if d <= 0 {
-		return "0s"
-	}
-	if d < time.Second {
-		return strconv.FormatInt(int64(d/time.Millisecond), 10) + "ms"
-	}
-	var text strings.Builder
-	if hours := d / time.Hour; hours > 0 {
-		fmt.Fprintf(&text, "%dh", hours)
-		d -= hours * time.Hour
-	}
-	if minutes := d / time.Minute; minutes > 0 {
-		fmt.Fprintf(&text, "%dm", minutes)
-		d -= minutes * time.Minute
-	}
-	if d > 0 {
-		text.WriteString(strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s")
-	}
-	return text.String()
-}
+func formatInterval(d time.Duration) string { return core.FormatInterval(d) }
 
 // deliveryText describes how the run is picking work up, and when it last
 // checked GitHub. The last-checked time is the only sign a quiet poll loop is

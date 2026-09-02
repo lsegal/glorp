@@ -228,21 +228,21 @@ func (r *webhookReconciler) reconcile(ctx context.Context) {
 // existing issue onto the board or moving a card between columns, still
 // surface through periodic synchronization.
 func (g GHCLI) webhookSpecs(ctx context.Context, target target) ([]webhookSpec, error) {
-	if target.isDiscussion {
-		return []webhookSpec{discussionWebhookSpec(target.repo)}, nil
+	if target.IsDiscussion {
+		return []webhookSpec{discussionWebhookSpec(target.Repo)}, nil
 	}
-	if !target.isProject {
-		return []webhookSpec{repositoryWebhookSpec(target.repo)}, nil
+	if !target.IsProject {
+		return []webhookSpec{repositoryWebhookSpec(target.Repo)}, nil
 	}
 	ownerType, err := g.projectOwnerType(ctx, target)
 	if err != nil {
 		return nil, err
 	}
-	target.projectOwnerType = ownerType
+	target.ProjectOwnerType = ownerType
 	if ownerType == "orgs" {
 		specs := []webhookSpec{{
-			apiPath: "orgs/" + target.owner + "/hooks",
-			name:    "organization project " + target.owner,
+			apiPath: "orgs/" + target.Owner + "/hooks",
+			name:    "organization project " + target.Owner,
 			events:  []string{"projects_v2_item"},
 		}}
 		repos, err := g.projectRepositories(ctx, target)
@@ -263,7 +263,7 @@ func (g GHCLI) webhookSpecs(ctx context.Context, target target) ([]webhookSpec, 
 		return nil, err
 	}
 	if len(repos) == 0 {
-		return nil, fmt.Errorf("%w: GitHub only provides push events for organization-owned Projects and the project owned by %s has no issues to watch; using periodic synchronization", errProjectWebhookUnavailable, target.owner)
+		return nil, fmt.Errorf("%w: GitHub only provides push events for organization-owned Projects and the project owned by %s has no issues to watch; using periodic synchronization", errProjectWebhookUnavailable, target.Owner)
 	}
 	specs := make([]webhookSpec, 0, len(repos))
 	for _, repo := range repos {
@@ -307,18 +307,18 @@ func discussionWebhookSpec(repo string) webhookSpec {
 }
 
 func (g GHCLI) projectOwnerType(ctx context.Context, target target) (string, error) {
-	if target.projectOwnerType != "" {
-		return target.projectOwnerType, nil
+	if target.ProjectOwnerType != "" {
+		return target.ProjectOwnerType, nil
 	}
-	output, err := g.api(ctx, "users/"+target.owner, "")
+	output, err := g.api(ctx, "users/"+target.Owner, "")
 	if err != nil {
-		return "", fmt.Errorf("identify project owner %s: %w", target.owner, err)
+		return "", fmt.Errorf("identify project owner %s: %w", target.Owner, err)
 	}
 	var owner struct {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(output, &owner); err != nil {
-		return "", fmt.Errorf("decode project owner %s: %w", target.owner, err)
+		return "", fmt.Errorf("decode project owner %s: %w", target.Owner, err)
 	}
 	if owner.Type == "Organization" {
 		return "orgs", nil
@@ -332,7 +332,7 @@ func (g GHCLI) projectOwnerType(ctx context.Context, target target) (string, err
 func (g GHCLI) projectRepositories(ctx context.Context, target target) ([]string, error) {
 	items, err := g.listProjectItems(ctx, target, "", true)
 	if err != nil {
-		return nil, fmt.Errorf("list repositories for project owned by %s: %w", target.owner, err)
+		return nil, fmt.Errorf("list repositories for project owned by %s: %w", target.Owner, err)
 	}
 	seen := make(map[string]bool, len(items))
 	repos := make([]string, 0, len(items))

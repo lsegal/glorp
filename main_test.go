@@ -209,16 +209,16 @@ func TestParseTargetURLs(t *testing.T) {
 		"https://github.com/lsegal/glorp/",
 	} {
 		got, err := parseTarget(input)
-		if err != nil || got.repo != "lsegal/glorp" || got.isProject {
+		if err != nil || got.Repo != "lsegal/glorp" || got.IsProject {
 			t.Fatalf("parseTarget(%q) = %#v, %v", input, got, err)
 		}
 	}
 	got, err := parseTarget("https://github.com/users/lsegal/projects/3")
-	if err != nil || !got.isProject || got.owner != "lsegal" || got.projectID != "3" || got.projectOwnerType != "users" {
+	if err != nil || !got.IsProject || got.Owner != "lsegal" || got.ProjectID != "3" || got.ProjectOwnerType != "users" {
 		t.Fatalf("project target = %#v, %v", got, err)
 	}
 	got, err = parseTarget("https://github.com/orgs/example/projects/4")
-	if err != nil || !got.isProject || got.owner != "example" || got.projectID != "4" || got.projectOwnerType != "orgs" {
+	if err != nil || !got.IsProject || got.Owner != "example" || got.ProjectID != "4" || got.ProjectOwnerType != "orgs" {
 		t.Fatalf("organization project target = %#v, %v", got, err)
 	}
 	for _, input := range []string{
@@ -226,12 +226,12 @@ func TestParseTargetURLs(t *testing.T) {
 		"https://github.com/lsegal/glorp/discussions/",
 	} {
 		got, err := parseTarget(input)
-		if err != nil || !got.isDiscussion || got.repo != "lsegal/glorp" || got.isProject || got.discussionCategory != "" {
+		if err != nil || !got.IsDiscussion || got.Repo != "lsegal/glorp" || got.IsProject || got.DiscussionCategory != "" {
 			t.Fatalf("parseTarget(%q) = %#v, %v", input, got, err)
 		}
 	}
 	got, err = parseTarget("https://github.com/lsegal/glorp/discussions/categories/q-a")
-	if err != nil || !got.isDiscussion || got.repo != "lsegal/glorp" || got.discussionCategory != "q-a" {
+	if err != nil || !got.IsDiscussion || got.Repo != "lsegal/glorp" || got.DiscussionCategory != "q-a" {
 		t.Fatalf("discussion category target = %#v, %v", got, err)
 	}
 	if _, err := parseTarget("https://github.com/lsegal/glorp/discussions/categories/"); err == nil {
@@ -409,7 +409,7 @@ func TestIssueRepositoryNormalizesRepositoryURL(t *testing.T) {
 }
 
 func TestProjectListArgs(t *testing.T) {
-	got := projectListArgs(target{owner: "lsegal", projectID: "3", isProject: true}, "label:other status=closed", false)
+	got := projectListArgs(target{Owner: "lsegal", ProjectID: "3", IsProject: true}, "label:other status=closed", false)
 	want := []string{"project", "item-list", "3", "--owner", "lsegal", "--format", "json", "--limit", "1000", "--query", "is:issue is:open label:other status=closed"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
@@ -417,7 +417,7 @@ func TestProjectListArgs(t *testing.T) {
 }
 
 func TestProjectListArgsOmitsDefaultFilter(t *testing.T) {
-	got := projectListArgs(target{owner: "lsegal", projectID: "3", isProject: true}, defaultIssueFilter, false)
+	got := projectListArgs(target{Owner: "lsegal", ProjectID: "3", IsProject: true}, defaultIssueFilter, false)
 	want := []string{"project", "item-list", "3", "--owner", "lsegal", "--format", "json", "--limit", "1000", "--query", "is:issue is:open"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
@@ -510,7 +510,7 @@ func TestSetIssueStatusProjectItemLookupSurfacesFailureDetail(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "some other project error") {
 		t.Fatalf("SetIssueStatus() error = %v, want it to include the gh output detail", err)
 	}
-	want := projectListArgs(target{owner: "owner", projectID: "3", isProject: true}, "", true)
+	want := projectListArgs(target{Owner: "owner", ProjectID: "3", IsProject: true}, "", true)
 	if len(calls) != 1 || !reflect.DeepEqual(calls[0], want) {
 		t.Fatalf("gh calls = %#v, want single call %#v", calls, want)
 	}

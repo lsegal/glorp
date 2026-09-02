@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 )
 
 // Identity uniquely names one running glorp instance. It lives only in
@@ -23,30 +25,14 @@ func newIdentity() (Identity, error) {
 	return Identity(strings.ToUpper(hex.EncodeToString(b))), nil
 }
 
-// Comment is a single issue or pull request comment relevant to the
-// cooperative handoff protocol.
-type Comment struct {
-	Body      string
-	Author    string
-	CreatedAt time.Time
-}
-
-// CommentPoster posts a comment to an issue or pull request.
-type CommentPoster interface {
-	PostComment(ctx context.Context, repo string, number int, body string) error
-}
-
-// CommentLister lists the comments on an issue or pull request.
-type CommentLister interface {
-	ListComments(ctx context.Context, repo string, number int) ([]Comment, error)
-}
-
-// CommentClient is the combined capability needed to run the handoff
-// handshake described in issue #214.
-type CommentClient interface {
-	CommentPoster
-	CommentLister
-}
+// The comment types live in package core so the browser driver can implement
+// CommentClient without importing the root package.
+type (
+	Comment       = core.Comment
+	CommentPoster = core.CommentPoster
+	CommentLister = core.CommentLister
+	CommentClient = core.CommentClient
+)
 
 // ownershipWaitDuration is the minimum grace period a reaping instance must
 // wait after asking "does anyone have this?" before claiming abandoned work.
