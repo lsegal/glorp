@@ -26,6 +26,8 @@ import (
 
 	"github.com/lsegal/glorp/browser"
 	"github.com/lsegal/glorp/core"
+	"github.com/lsegal/glorp/ngrok"
+	"github.com/lsegal/glorp/process"
 	"github.com/lsegal/glorp/webui"
 
 	"github.com/mattn/go-isatty"
@@ -154,11 +156,11 @@ func runWatch(args []string) int {
 	if agents.values[0].Name == "claude" {
 		binary = claudeBinary
 	}
-	ctx, stop := shutdownContext()
+	ctx, stop := process.ShutdownContext()
 	defer stop()
 	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
 	// cleanup did not run before the daemon returns (issue #260).
-	defer reapChildProcesses()
+	defer process.ReapAll()
 	var driver *browser.Browser
 	if browserOptions.Enabled {
 		// One browser for the whole run: every target gets a tab on it rather
@@ -215,7 +217,7 @@ func runWatch(args []string) int {
 		}
 		defer removeRecord()
 		webServer = &http.Server{Handler: webUI}
-		stopFrontend, err := webui.StartFrontend(ctx, output, childProcessSupervisor{})
+		stopFrontend, err := webui.StartFrontend(ctx, output, process.Supervisor{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "start web UI frontend: %v\n", err)
 			return 1
@@ -278,13 +280,13 @@ func runWatch(args []string) int {
 		fmt.Fprintf(output, "webhook server listening on %s%s\n", listenAddr, webhookPath)
 		ngrokAddr := ngrokTargetAddr(listenAddr)
 		fmt.Fprintf(output, "starting ngrok tunnel for %s\n", ngrokAddr)
-		tunnel, err := startNgrok(ctx, ngrokBinary, ngrokAddr, output)
+		tunnel, err := ngrok.Start(ctx, ngrokBinary, ngrokAddr, output)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		defer tunnel.Close()
-		endpoint, err := webhookURL(tunnel.URL(), webhookPath)
+		endpoint, err := ngrok.WebhookURL(tunnel.URL(), webhookPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -457,7 +459,7 @@ func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 		output, err := g.runCommand(runCtx, args...)
 		return output, g.timedOut(ctx, runCtx, args, err)
 	}
-	output, err := combinedOutputChildProcess(exec.CommandContext(runCtx, g.Binary, args...))
+	output, err := process.CombinedOutput(exec.CommandContext(runCtx, g.Binary, args...))
 	return output, g.timedOut(ctx, runCtx, args, err)
 }
 
@@ -938,7 +940,7 @@ func expandTargetShorthand(value string, originRepo func() (string, bool)) (stri
 // originRemoteTarget returns the OWNER/REPO for the current directory's
 // "origin" git remote, when it points to a GitHub repository.
 func originRemoteTarget() (string, bool) {
-	output, err := outputChildProcess(exec.Command("git", "remote", "get-url", "origin"))
+	output, err := process.Output(exec.Command("git", "remote", "get-url", "origin"))
 	if err != nil {
 		return "", false
 	}
@@ -1931,7 +1933,7 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		agentOutput = detector
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
-	runErr := runChildProcess(cmd)
+	runErr := process.Run(cmd)
 	if claudeOutput != nil {
 		if err := claudeOutput.Flush(); runErr == nil && err != nil {
 			runErr = err

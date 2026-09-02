@@ -1,28 +1,30 @@
 //go:build !windows
 
-package main
+package ngrok
 
 import (
 	"os"
 	"os/exec"
 	"testing"
 	"time"
+
+	"github.com/lsegal/glorp/process"
 )
 
 // The sweep is only as good as the process list it reads, so exercise the real
 // platform lister and terminator against a process this test owns.
 func TestPlatformProcessSweepFindsAndStopsARealProcess(t *testing.T) {
 	cmd := exec.Command("sleep", "60")
-	if err := startChildProcess(cmd); err != nil {
+	if err := process.Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
 	reaped := make(chan struct{})
 	go func() {
 		defer close(reaped)
-		_ = waitChildProcess(cmd)
+		_ = process.Wait(cmd)
 	}()
 	t.Cleanup(func() {
-		_ = signalProcessTree(cmd, killSignal)
+		_ = cmd.Process.Kill()
 		<-reaped
 	})
 	pid := cmd.Process.Pid
@@ -32,11 +34,11 @@ func TestPlatformProcessSweepFindsAndStopsARealProcess(t *testing.T) {
 		t.Fatalf("list running processes: %v", err)
 	}
 	found := false
-	for _, process := range processes {
-		if process.pid == pid {
+	for _, entry := range processes {
+		if entry.pid == pid {
 			found = true
-			if process.ppid != os.Getpid() {
-				t.Fatalf("process %d reported parent %d, want %d", pid, process.ppid, os.Getpid())
+			if entry.ppid != os.Getpid() {
+				t.Fatalf("process %d reported parent %d, want %d", pid, entry.ppid, os.Getpid())
 			}
 		}
 	}

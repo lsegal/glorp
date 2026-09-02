@@ -1,4 +1,4 @@
-package main
+package process
 
 import (
 	"errors"
@@ -32,15 +32,15 @@ func TestOwnedChildJoinsJobAndRuns(t *testing.T) {
 		t.Fatalf("owned job object: %v", err)
 	}
 	cmd := exec.Command("cmd", "/c", "exit 7")
-	if err := startChildProcess(cmd); err != nil {
+	if err := Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
-	t.Cleanup(func() { _ = stopChildProcess(cmd) })
+	t.Cleanup(func() { _ = Stop(cmd) })
 	if !processInJob(t, uint32(cmd.Process.Pid), job) {
 		t.Fatalf("child %d is not a member of glorp's job object", cmd.Process.Pid)
 	}
 	var exit *exec.ExitError
-	if err := waitChildProcess(cmd); !errors.As(err, &exit) || exit.ExitCode() != 7 {
+	if err := Wait(cmd); !errors.As(err, &exit) || exit.ExitCode() != 7 {
 		t.Fatalf("resumed child did not run to completion: %v", err)
 	}
 }
@@ -49,7 +49,7 @@ func TestOwnedChildJoinsJobAndRuns(t *testing.T) {
 // child that will never run, so the lookup has to fail when there is no thread.
 func TestResumeReportsAProcessWithNoThread(t *testing.T) {
 	cmd := exec.Command("cmd", "/c", "exit 0")
-	if err := runChildProcess(cmd); err != nil {
+	if err := Run(cmd); err != nil {
 		t.Fatalf("run child process: %v", err)
 	}
 	if err := resumePrimaryThread(uint32(cmd.Process.Pid)); err == nil {

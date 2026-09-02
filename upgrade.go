@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/lsegal/glorp/process"
 )
 
 // defaultUpgradeRepo is the repository whose published installers upgrade glorp.
@@ -85,7 +87,7 @@ func runUpgrade(ctx context.Context, out io.Writer, currentVersion string, lates
 	cmd := newCommand(ctx)
 	fmt.Fprintf(out, "Upgrading glorp with: %s\n", strings.Join(cmd.Args, " "))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, out, out
-	if err := runChildProcess(cmd); err != nil {
+	if err := process.Run(cmd); err != nil {
 		return fmt.Errorf("upgrade glorp: %w", err)
 	}
 	fmt.Fprintln(out, "glorp upgraded.")

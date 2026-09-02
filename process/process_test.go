@@ -1,6 +1,6 @@
 //go:build !windows
 
-package main
+package process
 
 import (
 	"os"
@@ -19,10 +19,10 @@ func startTreeCommand(t *testing.T) (*exec.Cmd, int) {
 	t.Helper()
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	cmd := exec.Command("sh", "-c", "sleep 60 & echo $! > "+pidFile+"; sleep 60")
-	if err := startChildProcess(cmd); err != nil {
+	if err := Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
-	t.Cleanup(func() { _ = stopChildProcess(cmd) })
+	t.Cleanup(func() { _ = Stop(cmd) })
 	var pid int
 	waitFor(t, time.Second, func() bool {
 		data, err := os.ReadFile(pidFile)
@@ -62,7 +62,7 @@ func processAlive(pid int) bool {
 
 func TestStopChildProcessTerminatesTheWholeTree(t *testing.T) {
 	cmd, grandchild := startTreeCommand(t)
-	if err := stopChildProcess(cmd); err != nil {
+	if err := Stop(cmd); err != nil {
 		t.Fatalf("stop child process: %v", err)
 	}
 	if !waitFor(t, 2*time.Second, func() bool { return !processAlive(grandchild) }) {
@@ -75,11 +75,11 @@ func TestStopChildProcessTerminatesTheWholeTree(t *testing.T) {
 
 func TestReapChildProcessesTerminatesTrackedProcesses(t *testing.T) {
 	cmd, grandchild := startTreeCommand(t)
-	reapChildProcesses()
+	ReapAll()
 	if !waitFor(t, 2*time.Second, func() bool { return !processAlive(grandchild) }) {
 		t.Fatalf("grandchild %d survived reaping", grandchild)
 	}
-	if err := waitChildProcess(cmd); err == nil {
+	if err := Wait(cmd); err == nil {
 		t.Fatalf("child exited normally, want termination by signal")
 	}
 	if isTracked(cmd) {
@@ -89,10 +89,10 @@ func TestReapChildProcessesTerminatesTrackedProcesses(t *testing.T) {
 
 func TestWaitChildProcessStopsTracking(t *testing.T) {
 	cmd := exec.Command("sh", "-c", "exit 0")
-	if err := startChildProcess(cmd); err != nil {
+	if err := Start(cmd); err != nil {
 		t.Fatalf("start child process: %v", err)
 	}
-	if err := waitChildProcess(cmd); err != nil {
+	if err := Wait(cmd); err != nil {
 		t.Fatalf("wait child process: %v", err)
 	}
 	if isTracked(cmd) {
@@ -142,7 +142,7 @@ func TestIsolateProcessTreeIsolatesHeadlessChild(t *testing.T) {
 
 func TestOutputChildProcessReturnsOutput(t *testing.T) {
 	cmd := exec.Command("sh", "-c", "printf hello")
-	output, err := outputChildProcess(cmd)
+	output, err := Output(cmd)
 	if err != nil {
 		t.Fatalf("run child process: %v", err)
 	}
@@ -151,26 +151,5 @@ func TestOutputChildProcessReturnsOutput(t *testing.T) {
 	}
 	if isTracked(cmd) {
 		t.Fatalf("finished process is still tracked")
-	}
-}
-
-func TestNgrokTunnelCloseTerminatesTheTunnelTree(t *testing.T) {
-	cmd, grandchild := startTreeCommand(t)
-	tunnel := &NgrokTunnel{cmd: cmd}
-	if err := tunnel.Close(); err != nil {
-		t.Fatalf("close tunnel: %v", err)
-	}
-	if !waitFor(t, 2*time.Second, func() bool { return !processAlive(grandchild) }) {
-		t.Fatalf("ngrok grandchild %d survived Close", grandchild)
-	}
-}
-
-func TestNgrokTunnelCloseWithoutProcess(t *testing.T) {
-	var tunnel *NgrokTunnel
-	if err := tunnel.Close(); err != nil {
-		t.Fatalf("close nil tunnel: %v", err)
-	}
-	if err := (&NgrokTunnel{}).Close(); err != nil {
-		t.Fatalf("close unstarted tunnel: %v", err)
 	}
 }

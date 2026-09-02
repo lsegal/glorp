@@ -1,4 +1,4 @@
-package main
+package ngrok
 
 import (
 	"bytes"
@@ -11,21 +11,23 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lsegal/glorp/process"
 )
 
-// NgrokTunnel owns the ngrok process and the public URL it assigned.
-type NgrokTunnel struct {
+// Tunnel owns the ngrok process and the public URL it assigned.
+type Tunnel struct {
 	cmd       *exec.Cmd
 	publicURL string
 }
 
-func (t *NgrokTunnel) URL() string { return t.publicURL }
+func (t *Tunnel) URL() string { return t.publicURL }
 
-func (t *NgrokTunnel) Close() error {
+func (t *Tunnel) Close() error {
 	if t == nil || t.cmd == nil {
 		return nil
 	}
-	return stopChildProcess(t.cmd)
+	return process.Stop(t.cmd)
 }
 
 // ngrokLogRecord is the subset of ngrok's JSON log records glorp reads.
@@ -145,7 +147,7 @@ func ngrokLogMessage(record ngrokLogRecord) string {
 	return message
 }
 
-func startNgrok(ctx context.Context, binary, listenAddr string, out io.Writer) (*NgrokTunnel, error) {
+func Start(ctx context.Context, binary, listenAddr string, out io.Writer) (*Tunnel, error) {
 	// Agents abandoned by an earlier run hold the local ngrok API port and one
 	// of the account's simultaneous agent sessions, so clear them out before
 	// asking for a tunnel of glorp's own (issue #364).
@@ -153,10 +155,10 @@ func startNgrok(ctx context.Context, binary, listenAddr string, out io.Writer) (
 	watcher := &ngrokLogWatcher{out: out}
 	cmd := exec.CommandContext(ctx, binary, ngrokArgs(listenAddr)...)
 	cmd.Stdout, cmd.Stderr = watcher, watcher
-	if err := startChildProcess(cmd); err != nil {
+	if err := process.Start(cmd); err != nil {
 		return nil, fmt.Errorf("start ngrok: %w", err)
 	}
-	tunnel := &NgrokTunnel{cmd: cmd}
+	tunnel := &Tunnel{cmd: cmd}
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -193,7 +195,7 @@ func ngrokArgs(listenAddr string) []string {
 	return []string{"http", "--log=stdout", "--log-format=json", "--log-level=info", listenAddr}
 }
 
-func webhookURL(publicURL, webhookPath string) (string, error) {
+func WebhookURL(publicURL, webhookPath string) (string, error) {
 	u, err := url.Parse(strings.TrimRight(publicURL, "/"))
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("invalid ngrok public URL %q", publicURL)
@@ -208,7 +210,7 @@ func webhookURL(publicURL, webhookPath string) (string, error) {
 	return u.String(), nil
 }
 
-func ngrokURL(value string) bool {
+func IsURL(value string) bool {
 	u, err := url.Parse(value)
 	return err == nil && strings.Contains(strings.ToLower(u.Hostname()), "ngrok")
 }

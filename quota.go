@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lsegal/glorp/process"
 )
 
 type codexPrimaryRateLimit struct {
@@ -56,10 +58,10 @@ func readCodexQuota(ctx context.Context, binary string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := startChildProcess(cmd); err != nil {
+	if err := process.Start(cmd); err != nil {
 		return "", err
 	}
-	defer func() { _ = stopChildProcess(cmd) }()
+	defer func() { _ = process.Stop(cmd) }()
 	for _, request := range codexQuotaRequests() {
 		if _, err := fmt.Fprintln(stdin, request); err != nil {
 			return "", err
@@ -135,7 +137,7 @@ func (r *claudeQuotaReader) Read(ctx context.Context) string {
 func readClaudeQuota(ctx context.Context, binary string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, "--print", "--output-format=json")
 	cmd.Stdin = strings.NewReader(claudeQuotaRequest())
-	out, err := outputChildProcess(cmd)
+	out, err := process.Output(cmd)
 	if err != nil {
 		return "", err
 	}
