@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.30 - 2026-09-02
+
 - Confirm the issue is actually closed before an agent's run counts as finished, instead of taking the agent's own exit for the work being done. An agent that timed out, stopped early, or reported success without ever merging returned exactly as one that merged its pull request did, so the run was recorded as completed, the job showed a checkmark in the UI, the project card was moved to `Done`, and the ticket it left open was never picked up again -- the watch had already marked it handled. A run that ends without an error now asks GitHub for the issue's state before it is completed: closed, and nothing changes; still open, and the work is kept alive instead of finished -- a keepalive line says so in the viewport and the same session is resumed with what is still missing (check the issue and its pull request, finish the CI, review, and merge, and do not stop until it is closed), or the agent is restarted from scratch when its session cannot be reopened. GitHub is re-read once after the closure interval before a run is treated as unfinished, so a merge it has not finished processing is not mistaken for abandoned work, and a check that fails to answer at all completes the run as before rather than trapping it in a loop.
 
 ## v1.2.29 - 2026-09-02
