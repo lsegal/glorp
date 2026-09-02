@@ -958,6 +958,47 @@ func newCommentsPrompt(issue Issue, added int) string {
 	return fmt.Sprintf("%d new %s added to issue #%d while you were working on it.\n\nReread the issue's conversation from GitHub, treat the new comments as part of the request, and take them into account before continuing.", added, noun, issue.Number)
 }
 
+// unclosedWorkPrompt asks an agent whose run ended with the issue still open to
+// carry the work the rest of the way (issue #475). Finishing a prompt is not
+// finishing the ticket: an agent that timed out, stopped early, or reported
+// success without merging exits exactly as one that merged does, so the
+// resumed session is told what is still missing rather than a bare "continue".
+func unclosedWorkPrompt(issue Issue) string {
+	return fmt.Sprintf("Your run for issue #%d ended, but GitHub still reports the issue as open, so the work is not finished.\n\nPick the work back up where it stopped: check the issue and its pull request on GitHub, finish whatever remains (CI failures, review, merge), and do not stop until the issue is closed. If it genuinely cannot be closed, say exactly what is blocking it.", issue.Number)
+}
+
+// confirmIssueClosed asks GitHub whether the issue an agent just finished is
+// actually closed. It reports whether the issue is closed and whether GitHub
+// answered at all, so a check that could not be made is never mistaken for an
+// issue that is still open. A merge GitHub has not finished processing is
+// allowed for by re-reading once after the closure interval before the work is
+// treated as unfinished.
+func (w *Glorp) confirmIssueClosed(ctx context.Context, checker WorkClosureChecker, issue Issue) (closed, answered bool) {
+	repo := issueRepository(issue.Target, issue)
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return false, false
+			case <-time.After(w.activeWorkClosureInterval()):
+			}
+		}
+		state, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
+		if err != nil {
+			if ctx.Err() != nil {
+				return false, false
+			}
+			w.logf("issue #%d completion check failed: %v", issue.Number, err)
+			continue
+		}
+		answered = true
+		if strings.EqualFold(state.IssueState, "closed") {
+			return true, true
+		}
+	}
+	return false, answered
+}
+
 func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) string {
 	if strings.EqualFold(current.IssueState, "closed") && !strings.EqualFold(previous.IssueState, "closed") {
 		for _, pullRequest := range current.PullRequests {
@@ -1638,6 +1679,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// work receives it rather than the change waiting out the run
 				// (issue #469).
 				alreadyClosed := false
+				keepalives := 0
 				for {
 					runCtx, cancelRun := context.WithCancelCause(ctx)
 					workMu.Lock()
@@ -1692,7 +1734,32 @@ func (w *Glorp) Run(ctx context.Context) error {
 					workMu.Unlock()
 					update, updated := workUpdateFor(cause)
 					if !updated || ctx.Err() != nil {
-						break
+						if runErr != nil || ctx.Err() != nil || closureChecker == nil {
+							break
+						}
+						// The agent finishing its prompt is not the work being
+						// done (issue #475): one that timed out or stopped
+						// early returns exactly as one that merged its pull
+						// request does. The run only counts as complete once
+						// GitHub says the issue is closed; while it is still
+						// open the work is kept alive and continued instead of
+						// being reported as finished.
+						closed, answered := w.confirmIssueClosed(ctx, closureChecker, i)
+						if closed || !answered || ctx.Err() != nil {
+							break
+						}
+						keepalives++
+						if state.SessionID == "" || state.Agent == "" {
+							w.logf("issue #%d keepalive: the agent finished but the issue is still open, and its session cannot be resumed; restarting the agent (attempt %d)", i.Number, keepalives)
+							agentSession.Resume = false
+							agentSession.Update = ""
+						} else {
+							w.logf("issue #%d keepalive: the agent finished but the issue is still open; continuing session %s (attempt %d)", i.Number, state.SessionID, keepalives)
+							agentSession = AgentSession{ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory, Resume: true, Update: unclosedWorkPrompt(i)}
+						}
+						runErr = nil
+						publish()
+						continue
 					}
 					// The session identity is read back from the work state so
 					// a run whose agent reported its own session ID after
