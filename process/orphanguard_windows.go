@@ -69,7 +69,7 @@ func guardOrphanedProcess(cmd *exec.Cmd) {
 // object and then lets it run. It reports an error only when the child cannot
 // be resumed, which is the one failure that would leave it hung forever;
 // failing to join the job costs the kill-on-close guarantee for that child but
-// leaves it working, and the userspace cleanup paths in process.go still cover
+// leaves it working, and the userspace cleanup paths in this package still cover
 // every exit glorp can observe.
 func adoptOrphanedProcess(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
