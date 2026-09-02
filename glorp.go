@@ -798,11 +798,14 @@ type issueWatch struct {
 	// since is when the run started; only comments posted after it are news
 	// to the agent.
 	since time.Time
-	// relay reports whether this run can be interrupted and resumed in place.
-	// A run with no resumable session identity keeps the historical
-	// behaviour: a closure stops it outright rather than asking it to clean
-	// up in a session that cannot be reopened.
-	relay bool
+	// resumable reports whether this run can be interrupted and resumed in
+	// place. It is a function rather than a flag because an agent that names
+	// its own session only reports it after launch, so a run can become
+	// resumable partway through. A run that is not resumable keeps the
+	// historical behaviour: a closure stops it outright rather than asking it
+	// to clean up in a session that cannot be reopened, and an edit or a
+	// comment leaves it alone entirely.
+	resumable func() bool
 	// closed reports that the issue was already closed when this run began,
 	// which is true of the cleanup run a closure itself started. Without it
 	// that run would be interrupted by the very closure it was resumed to
@@ -812,6 +815,11 @@ type issueWatch struct {
 	// webhook delivery reaches the running agent as promptly in push mode as
 	// the poll notices it in poll mode.
 	nudge <-chan struct{}
+}
+
+// canRelay reports whether this run can be resumed in place right now.
+func (watch issueWatch) canRelay() bool {
+	return watch.resumable != nil && watch.resumable()
 }
 
 // watchForIssueUpdates polls the issue an agent is working and interrupts the
@@ -831,7 +839,7 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 			w.logf("issue #%d initial closure check failed: %v", issue.Number, err)
 		}
 	}
-	seen := w.commentsSeen(ctx, repo, issue.Number, watch)
+	seen := w.commentsSeen(ctx, repo, issue.Number)
 	close(ready)
 	if reason := closedWorkReason(OriginatingWorkState{}, previous, issue.Number); checker != nil && err == nil && !watch.closed && strings.EqualFold(previous.IssueState, "closed") && reason != "" {
 		cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
@@ -856,7 +864,7 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 				}
 			} else {
 				if reason := closedWorkReason(previous, current, issue.Number); reason != "" {
-					if !watch.relay {
+					if !watch.canRelay() {
 						cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
 						w.logf("issue #%d stopping agent: %s", issue.Number, reason)
 						cancel(cause)
@@ -866,7 +874,7 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 					cancel(&workUpdate{summary: reason, closed: true, instruction: closedWorkCleanupPrompt(issue, reason)})
 					return
 				}
-				if watch.relay && previous.IssueBody != "" && current.IssueBody != previous.IssueBody {
+				if watch.canRelay() && previous.IssueBody != "" && current.IssueBody != previous.IssueBody {
 					w.logf("issue #%d interrupting agent: its description changed; relaying it into the same session", issue.Number)
 					cancel(&workUpdate{summary: fmt.Sprintf("issue #%d description changed", issue.Number), instruction: changedDescriptionPrompt(issue)})
 					return
@@ -874,7 +882,7 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 				previous = current
 			}
 		}
-		if !watch.relay || w.Comments == nil {
+		if w.Comments == nil || !watch.canRelay() {
 			continue
 		}
 		comments, listErr := w.Comments.ListComments(ctx, repo, issue.Number)
@@ -901,9 +909,9 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 
 // commentsSeen snapshots the conversation a run starts from, so only what is
 // posted after it counts as news for that run.
-func (w *Glorp) commentsSeen(ctx context.Context, repo string, number int, watch issueWatch) map[string]bool {
+func (w *Glorp) commentsSeen(ctx context.Context, repo string, number int) map[string]bool {
 	seen := map[string]bool{}
-	if !watch.relay || w.Comments == nil {
+	if w.Comments == nil {
 		return seen
 	}
 	comments, err := w.Comments.ListComments(ctx, repo, number)
@@ -1596,9 +1604,14 @@ func (w *Glorp) Run(ctx context.Context) error {
 					workMu.Lock()
 					cancellations[key] = cancelRun
 					workMu.Unlock()
-					watch := issueWatch{since: time.Now(), relay: agentSession.ID != "" && agentSession.Agent != "", closed: alreadyClosed, nudge: nudge}
+					watch := issueWatch{since: time.Now(), closed: alreadyClosed, nudge: nudge, resumable: func() bool {
+						workMu.Lock()
+						defer workMu.Unlock()
+						state := work[key]
+						return state.SessionID != "" && state.Agent != ""
+					}}
 					var closureReady <-chan struct{}
-					if closureChecker != nil || (watch.relay && w.Comments != nil) {
+					if closureChecker != nil || w.Comments != nil {
 						ready := make(chan struct{})
 						closureReady = ready
 						go w.watchForIssueUpdates(runCtx, closureChecker, i, watch, cancelRun, ready)

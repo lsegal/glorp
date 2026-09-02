@@ -185,7 +185,7 @@ func applyBrowserSources(w *Glorp, browser *Browser, options browserWatchOptions
 	// wraps the source rather than living inside it because both page readers
 	// reach the same conclusion the same way.
 	w.Issues = browserSignInGuard{
-		source:   browserWatchIssues{Repos: repos, Board: board},
+		source:   browserWatchIssues{Repos: repos, Board: board, Work: gh},
 		recovery: newBrowserSignInRecovery(browser, options.config(), w.logf),
 	}
 	w.Projects = board
