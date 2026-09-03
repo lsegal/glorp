@@ -979,3 +979,80 @@ func TestClaimStandingBreaksTimestampTiesBetweenInstances(t *testing.T) {
 		t.Fatalf("claimStanding = %+v, want SELF to hold the ticket it claimed last", standing)
 	}
 }
+
+// A first-time pickup is decided from local records and the project board
+// alone, so before issue #511 an issue another instance had just claimed on
+// the ticket was dispatched as uncontested and worked twice. The claim
+// standing on the ticket is now read before the pickup.
+func TestStandDownForStandingClaimsDropsFreshlyClaimedPickups(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-7 * time.Minute)})
+	comments.inject("o/r", 2, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	pending := []pendingIssue{
+		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}},
+		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}},
+		{issue: Issue{Number: 3, Repository: "o/r", Target: "o/r"}},
+	}
+	seen := map[string]bool{}
+	result := w.standDownForStandingClaims(context.Background(), nil, pending, seen)
+	if len(result) != 2 || result[0].issue.Number != 2 || result[1].issue.Number != 3 {
+		t.Fatalf("result = %+v, want the stale claim (#2) and the unclaimed issue (#3) to survive", result)
+	}
+	if !seen[issueKey(Issue{Number: 1, Repository: "o/r", Target: "o/r"})] {
+		t.Fatalf("the issue stood down for must stay marked as seen so the next poll negotiates for it")
+	}
+	if comments.posts != 0 {
+		t.Fatalf("standing down must not post anything, got %d comment(s)", comments.posts)
+	}
+}
+
+// Standing claims decide first-time pickups only. Work this instance already
+// owns, work already routed to the handshake, and an instruction addressed to
+// this instance by name must all pass through untouched.
+func TestStandDownForStandingClaimsSkipsWorkItDoesNotDecide(t *testing.T) {
+	comments := newFakeCommentClient()
+	for _, number := range []int{1, 2, 3, 4} {
+		comments.inject("o/r", number, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	}
+	comments.inject("o/r", 4, Comment{Body: signComment(continuingClaimBody, "SELF"), CreatedAt: time.Now()})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	pending := []pendingIssue{
+		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, session: AgentSession{Resume: true}},
+		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
+		{issue: Issue{Number: 3, Repository: "o/r", Target: "o/r"}, mentioned: true},
+		{issue: Issue{Number: 4, Repository: "o/r", Target: "o/r"}},
+	}
+	result := w.standDownForStandingClaims(context.Background(), nil, pending, map[string]bool{})
+	if len(result) != 4 {
+		t.Fatalf("result = %+v, want resumed, contested, mentioned, and self-claimed work all kept", result)
+	}
+	if comments.lists != 1 {
+		t.Fatalf("only the first-time pickup should be checked against the ticket, got %d list(s)", comments.lists)
+	}
+}
+
+// An unreachable comment API must not stall dispatch: the candidate is picked
+// up as it would have been before the check existed.
+func TestStandDownForStandingClaimsKeepsCandidatesWhenTheReadFails(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.listErr = errors.New("boom")
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	pending := []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}}}
+	if result := w.standDownForStandingClaims(context.Background(), nil, pending, map[string]bool{}); len(result) != 1 {
+		t.Fatalf("result = %+v, want the candidate kept when its claims cannot be read", result)
+	}
+}
+
+// The claim is read on the pull request continuing an issue's work when one is
+// open, since that is where the handoff protocol posts for such work.
+func TestStandDownForStandingClaimsReadsThePullRequestContinuingTheWork(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 10, Comment{Body: signComment(continuingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	checker := &fakeClosureSource{state: OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 10, State: "open"}}}}
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	pending := []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}}}
+	if result := w.standDownForStandingClaims(context.Background(), checker, pending, map[string]bool{}); len(result) != 0 {
+		t.Fatalf("result = %+v, want the pickup dropped for the claim standing on its open pull request", result)
+	}
+}
