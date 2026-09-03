@@ -111,3 +111,23 @@ func TestWatchFlagValuesParse(t *testing.T) {
 		t.Fatalf("agents = %v, want claude/opus", agents.values)
 	}
 }
+
+func TestWatchRemoteControlDefaultsOn(t *testing.T) {
+	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	filter := filterFlag{values: []string{defaultIssueFilter}}
+	flags := watchFlagSet(&agents, &filter)
+	if err := flags.Parse([]string{"owner/repo"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !flagValue[bool](flags, "remote-control") {
+		t.Fatal("remote-control = false, want the default to be on")
+	}
+
+	off := watchFlagSet(&agents, &filter)
+	if err := off.Parse([]string{"--remote-control=false", "owner/repo"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if flagValue[bool](off, "remote-control") {
+		t.Fatal("remote-control = true, want it turned off")
+	}
+}
