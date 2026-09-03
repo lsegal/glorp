@@ -57,7 +57,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("ready-state", "", "project status that marks an issue ready for an agent")
 	flags.String("codex-binary", "codex", "Codex executable")
 	flags.String("claude-binary", "claude", "Claude executable")
-	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (Claude does not honour the request under -p yet, so this is off by default)")
+	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (nothing honours the request under -p yet and no alternative lever exists, so this is off by default and currently reaches nobody)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
@@ -241,6 +241,15 @@ func runWatch(args []string) int {
 	// for it to pass to a Codex run. Say so once at startup rather than leaving an
 	// opted-in Codex watch to wonder why nothing reached the phone.
 	if notice := remoteControlCodexNotice(remoteControl, agents.names()); notice != "" {
+		fmt.Fprintln(output, notice)
+		if webUI != nil {
+			webUI.Log(notice)
+		}
+	}
+	// Opting in currently buys nothing: no lever reaches a `claude -p` run (see
+	// remoteControlNoLeverFinding). Say so at startup so the flag's silence is
+	// explained where it is turned on, not only in the README.
+	if notice := remoteControlInertNotice(remoteControl); notice != "" {
 		fmt.Fprintln(output, notice)
 		if webUI != nil {
 			webUI.Log(notice)
@@ -1480,7 +1489,50 @@ func remoteControlCodexNotice(remoteControl bool, agents []string) string {
 // --remote-control "start an interactive session with Remote Control enabled".
 // The arguments are kept behind an opt-in --remote-control flag rather than
 // removed, so a Claude release that honours the setting needs no change here.
+//
+// See remoteControlNoLeverFinding for why nothing was substituted for it.
 const remoteControlSettings = `{"remoteControlAtStartup":true}`
+
+// remoteControlUpstreamIssue tracks the Claude Code change that would make a
+// headless glorp run viewable remotely. Until it ships there is nothing for
+// glorp to pass, which is why --remote-control stays an inert opt-in.
+const remoteControlUpstreamIssue = "https://github.com/anthropics/claude-code/issues/91906"
+
+// remoteControlNoLeverFinding records the search for a replacement lever so it
+// is not made a third time (issue #506). Every candidate was measured against
+// Claude Code 2.1.248 with a real headless run, not read off documentation:
+//
+//   - remoteControlAtStartup via --settings: arrives but is not read under -p,
+//     as remoteControlSettings describes. This is the one glorp still passes.
+//   - autoUploadSessions, the hoped-for view-only mirror: no such setting
+//     exists. It is absent from Claude Code's settings reference, and a -p run
+//     with -d (every debug category) makes no upload or session-share request
+//     of any kind, so there is nothing to enable.
+//   - `claude remote-control`, the separate server mode: it hosts only the
+//     sessions it creates itself, so glorp cannot hand it a `claude -p` child
+//     it already started. Its --session-id takes a server-side code session,
+//     not a local session UUID: reattaching with one is rejected as "invalid
+//     session ID: must be a cse_... or session_... tagged ID". It is doubly
+//     unusable from a headless parent besides, because it refuses to start
+//     until the workspace trust dialog has been accepted interactively, which
+//     a -p run never triggers since print mode skips that dialog, and it then
+//     asks "Enable Remote Control? (y/n)" on the terminal.
+//
+// So there is no lever on glorp's side, and the remaining answer is a Claude
+// Code change, filed upstream as remoteControlUpstreamIssue. Until that lands
+// a run is followed in glorp's own dashboard, which is localhost only.
+const remoteControlNoLeverFinding = "no lever makes a `claude -p` run viewable remotely: remoteControlAtStartup is not read under -p, autoUploadSessions does not exist, and `claude remote-control` hosts only the sessions it starts itself; tracked upstream at " + remoteControlUpstreamIssue
+
+// remoteControlInertNotice returns the finding above when a watch opts into
+// Remote Control, and an empty string otherwise. Turning the flag on is the
+// only moment the finding is worth saying out loud: a watch left at the
+// default is not waiting for anything to appear on a phone.
+func remoteControlInertNotice(remoteControl bool) string {
+	if !remoteControl {
+		return ""
+	}
+	return remoteControlNoLeverFinding
+}
 
 // remoteControlSessionName names the Remote Control session after the issue
 // being worked on, so concurrent glorp runs are told apart in the Claude app
