@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1406,6 +1407,52 @@ func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	}
 	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude yolo args = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerRemoteControlMakesClaudeRunsViewable(t *testing.T) {
+	prompt := "/gh-fix owner/repo#12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	issue := Issue{Number: 12, Target: "owner/repo"}
+	got := commandArgs(CommandRunner{Agent: "claude", RemoteControl: true}, issue)
+	want := []string{"-p", "--permission-mode", "auto", "--settings", `{"remoteControlAtStartup":true}`, "--rc", "glorp owner/repo#12", "--output-format", "stream-json", "--verbose", prompt}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("claude remote control args = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerRemoteControlLeavesCodexUnchanged(t *testing.T) {
+	// Codex exposes Remote Control only as a separate daemon, so there is no
+	// per-run argument to add to `codex exec`.
+	prompt := "/gh-fix owner/repo#12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	issue := Issue{Number: 12, Target: "owner/repo"}
+	got := commandArgs(CommandRunner{Agent: "codex", RemoteControl: true}, issue)
+	if want := []string{"exec", prompt}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex remote control args = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerOmitsRemoteControlWhenDisabled(t *testing.T) {
+	got := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12, Target: "owner/repo"})
+	for _, arg := range got {
+		if arg == "--rc" || arg == "--settings" {
+			t.Fatalf("remote control argument %q present with remote control off: %#v", arg, got)
+		}
+	}
+}
+
+func TestCommandRunnerRemoteControlNamesResumedSessions(t *testing.T) {
+	// A resumed run reconnects under the same name so the app keeps showing one
+	// session per issue rather than a new entry on every resume.
+	session := AgentSession{ID: "sess-1", Agent: "claude", Resume: true}
+	got := commandArgsForSession(CommandRunner{Agent: "claude", RemoteControl: true}, Issue{Number: 12, Target: "owner/repo"}, session)
+	if !slices.Contains(got, "glorp owner/repo#12") {
+		t.Fatalf("resumed args missing remote control session name: %#v", got)
+	}
+}
+
+func TestRemoteControlSessionNameFallsBackToIssueNumber(t *testing.T) {
+	if got, want := remoteControlSessionName("", Issue{Number: 12}), "glorp #12"; got != want {
+		t.Fatalf("session name = %q, want %q", got, want)
 	}
 }
 
