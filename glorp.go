@@ -593,11 +593,16 @@ func (w *Glorp) standDownForStandingClaims(ctx context.Context, checker WorkClos
 // leaves this instance's own claim on the ticket, which is what the next poll
 // reads to dispatch the work (issue #437).
 //
-// The first reap after startup is aggressive: every contested candidate is
-// asked about immediately. Later reaps run on a timer (issue #239), so they
-// first check how old the newest claim from another instance is and stand
-// down silently on anything claimed within staleClaimDuration, rather than
-// re-posting "does anyone have this?" on every pass.
+// The first reap after startup is aggressive: every contested candidate no
+// other instance holds a live claim on is asked about immediately, rather
+// than waiting for the periodic timer (issue #239). Later reaps additionally
+// skip anything this instance already claimed or already negotiated, so they
+// do not re-post "does anyone have this?" on every pass. Both reaps stand
+// down for a foreign claim newer than staleClaimDuration: the handshake only
+// reads answers posted after its own ask, and a live instance that announced
+// itself minutes ago does not re-announce during the grace window, so asking
+// unconditionally on startup took work another instance was running (issue
+// #514).
 func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool, aggressive bool) []pendingIssue {
 	if w.Comments == nil || len(newIssues) == 0 {
 		return newIssues
@@ -619,7 +624,7 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 	if len(contested) > 0 {
 		mode := "periodic reap, skipping anything claimed within " + w.staleClaimAfter().String()
 		if aggressive {
-			mode = "first reap after startup, asking unconditionally"
+			mode = "first reap after startup, asking about anything not freshly claimed"
 		}
 		w.logf("reaping %d contested issue(s) as %s (%s): %s", len(contested), w.Identity, mode, issueNumbers(contested))
 	}
@@ -641,43 +646,66 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 				reason = "it sits at In Progress with no local record of this instance owning it"
 			}
 			w.logf("issue #%d looks claimed: %s; negotiating on %s", issue.Number, reason, target.describe())
-			if !aggressive {
-				standing, err := w.claimStanding(ctx, target)
-				if err != nil {
+			// Both reaps read the claims standing on the ticket before they
+			// ask anything. The first reap after startup used to skip
+			// straight to the handshake, and the handshake only reads answers
+			// posted after its own ask: an instance that announced itself
+			// minutes earlier does not re-announce during the grace window,
+			// so nothing answered and a freshly started instance claimed and
+			// dispatched work another instance was actively running (issue
+			// #514). What the aggressive reap skips is the guards below that
+			// exist to stop it re-asking on every periodic pass, not the
+			// stand-down for a live claim.
+			standing, err := w.claimStanding(ctx, target)
+			if err != nil {
+				if !aggressive {
 					w.logf("issue #%d reap check failed: %v", issue.Number, err)
 					return
 				}
-				// This instance already holds the newest claim, so the
-				// handshake it would run has already been run and won. Asking
-				// again would spam the ticket with an ask/claim pair on every
-				// pass and stall each one for the grace period (issue #425).
-				if standing.SelfHolds {
-					w.logf("issue #%d already claimed by this instance %s ago; dispatching without re-asking", issue.Number, standing.SelfAge.Round(time.Second))
-					keep[i] = true
-					newIssues[i].claim = &target
-					return
-				}
-				if standing.OwnerFresh {
+				// The first reap is the only pass that runs before the
+				// periodic timer, so an unreachable comment read negotiates
+				// rather than leaving genuinely abandoned work waiting for
+				// the next one. The handshake it runs is itself an ask that
+				// a live instance can answer.
+				w.logf("issue #%d reap check failed; negotiating anyway on the first reap after startup: %v", issue.Number, err)
+			} else {
+				// Another instance holds the newest claim and posted it
+				// recently enough to still be running the work, so this reap
+				// stands down whether or not it is the first one.
+				if !standing.SelfHolds && standing.OwnerFresh {
 					w.logf("issue #%d claimed by instance %s %s ago (within %s); skipping reap", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter())
 					return
 				}
-				// The checks above are all derived from the ticket's own
-				// comments. This one is local: a negotiation this instance
-				// already ran on this target settled who owns the work, and
-				// re-running it would repost the same ask and the same claim
-				// on every pass, stalling each one for the grace window. That
-				// is the comment spam of issue #432, so the decision is reused
-				// until the record goes stale even when the comments read as
-				// if nothing had ever been negotiated.
-				if record, age, ok := w.settledHandshake(target); ok {
-					if record.Claimed {
-						w.logf("issue #%d handshake already settled %s ago in this instance's favour; dispatching without re-asking", issue.Number, age.Round(time.Second))
+				if !aggressive {
+					// This instance already holds the newest claim, so the
+					// handshake it would run has already been run and won.
+					// Asking again would spam the ticket with an ask/claim
+					// pair on every pass and stall each one for the grace
+					// period (issue #425).
+					if standing.SelfHolds {
+						w.logf("issue #%d already claimed by this instance %s ago; dispatching without re-asking", issue.Number, standing.SelfAge.Round(time.Second))
 						keep[i] = true
 						newIssues[i].claim = &target
-					} else {
-						w.logf("issue #%d handshake already settled %s ago for another instance; standing down without re-asking", issue.Number, age.Round(time.Second))
+						return
 					}
-					return
+					// The checks above are all derived from the ticket's own
+					// comments. This one is local: a negotiation this instance
+					// already ran on this target settled who owns the work, and
+					// re-running it would repost the same ask and the same claim
+					// on every pass, stalling each one for the grace window. That
+					// is the comment spam of issue #432, so the decision is reused
+					// until the record goes stale even when the comments read as
+					// if nothing had ever been negotiated.
+					if record, age, ok := w.settledHandshake(target); ok {
+						if record.Claimed {
+							w.logf("issue #%d handshake already settled %s ago in this instance's favour; dispatching without re-asking", issue.Number, age.Round(time.Second))
+							keep[i] = true
+							newIssues[i].claim = &target
+						} else {
+							w.logf("issue #%d handshake already settled %s ago for another instance; standing down without re-asking", issue.Number, age.Round(time.Second))
+						}
+						return
+					}
 				}
 				if !standing.OwnerClaimed {
 					w.logf("issue #%d has no claim from another instance; treating it as abandoned", issue.Number)
