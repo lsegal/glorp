@@ -23,6 +23,30 @@ func TestAgentInstructionsForbidChangelogTests(t *testing.T) {
 	}
 }
 
+// TestAgentInstructionsAreOneLiners is the mechanical half of the terseness
+// rule AGENTS.md states about itself: an instruction agents have to read three
+// paragraphs to reach is one they skim. Every instruction line has to be a
+// single short bullet, so a wrapped or run-on entry is rejected here rather
+// than accumulating until the file stops being read at all.
+func TestAgentInstructionsAreOneLiners(t *testing.T) {
+	const maxLineLength = 120
+	agents := readDoc(t, "AGENTS.md")
+	if !strings.Contains(agents, "one short line") {
+		t.Error("AGENTS.md does not state the one-line rule about itself")
+	}
+	for i, line := range strings.Split(agents, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "# ") && !strings.HasPrefix(line, "- ") {
+			t.Errorf("AGENTS.md:%d = %q, want a heading or a one-line `- ` bullet", i+1, line)
+		}
+		if len(line) > maxLineLength {
+			t.Errorf("AGENTS.md:%d is %d characters, want at most %d", i+1, len(line), maxLineLength)
+		}
+	}
+}
+
 // TestNoTestReadsTheChangelog is the mechanical half of that instruction: a
 // changelog assertion couples release prose to the test suite, so promoting or
 // rewording an entry breaks CI for reasons unrelated to behavior. Comments may
