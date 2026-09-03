@@ -1962,10 +1962,13 @@ func (r CommandRunner) binary(agent string) string {
 	if agent == "claude" && r.ClaudeBinary != "" {
 		return r.ClaudeBinary
 	}
-	// An agent that has no flag of its own -- anything declared in
-	// .glorp.config.json -- is invoked through the executable its definition
-	// names. Per-agent binary flags for those are issue #489.
-	if definition, ok := r.definition(agent); ok && agent != "codex" && agent != "claude" {
+	if r.Binary != "" {
+		return r.Binary
+	}
+	// An agent with no flag and no configured executable -- anything declared
+	// in .glorp.config.json -- is invoked through the executable its own
+	// definition names. Per-agent binary flags for those are issue #489.
+	if definition, ok := r.definition(agent); ok {
 		return definition.Binary
 	}
 	return r.Binary
