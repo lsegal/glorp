@@ -178,7 +178,7 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
             <ul class="prereq-list">
               <li><strong>GitHub CLI (gh)</strong><span>Authenticated with access to every repository glorp watches. Project targets need the <code>read:project</code> and <code>project</code> scopes.</span></li>
               <li><strong>Node.js and npx</strong><span>The installer uses <code>npx</code> to install the bundled gh-fix and gh-discuss skills through skills.sh.</span></li>
-              <li><strong>ngrok</strong><span>For the default webhook mode; configure its auth before starting. Not required with <code>--poll</code>.</span></li>
+              <li><strong>ngrok</strong><span>For the default webhook mode; installing it is optional, since glorp falls back to <code>npx ngrok</code>. Configure its auth before starting. Not required with <code>--poll</code>.</span></li>
               <li><strong>Chrome, Chromium or Edge</strong><span>Only for <code>--browser</code> mode, which needs no ngrok tunnel and no extra token. Safari has no DevTools Protocol and cannot be used.</span></li>
               <li><strong>A coding agent</strong><span>At least one of Codex CLI (<code>codex</code>) or Claude Code (<code>claude</code>) on your PATH.</span></li>
             </ul>
