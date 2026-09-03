@@ -174,8 +174,8 @@ func (v *Vision) log(format string, args ...interface{}) {
 // AgentSpec names the one-shot coding-agent invocation a vision recovery is
 // made with: which agent, run how, from which executable.
 type AgentSpec struct {
-	// Name is the agent provider, "codex" or "claude", which decides how the
-	// screenshot is handed over.
+	// Name is the agent provider, which names the definition that decides how
+	// the screenshot is handed over.
 	Name string
 	// Binary is the executable that provider is invoked through.
 	Binary string

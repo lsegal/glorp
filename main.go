@@ -77,7 +77,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 func commandFlags(name string) *flag.FlagSet {
 	switch name {
 	case "watch":
-		return watchFlagSet(&agentFlag{values: []agentSpec{{Name: "codex"}}}, &filterFlag{values: []string{defaultIssueFilter}})
+		return watchFlagSet(&agentFlag{values: []agentSpec{{Name: defaultAgentName}}}, &filterFlag{values: []string{defaultIssueFilter}})
 	case "ui":
 		return uiFlagSet()
 	case "auth":
@@ -87,7 +87,7 @@ func commandFlags(name string) *flag.FlagSet {
 }
 
 func runWatch(args []string) int {
-	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	agents := agentFlag{values: []agentSpec{{Name: defaultAgentName}}}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
 	// --agent is checked against the registry the moment the flag is read, and
 	// Go's flag package reads flags in the order they were typed, so the
