@@ -57,7 +57,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("ready-state", "", "project status that marks an issue ready for an agent")
 	flags.String("codex-binary", "codex", "Codex executable")
 	flags.String("claude-binary", "claude", "Claude executable")
-	flags.Bool("remote-control", true, "enable Remote Control on Claude runs so they are viewable from the Claude mobile app and claude.ai/code")
+	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (Claude does not honour the request under -p yet, so this is off by default)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
@@ -237,9 +237,9 @@ func runWatch(args []string) int {
 	} else if mode == "none" {
 		fmt.Fprintln(output, "UI disabled")
 	}
-	// --remote-control governs both agents as one switch, but only Claude has
-	// something to switch. Say so once at startup rather than leaving a Codex
-	// run's absence from the phone unexplained.
+	// --remote-control reads as one switch for both agents, but there is nothing
+	// for it to pass to a Codex run. Say so once at startup rather than leaving an
+	// opted-in Codex watch to wonder why nothing reached the phone.
 	if notice := remoteControlCodexNotice(remoteControl, agents.names()); notice != "" {
 		fmt.Fprintln(output, notice)
 		if webUI != nil {
@@ -1434,9 +1434,11 @@ type CommandRunner struct {
 	Identity    Identity
 	Output      io.Writer
 	Yolo        bool
-	// RemoteControl enables Claude's Remote Control bridge so a headless run is
-	// viewable from the Claude mobile app and claude.ai/code. It affects Claude
-	// runs only; see codexRemoteControlNotice for why Codex runs stay local.
+	// RemoteControl asks Claude to start its Remote Control bridge so a headless
+	// run is viewable from the Claude mobile app and claude.ai/code. Claude does
+	// not honour the request under -p (see remoteControlSettings), so it is off
+	// by default. It affects Claude runs only; see codexRemoteControlNotice for
+	// why Codex runs stay local.
 	RemoteControl bool
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
 	// round robin selection advances consistently regardless of how many
@@ -1448,13 +1450,13 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 	return commandArgsForSession(r, issue, AgentSession{})
 }
 
-// codexRemoteControlNotice explains why --remote-control stops at Claude runs.
+// codexRemoteControlNotice explains why --remote-control reaches no Codex run.
 // Codex exposes Remote Control only through its `codex remote-control` daemon,
 // which is the app-server hosting the threads it starts itself: there is no
 // per-run argument for `codex exec` and no way to hand it an exec process glorp
 // has already started. Reaching Codex runs from a phone would mean driving
 // Codex over the app-server protocol instead of `codex exec` altogether.
-const codexRemoteControlNotice = "remote control covers claude runs only: `codex exec` takes no Remote Control argument, and the separate `codex remote-control` daemon hosts only the sessions it starts itself, so codex runs stay viewable in glorp's own dashboard"
+const codexRemoteControlNotice = "remote control is not passed to codex runs: `codex exec` takes no Remote Control argument, and the separate `codex remote-control` daemon hosts only the sessions it starts itself, so codex runs stay viewable in glorp's own dashboard"
 
 // remoteControlCodexNotice returns the notice above when a watch has Remote
 // Control on and a Codex agent configured, and an empty string otherwise.
@@ -1465,9 +1467,19 @@ func remoteControlCodexNotice(remoteControl bool, agents []string) string {
 	return codexRemoteControlNotice
 }
 
-// remoteControlSettings starts Claude's Remote Control bridge for the run.
-// --settings is layered on top of the user's own settings, so it turns the
+// remoteControlSettings asks Claude to start its Remote Control bridge for the
+// run. --settings is layered on top of the user's own settings, so it turns the
 // bridge on without disturbing anything else they have configured.
+//
+// Claude does not act on it under -p. Measured against Claude Code 2.1.248, a
+// headless run started with exactly these arguments writes no bridge session
+// record, keeps the session name derived from its working directory rather than
+// the one given to --rc, and is discoverable only as a local session, while the
+// same --settings payload does change the model, so the setting arrives and is
+// simply not read on the print mode startup path. `claude --help` says as much:
+// --remote-control "start an interactive session with Remote Control enabled".
+// The arguments are kept behind an opt-in --remote-control flag rather than
+// removed, so a Claude release that honours the setting needs no change here.
 const remoteControlSettings = `{"remoteControlAtStartup":true}`
 
 // remoteControlSessionName names the Remote Control session after the issue

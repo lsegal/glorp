@@ -962,7 +962,7 @@ func TestRemoteControlCodexNoticeSilentWithoutCodex(t *testing.T) {
 
 func TestRemoteControlCodexNoticeSilentWhenRemoteControlIsOff(t *testing.T) {
 	if got := remoteControlCodexNotice(false, []string{"codex"}); got != "" {
-		t.Fatalf("notice = %q, want no notice when remote control is disabled", got)
+		t.Fatalf("notice = %q, want no notice when remote control is off", got)
 	}
 }
 
