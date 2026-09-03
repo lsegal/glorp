@@ -986,3 +986,74 @@ func TestReadmeDocumentsCodexRemoteControlBehaviour(t *testing.T) {
 		}
 	}
 }
+
+// TestRemoteControlNoLeverFindingNamesEveryCandidate keeps the recorded finding
+// from #506 complete: the point of the constant is that the next reader does not
+// have to re-measure the three levers, so it has to name all of them and where
+// the remaining answer is tracked.
+func TestRemoteControlNoLeverFindingNamesEveryCandidate(t *testing.T) {
+	for _, required := range []string{"remoteControlAtStartup", "autoUploadSessions", "claude remote-control", remoteControlUpstreamIssue} {
+		if !strings.Contains(remoteControlNoLeverFinding, required) {
+			t.Errorf("remoteControlNoLeverFinding does not mention %q", required)
+		}
+	}
+}
+
+// TestRemoteControlUpstreamIssueIsAClaudeCodeIssue guards the one pointer that
+// makes the finding actionable: a glorp issue or a bare repository URL here
+// would send the next reader somewhere that cannot resolve it.
+func TestRemoteControlUpstreamIssueIsAClaudeCodeIssue(t *testing.T) {
+	if !strings.HasPrefix(remoteControlUpstreamIssue, "https://github.com/anthropics/claude-code/issues/") {
+		t.Fatalf("remoteControlUpstreamIssue = %q, want an anthropics/claude-code issue URL", remoteControlUpstreamIssue)
+	}
+}
+
+// TestReadmeDocumentsRemoteControlHasNoAlternativeLever keeps the
+// `--remote-control` row from reading as though only the setting was tried. The
+// row is where someone looks before proposing a substitute, so it has to say
+// which substitutes were measured and rejected.
+func TestReadmeDocumentsRemoteControlHasNoAlternativeLever(t *testing.T) {
+	var row string
+	for _, line := range strings.Split(readDoc(t, "README.md"), "\n") {
+		if strings.HasPrefix(line, "| `--remote-control` |") {
+			row = line
+			break
+		}
+	}
+	if row == "" {
+		t.Fatal("README.md has no `--remote-control` flag row")
+	}
+	for _, required := range []string{"autoUploadSessions", "claude remote-control", remoteControlUpstreamIssue} {
+		if !strings.Contains(row, required) {
+			t.Errorf("README `--remote-control` row does not mention %q", required)
+		}
+	}
+}
+
+// TestChangelogRecordsRemoteControlFinding keeps the finding in the release
+// notes as well as the source, so the answer to "can a headless run be watched
+// from a phone" is visible without reading main.go.
+func TestChangelogRecordsRemoteControlFinding(t *testing.T) {
+	_, rest, found := strings.Cut(readDoc(t, "CHANGELOG.md"), "## Unreleased")
+	if !found {
+		t.Fatal("CHANGELOG.md has no ## Unreleased section")
+	}
+	unreleased, _, _ := strings.Cut(rest, "\n## ")
+	for _, required := range []string{"autoUploadSessions", "claude remote-control", remoteControlUpstreamIssue} {
+		if !strings.Contains(unreleased, required) {
+			t.Errorf("CHANGELOG.md ## Unreleased does not mention %q", required)
+		}
+	}
+}
+
+// TestRemoteControlInertNoticeWarnsWhenOptedIn covers the one thing turning the
+// flag on still does: say that it reaches nobody. A watch left at the default
+// has nothing to explain and must stay silent.
+func TestRemoteControlInertNoticeWarnsWhenOptedIn(t *testing.T) {
+	if got := remoteControlInertNotice(true); got != remoteControlNoLeverFinding {
+		t.Errorf("notice = %q, want the recorded finding", got)
+	}
+	if got := remoteControlInertNotice(false); got != "" {
+		t.Errorf("notice = %q, want no notice when remote control is off", got)
+	}
+}

@@ -249,10 +249,10 @@ func runWatch(args []string) int {
 	// Opting in currently buys nothing: no lever reaches a `claude -p` run (see
 	// remoteControlNoLeverFinding). Say so at startup so the flag's silence is
 	// explained where it is turned on, not only in the README.
-	if remoteControl {
-		fmt.Fprintln(output, remoteControlNoLeverFinding)
+	if notice := remoteControlInertNotice(remoteControl); notice != "" {
+		fmt.Fprintln(output, notice)
 		if webUI != nil {
-			webUI.Log(remoteControlNoLeverFinding)
+			webUI.Log(notice)
 		}
 	}
 	wOut := output
@@ -1522,6 +1522,17 @@ const remoteControlUpstreamIssue = "https://github.com/anthropics/claude-code/is
 // Code change, filed upstream as remoteControlUpstreamIssue. Until that lands
 // a run is followed in glorp's own dashboard, which is localhost only.
 const remoteControlNoLeverFinding = "no lever makes a `claude -p` run viewable remotely: remoteControlAtStartup is not read under -p, autoUploadSessions does not exist, and `claude remote-control` hosts only the sessions it starts itself; tracked upstream at " + remoteControlUpstreamIssue
+
+// remoteControlInertNotice returns the finding above when a watch opts into
+// Remote Control, and an empty string otherwise. Turning the flag on is the
+// only moment the finding is worth saying out loud: a watch left at the
+// default is not waiting for anything to appear on a phone.
+func remoteControlInertNotice(remoteControl bool) string {
+	if !remoteControl {
+		return ""
+	}
+	return remoteControlNoLeverFinding
+}
 
 // remoteControlSessionName names the Remote Control session after the issue
 // being worked on, so concurrent glorp runs are told apart in the Claude app
