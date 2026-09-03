@@ -112,22 +112,24 @@ func TestWatchFlagValuesParse(t *testing.T) {
 	}
 }
 
-func TestWatchRemoteControlDefaultsOn(t *testing.T) {
+func TestWatchRemoteControlDefaultsOff(t *testing.T) {
+	// Claude ignores remoteControlAtStartup under -p, so the default must not
+	// advertise a capability the run does not get (issue #502).
 	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
 	flags := watchFlagSet(&agents, &filter)
 	if err := flags.Parse([]string{"owner/repo"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if !flagValue[bool](flags, "remote-control") {
-		t.Fatal("remote-control = false, want the default to be on")
+	if flagValue[bool](flags, "remote-control") {
+		t.Fatal("remote-control = true, want the default to be off")
 	}
 
-	off := watchFlagSet(&agents, &filter)
-	if err := off.Parse([]string{"--remote-control=false", "owner/repo"}); err != nil {
+	on := watchFlagSet(&agents, &filter)
+	if err := on.Parse([]string{"--remote-control", "owner/repo"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if flagValue[bool](off, "remote-control") {
-		t.Fatal("remote-control = true, want it turned off")
+	if !flagValue[bool](on, "remote-control") {
+		t.Fatal("remote-control = false, want --remote-control to turn it on")
 	}
 }
