@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lsegal/glorp/agents"
 )
 
 // visionPage is a tab that always answers with the same extraction result and
@@ -496,5 +498,39 @@ func TestVisionCapHoldsAcrossConcurrentTargets(t *testing.T) {
 	wg.Wait()
 	if *asks > visionRunLimit {
 		t.Fatalf("the cap leaked under concurrency: %d call(s)", *asks)
+	}
+}
+
+// TestVisionArgsComeFromTheAgentDefinition checks a screenshot is handed to an
+// agent through that agent's own definition, so browser mode gains nothing
+// hardcoded when a new CLI is declared in configuration.
+func TestVisionArgsComeFromTheAgentDefinition(t *testing.T) {
+	definition := agents.Definition{
+		Name: "muse", Binary: "muse",
+		Args: agents.Args{
+			Run:    []agents.Fragment{{Args: []string{"{prompt}"}}},
+			Resume: []agents.Fragment{{Args: []string{"{prompt}"}}},
+			Vision: []agents.Fragment{{Args: []string{"look", "--picture", "{image}"}}, {When: "level", Args: []string{"--care", "{level}"}}, {Args: []string{"{prompt}"}}},
+		},
+		Session: agents.Session{Assign: agents.AssignNone},
+		Output:  agents.Output{Format: agents.FormatText},
+	}
+	args := visionArgs(AgentSpec{Name: "muse", Definition: &definition, Level: "thorough"}, "/tmp/shot.png", "https://github.com/o/r/issues", false)
+	if len(args) != 6 || args[0] != "look" || args[1] != "--picture" || args[2] != "/tmp/shot.png" || args[3] != "--care" || args[4] != "thorough" {
+		t.Fatalf("vision args = %#v, want the definition's own template", args)
+	}
+	if !strings.Contains(args[5], "/tmp/shot.png") {
+		t.Fatalf("vision prompt = %q, want it to name the screenshot", args[5])
+	}
+	// An agent with no vision template renders nothing rather than being run
+	// with a bare prompt.
+	definition.Args.Vision = nil
+	if got := visionArgs(AgentSpec{Name: "muse", Definition: &definition}, "/tmp/shot.png", "https://github.com/o/r/issues", false); got != nil {
+		t.Fatalf("vision args = %#v, want none", got)
+	}
+	// A spec that names an unknown agent and carries no definition renders
+	// nothing either.
+	if got := visionArgs(AgentSpec{Name: "nobody"}, "/tmp/shot.png", "https://github.com/o/r/issues", false); got != nil {
+		t.Fatalf("vision args = %#v, want none", got)
 	}
 }

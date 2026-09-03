@@ -1956,18 +1956,27 @@ func truncateToolUseDetail(value string, isPath bool) string {
 }
 
 func (r CommandRunner) binary(agent string) string {
-	if agent == "codex" && r.CodexBinary != "" {
-		return r.CodexBinary
-	}
-	if agent == "claude" && r.ClaudeBinary != "" {
-		return r.ClaudeBinary
+	switch agent {
+	case "codex":
+		if r.CodexBinary != "" {
+			return r.CodexBinary
+		}
+	case "claude":
+		if r.ClaudeBinary != "" {
+			return r.ClaudeBinary
+		}
+	default:
+		// An agent declared in the config file has no executable flag of its
+		// own, and Binary holds the default agent's, so it is invoked through
+		// the executable its own definition names. Registry-driven per-agent
+		// binary flags are issue #489.
+		if definition, ok := r.definition(agent); ok && definition.Binary != "" {
+			return definition.Binary
+		}
 	}
 	if r.Binary != "" {
 		return r.Binary
 	}
-	// An agent with no flag and no configured executable -- anything declared
-	// in .glorp.config.json -- is invoked through the executable its own
-	// definition names. Per-agent binary flags for those are issue #489.
 	if definition, ok := r.definition(agent); ok {
 		return definition.Binary
 	}
