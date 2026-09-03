@@ -488,6 +488,11 @@ type pendingIssue struct {
 	// instance's apparent work, or a stale local record), so its ownership
 	// must be negotiated through the comment protocol before dispatch.
 	contested bool
+	// mentioned marks a candidate dispatched because the ticket's newest
+	// comment is a direct @/glorp:ID mention of this instance. That is an
+	// explicit instruction addressed to this instance, so it overrides the
+	// claims standing on the ticket rather than being filtered by them.
+	mentioned bool
 	// claim names the target this instance holds an ownership claim on,
 	// posted by the handoff handshake before the dispatch it announces has
 	// happened. A dispatch that is skipped after that point must withdraw the
@@ -507,6 +512,73 @@ func (w *Glorp) releasePendingClaim(ctx context.Context, pending pendingIssue, r
 		return
 	}
 	w.releaseOwnership(ctx, *pending.claim, reason)
+}
+
+// standDownForStandingClaims filters the candidates this poll believes are
+// uncontested against the handoff claims already standing on their tickets.
+//
+// Whether an issue is contested is decided from this instance's own records
+// and the project board alone: an issue nobody here has a record of, whose
+// card is not at "In Progress", reads as untouched work. The claims other
+// instances post on the ticket itself are not part of that decision, so an
+// issue another instance announced "Starting work on this issue" on minutes
+// ago was dispatched as a first-time pickup, and both instances worked the
+// same ticket and opened their own pull request for it (issue #511). The
+// contested path already reads those claims before reaping; this is the same
+// read for the path that skips negotiation entirely.
+//
+// A candidate claimed by another instance within staleClaimDuration is
+// dropped from the batch and left marked as seen, which is what makes the
+// next poll treat it as contested and route it through the handshake, where
+// a claim that goes stale is reaped as abandoned in the usual way. Work this
+// instance holds the newest claim on is its own and passes through, as does
+// work whose newest foreign claim has already expired, so a genuinely
+// abandoned ticket is still picked up. A comment read that fails leaves the
+// candidate alone rather than stalling dispatch on an unreachable API.
+func (w *Glorp) standDownForStandingClaims(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool) []pendingIssue {
+	if w.Comments == nil || len(newIssues) == 0 {
+		return newIssues
+	}
+	keep := make([]bool, len(newIssues))
+	var wg sync.WaitGroup
+	for i, pending := range newIssues {
+		// Resumed sessions are this instance's own work, contested candidates
+		// are negotiated by the reap that follows, and a direct mention is an
+		// instruction addressed to this instance by name.
+		if pending.session.Resume || pending.contested || pending.mentioned {
+			keep[i] = true
+			continue
+		}
+		wg.Add(1)
+		go func(i int, issue Issue) {
+			defer wg.Done()
+			target := ownershipTargetFor(ctx, checker, issue)
+			standing, err := w.claimStanding(ctx, target)
+			if err != nil {
+				w.logf("issue #%d claim check failed; picking it up as uncontested: %v", issue.Number, err)
+				keep[i] = true
+				return
+			}
+			if standing.SelfHolds || !standing.OwnerFresh {
+				keep[i] = true
+				return
+			}
+			w.logf("issue #%d not picked up as uncontested; instance %s claimed it %s ago (within %s) on %s", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter(), target.describe())
+		}(i, pending.issue)
+	}
+	wg.Wait()
+	filtered := newIssues[:0]
+	for i, pending := range newIssues {
+		if keep[i] {
+			filtered = append(filtered, pending)
+			continue
+		}
+		// Keeping the seen marker is what makes the next poll read this issue
+		// as contested and negotiate for it, rather than rediscovering it as
+		// brand new work and dispatching it outright.
+		seen[issueKey(pending.issue)] = true
+	}
+	return filtered
 }
 
 // negotiateContestedIssues runs the handoff handshake for every candidate
@@ -1465,9 +1537,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 					session = AgentSession{}
 					contested = false
 				}
-				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session})
+				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session, mentioned: directMention})
 			}
 		}
+		newIssues = w.standDownForStandingClaims(ctx, closureChecker, newIssues, seen)
 		newIssues = w.negotiateContestedIssues(ctx, closureChecker, newIssues, seen, n == 1)
 		workMu.Lock()
 		inFlight := activeCountsByTarget(active, parseIssueWorkKey)
