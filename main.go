@@ -57,7 +57,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("ready-state", "", "project status that marks an issue ready for an agent")
 	flags.String("codex-binary", "codex", "Codex executable")
 	flags.String("claude-binary", "claude", "Claude executable")
-	flags.Bool("remote-control", true, "enable Remote Control on Claude runs so they are viewable from the Claude mobile app and claude.ai/code")
+	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (Claude does not honour the request under -p yet, so this is off by default)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
@@ -1425,9 +1425,10 @@ type CommandRunner struct {
 	Identity    Identity
 	Output      io.Writer
 	Yolo        bool
-	// RemoteControl enables Claude's Remote Control bridge so a headless run is
-	// viewable from the Claude mobile app and claude.ai/code. Codex has no
-	// per-run equivalent, so it only affects Claude.
+	// RemoteControl asks Claude to start its Remote Control bridge so a headless
+	// run is viewable from the Claude mobile app and claude.ai/code. Claude does
+	// not honour the request under -p (see remoteControlSettings), so it is off
+	// by default. Codex has no per-run equivalent, so it only affects Claude.
 	RemoteControl bool
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
 	// round robin selection advances consistently regardless of how many
@@ -1439,9 +1440,19 @@ func commandArgs(r CommandRunner, issue Issue) []string {
 	return commandArgsForSession(r, issue, AgentSession{})
 }
 
-// remoteControlSettings starts Claude's Remote Control bridge for the run.
-// --settings is layered on top of the user's own settings, so it turns the
+// remoteControlSettings asks Claude to start its Remote Control bridge for the
+// run. --settings is layered on top of the user's own settings, so it turns the
 // bridge on without disturbing anything else they have configured.
+//
+// Claude does not act on it under -p. Measured against Claude Code 2.1.248, a
+// headless run started with exactly these arguments writes no bridge session
+// record, keeps the session name derived from its working directory rather than
+// the one given to --rc, and is discoverable only as a local session, while the
+// same --settings payload does change the model, so the setting arrives and is
+// simply not read on the print mode startup path. `claude --help` says as much:
+// --remote-control "start an interactive session with Remote Control enabled".
+// The arguments are kept behind an opt-in --remote-control flag rather than
+// removed, so a Claude release that honours the setting needs no change here.
 const remoteControlSettings = `{"remoteControlAtStartup":true}`
 
 // remoteControlSessionName names the Remote Control session after the issue
