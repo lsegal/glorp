@@ -421,21 +421,73 @@ func TestNegotiateContestedIssuesSkipsFreshlyClaimedWorkWhenNotAggressive(t *tes
 	}
 }
 
-func TestNegotiateContestedIssuesAggressiveIgnoresFreshClaims(t *testing.T) {
+// The first reap after startup used to ask about every contested candidate
+// regardless of claim age. The ask only reads answers posted after it, and a
+// live instance that announced itself minutes ago does not re-announce during
+// the grace window, so nothing answered and the freshly started instance
+// claimed and dispatched work that was actively running (issue #514).
+func TestNegotiateContestedIssuesAggressiveStandsDownForFreshClaims(t *testing.T) {
 	comments := newFakeCommentClient()
 	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
-	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
 	pending := func() []pendingIssue {
 		return []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
 	}
-	result := settleNegotiation(w, nil, pending, map[string]bool{}, true)
-	if len(result) != 1 {
-		t.Fatalf("the first reap after startup should ask regardless of claim age, got %+v", result)
+	seen := map[string]bool{issueKey(pending()[0].issue): true}
+	if result := settleNegotiation(w, nil, pending, seen, true); len(result) != 0 {
+		t.Fatalf("a startup reap must not dispatch work another instance claimed a minute ago, got %+v", result)
 	}
 	posted, _ := comments.ListComments(context.Background(), "o/r", 1)
-	if len(posted) != 3 {
-		t.Fatalf("expected the original claim plus an ask and a starting claim, got %v", posted)
+	if len(posted) != 1 {
+		t.Fatalf("a startup reap must not ask about or claim freshly claimed work, got %v", posted)
 	}
+	if !seen[issueKey(pending()[0].issue)] {
+		t.Fatalf("the issue stood down for should stay marked as seen so a later poll renegotiates it")
+	}
+	requireLogged(t, logs.String(), "issue #1 claimed by instance OTHER")
+}
+
+// The reason the first reap is aggressive at all is that it runs before the
+// periodic timer: work nobody holds a live claim on must still be picked up
+// on startup rather than waiting for the next reap.
+func TestNegotiateContestedIssuesAggressiveStillReapsStaleAndUnclaimedWork(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
+	pending := func() []pendingIssue {
+		return []pendingIssue{
+			{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true},
+			{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}, contested: true},
+		}
+	}
+	result := settleNegotiation(w, nil, pending, map[string]bool{}, true)
+	if len(result) != 2 {
+		t.Fatalf("a stale claim and an unclaimed issue should both be reaped on startup, got %+v", result)
+	}
+	if posted, _ := comments.ListComments(context.Background(), "o/r", 1); len(posted) != 3 {
+		t.Fatalf("expected the stale claim plus this instance's ask and claim, got %v", posted)
+	}
+	if posted, _ := comments.ListComments(context.Background(), "o/r", 2); len(posted) != 2 {
+		t.Fatalf("expected this instance's ask and claim on unclaimed work, got %v", posted)
+	}
+}
+
+// A comment read that fails on the first reap must not strand genuinely
+// abandoned work until the next one: the handshake it falls back to is itself
+// an ask a live instance can answer.
+func TestNegotiateContestedIssuesAggressiveNegotiatesWhenTheClaimReadFails(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.listErr = errors.New("boom")
+	var logs bytes.Buffer
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: &logs, ownershipWait: func(context.Context) bool { return true }}
+	pending := []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
+	w.negotiateContestedIssues(context.Background(), nil, pending, map[string]bool{}, true)
+	w.awaitNegotiations()
+	requireLogged(t, logs.String(),
+		"issue #1 reap check failed; negotiating anyway on the first reap after startup",
+		"issue #1 negotiating ownership in the background",
+	)
 }
 
 func TestReapPollTickOnlyWhenPollingIsSlower(t *testing.T) {
