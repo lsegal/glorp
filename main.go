@@ -57,6 +57,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("ready-state", "", "project status that marks an issue ready for an agent")
 	flags.String("codex-binary", "codex", "Codex executable")
 	flags.String("claude-binary", "claude", "Claude executable")
+	flags.Bool("remote-control", true, "enable Remote Control on Claude runs so they are viewable from the Claude mobile app and claude.ai/code")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
@@ -109,6 +110,7 @@ func runWatch(args []string) int {
 	readyState := flagValue[string](flags, "ready-state")
 	codexBinary := flagValue[string](flags, "codex-binary")
 	claudeBinary := flagValue[string](flags, "claude-binary")
+	remoteControl := flagValue[bool](flags, "remote-control")
 	statePath := flagValue[string](flags, "state")
 	allIssues := flagValue[bool](flags, "all-issues")
 	allowedCommenters := splitAllowedCommenters(flagValue[string](flags, "allowed-commenters"))
@@ -254,7 +256,7 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, agentCursor: agentCursor}, Out: wOut}
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
@@ -1423,6 +1425,10 @@ type CommandRunner struct {
 	Identity    Identity
 	Output      io.Writer
 	Yolo        bool
+	// RemoteControl enables Claude's Remote Control bridge so a headless run is
+	// viewable from the Claude mobile app and claude.ai/code. Codex has no
+	// per-run equivalent, so it only affects Claude.
+	RemoteControl bool
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
 	// round robin selection advances consistently regardless of how many
 	// times the struct is copied.
@@ -1431,6 +1437,21 @@ type CommandRunner struct {
 
 func commandArgs(r CommandRunner, issue Issue) []string {
 	return commandArgsForSession(r, issue, AgentSession{})
+}
+
+// remoteControlSettings starts Claude's Remote Control bridge for the run.
+// --settings is layered on top of the user's own settings, so it turns the
+// bridge on without disturbing anything else they have configured.
+const remoteControlSettings = `{"remoteControlAtStartup":true}`
+
+// remoteControlSessionName names the Remote Control session after the issue
+// being worked on, so concurrent glorp runs are told apart in the Claude app
+// instead of all appearing under the same host name.
+func remoteControlSessionName(target string, issue Issue) string {
+	if repo := issueRepository(target, issue); repo != "" {
+		return fmt.Sprintf("glorp %s#%d", repo, issue.Number)
+	}
+	return fmt.Sprintf("glorp #%d", issue.Number)
 }
 
 func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) []string {
@@ -1502,6 +1523,15 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		// permission decisions autonomously instead of silently denying the
 		// shell commands the issue workflow needs and exiting successfully.
 		args = append(args, "--permission-mode", "auto")
+	}
+	if r.RemoteControl {
+		// Claude only reads --remote-control on its interactive startup path,
+		// so under -p the flag alone does nothing. The bridge itself is not
+		// gated on interactive mode: it starts from remoteControlAtStartup,
+		// and --settings is an accepted source for that setting. Name the
+		// session after the issue so a run is identifiable in the app rather
+		// than appearing under a bare hostname.
+		args = append(args, "--settings", remoteControlSettings, "--rc", remoteControlSessionName(target, issue))
 	}
 	if !session.Resume && spec.Model != "" {
 		args = append(args, "--model", spec.Model)
