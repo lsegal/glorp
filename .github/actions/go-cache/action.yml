@@ -1,0 +1,49 @@
+name: Cache Go builds
+description: >-
+  Restore and save the Go module cache and the Go build cache for the job.
+  Run this immediately after actions/setup-go, which must be configured with
+  cache: false so the two do not save the same directories under two keys.
+
+inputs:
+  key-prefix:
+    description: >-
+      Distinguishes one job's cache from another's. Jobs that compile the same
+      packages the same way should share a prefix; jobs that do not should each
+      have their own, so neither keeps overwriting the other's entry.
+    required: true
+  go-version:
+    description: Go version the job set up, so a version bump starts a fresh cache.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # GOMODCACHE and GOCACHE are asked of the toolchain rather than hardcoded,
+    # because their defaults differ per platform and Windows reports backslashed
+    # paths that no single literal would cover.
+    - name: Locate the Go caches
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo "modcache=$(go env GOMODCACHE)"
+          echo "buildcache=$(go env GOCACHE)"
+        } >> "$GITHUB_OUTPUT"
+
+    # The key covers the sources as well as go.sum: the build cache holds
+    # compiled objects for this repository's own packages, not just its
+    # dependencies, so keying on go.sum alone would pin the cache to whatever
+    # the tree looked like the day a dependency last changed. The restore-keys
+    # fall back from that to any cache for the same dependencies, and then to
+    # any cache for this job at all, so an edit still starts warm.
+    - name: Cache the Go module and build caches
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.paths.outputs.modcache }}
+          ${{ steps.paths.outputs.buildcache }}
+        key: go-${{ inputs.key-prefix }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.go-version }}-${{ hashFiles('**/go.sum') }}-${{ hashFiles('**/*.go') }}
+        restore-keys: |
+          go-${{ inputs.key-prefix }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.go-version }}-${{ hashFiles('**/go.sum') }}-
+          go-${{ inputs.key-prefix }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.go-version }}-

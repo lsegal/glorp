@@ -21,6 +21,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+          # setup-go's own cache is keyed only on go.sum with no restore-keys, so
+          # a dependency bump is a fully cold build and a stable go.sum never
+          # refreshes what was stored. The step below caches the same directories
+          # under a key that falls back, so it is turned off here rather than
+          # having both save the same paths.
+          cache: false
+      # Its own prefix, because the archive build below cross-compiles for six
+      # GOOS/GOARCH pairs and shares almost no compiled object with a native
+      # CI run.
+      - uses: ./.github/actions/go-cache
+        with:
+          key-prefix: release-cross-compile
+          go-version: "1.23"
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
