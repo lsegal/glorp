@@ -22,9 +22,22 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$url" -o "$tmp/$archive"
 tar -xzf "$tmp/$archive" -C "$tmp"
 install "$tmp/glorp" "$bin_dir/glorp"
+# Which agents the skills are installed for comes from the agent registry in
+# the binary just installed, so adding an agent definition never means editing
+# this script.
+agent_flags=()
+while read -r target; do
+  [[ -n "$target" ]] && agent_flags+=(--agent "$target")
+done < <("$bin_dir/glorp" agents -skills 2>/dev/null || true)
+if [[ ${#agent_flags[@]} -eq 0 ]]; then
+  echo "Installed glorp $version to $bin_dir/glorp." >&2
+  echo "Could not read the agent list from it, so gh-fix/gh-discuss were not installed." >&2
+  echo "Install them with: npx skills add $repo@gh-fix --global --agent <agent> -y" >&2
+  exit 1
+fi
 # This script is normally piped into bash, so stdin is the rest of the script.
 # npx reads stdin, which would swallow the lines below and echo them back
 # instead of letting bash run them, so keep it away from the pipe.
-npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y </dev/null
-npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code -y </dev/null
+npx --yes skills add "$repo@gh-fix" --global "${agent_flags[@]}" -y </dev/null
+npx --yes skills add "$repo@gh-discuss" --global "${agent_flags[@]}" -y </dev/null
 echo "Installed glorp $version to $bin_dir/glorp and gh-fix/gh-discuss globally."
