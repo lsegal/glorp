@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lsegal/glorp/agent"
 	"github.com/lsegal/glorp/browser"
 	"github.com/lsegal/glorp/core"
 	"github.com/lsegal/glorp/ngrok"
@@ -59,6 +60,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("claude-binary", "claude", "Claude executable")
 	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (nothing honours the request under -p yet and no alternative lever exists, so this is off by default and currently reaches nobody)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
+	flags.String("config", agent.DefaultConfigPath, "agent definition file; read only, never written, and separate from --state")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
 	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
@@ -87,6 +89,13 @@ func commandFlags(name string) *flag.FlagSet {
 func runWatch(args []string) int {
 	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
+	// --agent is checked against the registry the moment the flag is read, and
+	// Go's flag package reads flags in the order they were typed, so the
+	// config file has to be merged in before parsing rather than during it.
+	if err := loadAgentRegistry(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	flags := watchFlagSet(&agents, &filter)
 	flags.Usage = func() {
 		cmd, _ := lookupCommand("watch")
@@ -259,9 +268,15 @@ func runWatch(args []string) int {
 	if ui != nil {
 		wOut = io.Discard
 	}
-	quota := combinedQuotaReader(namedQuotaReaders(agents.names(), func(agent string) string {
-		if agent == "claude" {
+	quota := combinedQuotaReader(namedQuotaReaders(agents.names(), func(name string) string {
+		switch name {
+		case "claude":
 			return claudeBinary
+		case "codex":
+			return codexBinary
+		}
+		if definition, ok := agentDefinition(name); ok && definition.Binary != "" {
+			return definition.Binary
 		}
 		return codexBinary
 	}))
@@ -603,8 +618,8 @@ func parseAgentSpec(value string) (agentSpec, error) {
 	if index := strings.LastIndex(name, ":"); index >= 0 {
 		spec.Level = strings.TrimSpace(name[index+1:])
 		name = strings.TrimSpace(name[:index])
-		if spec.Level != "low" && spec.Level != "medium" && spec.Level != "high" {
-			return agentSpec{}, fmt.Errorf("agent level must be low, medium, or high")
+		if spec.Level == "" {
+			return agentSpec{}, fmt.Errorf("agent level cannot be empty")
 		}
 	}
 	if base, model, ok := strings.Cut(name, "/"); ok {
@@ -613,8 +628,18 @@ func parseAgentSpec(value string) (agentSpec, error) {
 			return agentSpec{}, fmt.Errorf("agent model cannot be empty")
 		}
 	}
-	if name != "codex" && name != "claude" {
-		return agentSpec{}, fmt.Errorf("agent must be codex or claude")
+	// Which agents exist, and which models and levels each accepts, comes from
+	// the definition registry rather than a hardcoded pair of names, so an
+	// agent added by a config file is accepted here without a code change.
+	definition, ok := agentDefinition(name)
+	if !ok {
+		return agentSpec{}, agentRegistry().UnknownAgentError(name)
+	}
+	if !definition.AllowsLevel(spec.Level) {
+		return agentSpec{}, fmt.Errorf("agent %s level must be %s", name, strings.Join(definition.Levels, ", "))
+	}
+	if !definition.AllowsModel(spec.Model) {
+		return agentSpec{}, fmt.Errorf("agent %s model must be %s", name, strings.Join(definition.Models, ", "))
 	}
 	spec.Name = name
 	return spec, nil
@@ -1581,59 +1606,35 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		}
 	}
 	spec := r.specForSession(session)
-	if spec.Name == "codex" {
-		args := []string{"exec"}
-		if session.Resume {
-			args = append(args, "resume")
-		}
-		if r.Yolo {
-			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
-		}
-		if !session.Resume && spec.Model != "" {
-			args = append(args, "--model", spec.Model)
-		}
-		if !session.Resume && spec.Level != "" {
-			args = append(args, "-c", "model_reasoning_effort="+spec.Level)
-		}
-		if session.Resume {
-			args = append(args, session.ID)
-		}
-		return append(args, prompt)
+	definition := agentDefinitionOrDefault(spec.Name)
+	if definition == nil {
+		return nil
 	}
-	args := []string{"-p"}
+	mode := agent.ModeRun
 	if session.Resume {
-		args = append(args, "--resume", session.ID)
-	} else if session.ID != "" {
-		args = append(args, "--session-id", session.ID)
+		mode = agent.ModeResume
 	}
-	if r.Yolo {
-		args = append(args, "--dangerously-skip-permissions")
-	} else {
-		// Print mode cannot prompt for tool approval. Let Claude make its normal
-		// permission decisions autonomously instead of silently denying the
-		// shell commands the issue workflow needs and exiting successfully.
-		args = append(args, "--permission-mode", "auto")
-	}
-	if r.RemoteControl {
+	values := agent.Values{
+		Prompt:  prompt,
+		Session: session.ID,
+		Yolo:    r.Yolo,
 		// Claude only reads --remote-control on its interactive startup path,
 		// so under -p the flag alone does nothing. The bridge itself is not
 		// gated on interactive mode: it starts from remoteControlAtStartup,
 		// and --settings is an accepted source for that setting. Name the
 		// session after the issue so a run is identifiable in the app rather
 		// than appearing under a bare hostname.
-		args = append(args, "--settings", remoteControlSettings, "--rc", remoteControlSessionName(target, issue))
+		RemoteControl:         r.RemoteControl,
+		RemoteControlSettings: remoteControlSettings,
+		RemoteControlName:     remoteControlSessionName(target, issue),
 	}
-	if !session.Resume && spec.Model != "" {
-		args = append(args, "--model", spec.Model)
+	// The model and the level are withheld from a resume: the session already
+	// runs with the ones it was started with, and its template carries no
+	// fragment that would take them.
+	if !session.Resume {
+		values.Model, values.Level = spec.Model, spec.Level
 	}
-	if !session.Resume && spec.Level != "" {
-		args = append(args, "--effort", spec.Level)
-	}
-	// Claude's default text output only prints once the full response is
-	// ready. Stream JSON events instead so the dashboard shows live progress
-	// the same way Codex's plain-text output already does.
-	args = append(args, "--output-format", "stream-json", "--verbose")
-	return append(args, prompt)
+	return definition.RenderArgs(mode, values)
 }
 
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
@@ -1698,16 +1699,18 @@ func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.C
 }
 
 type sessionMetadataCaptureWriter struct {
-	mu               sync.Mutex
-	output           io.Writer
-	buffer           []byte
+	mu     sync.Mutex
+	output io.Writer
+	buffer []byte
+	// sessionPattern is the agent definition's stdout capture pattern, so
+	// which line announces a session, and where the ID sits in it, is part of
+	// the definition rather than a constant compiled into glorp.
+	sessionPattern   *regexp.Regexp
 	onUpdate         func(AgentSession)
 	captureSession   bool
 	sessionCaptured  bool
 	checkoutCaptured bool
 }
-
-var codexSessionIDPattern = regexp.MustCompile(`(?i)session id:\s*([0-9a-f]{8}-[0-9a-f-]{27,})`)
 
 const checkoutDirectoryMarker = "GLORP_CHECKOUT_DIRECTORY="
 
@@ -1730,9 +1733,9 @@ func (w *sessionMetadataCaptureWriter) Write(p []byte) (int, error) {
 }
 
 func (w *sessionMetadataCaptureWriter) captureLine(line string) {
-	if w.captureSession && !w.sessionCaptured {
-		match := codexSessionIDPattern.FindStringSubmatch(line)
-		if len(match) == 2 {
+	if w.captureSession && !w.sessionCaptured && w.sessionPattern != nil {
+		match := w.sessionPattern.FindStringSubmatch(line)
+		if len(match) >= 2 {
 			w.sessionCaptured = true
 			w.onUpdate(AgentSession{ID: match[1]})
 		}
@@ -1921,12 +1924,23 @@ func truncateToolUseDetail(value string, isPath bool) string {
 	return string(runes[:claudeToolUseDetailLimit]) + "…"
 }
 
-func (r CommandRunner) binary(agent string) string {
-	if agent == "codex" && r.CodexBinary != "" {
-		return r.CodexBinary
-	}
-	if agent == "claude" && r.ClaudeBinary != "" {
-		return r.ClaudeBinary
+func (r CommandRunner) binary(name string) string {
+	switch name {
+	case "codex":
+		if r.CodexBinary != "" {
+			return r.CodexBinary
+		}
+	case "claude":
+		if r.ClaudeBinary != "" {
+			return r.ClaudeBinary
+		}
+	default:
+		// An agent that arrived from a definition has no --<agent>-binary flag
+		// of its own yet (issue #489), so it runs from the executable its
+		// definition names rather than inheriting the codex default.
+		if definition, ok := agentDefinition(name); ok && definition.Binary != "" {
+			return definition.Binary
+		}
 	}
 	return r.Binary
 }
@@ -1990,8 +2004,10 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 	// failure nobody can act on; the issue workflow is re-entrant and adopts
 	// the existing draft pull request.
 	session.Resume = false
-	if r.specForSession(session).Name == "codex" {
-		// Codex assigns its own session IDs and reports the new one on stdout.
+	if definition := agentDefinitionOrDefault(r.specForSession(session).Name); definition != nil && definition.Session.ClearOnResumeFailure {
+		// The agent assigns its own session IDs and reports the new one on
+		// stdout, so keeping the old one would ask again for the session that
+		// has just proved to be gone.
 		session.ID = ""
 	}
 	runErr, _ = r.runOnce(ctx, issue, session, updateSession, jobOutput)
@@ -1999,16 +2015,19 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 }
 
 func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession), jobOutput io.Writer) (error, bool) {
-	agent := r.specForSession(session).Name
+	name := r.specForSession(session).Name
+	definition := agentDefinitionOrDefault(name)
+	if definition == nil {
+		return agentRegistry().UnknownAgentError(name), false
+	}
 	args := commandArgsForSession(r, issue, session)
-	cmd := newAgentCommand(ctx, r.binary(agent), args...)
-	if agent == "claude" {
-		// Claude Code's headless print mode (-p) caps how long it waits for
-		// in-flight background shell tasks before terminating them (10
-		// minutes by default). glorp dispatches claude for long-lived
-		// autonomous work, so disable the ceiling to prevent it from killing
-		// legitimate background tasks mid-run (issue #330).
-		cmd.Env = append(os.Environ(), "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0")
+	cmd := newAgentCommand(ctx, r.binary(name), args...)
+	// The definition supplies whatever the agent needs on top of glorp's own
+	// environment, such as Claude's CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0,
+	// which stops headless print mode from killing the long-lived background
+	// shell tasks the issue workflow depends on (issue #330).
+	if len(definition.Env) > 0 {
+		cmd.Env = append(os.Environ(), definition.EnvPairs()...)
 	}
 	// Before a checkout directory exists, run outside glorp's own working
 	// directory so the agent cannot mistake an ambient git repo (e.g. the repo
@@ -2038,12 +2057,16 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	if updateSession != nil {
 		metadataOutput = &sessionMetadataCaptureWriter{
 			output: agentOutput, onUpdate: updateSession,
-			captureSession: agent == "codex" && !session.Resume,
+			// An agent that reports its own session ID on stdout is read for it
+			// on the run that creates the session; a resume already carries the
+			// ID glorp recorded.
+			captureSession: definition.SessionPattern() != nil && !session.Resume,
+			sessionPattern: definition.SessionPattern(),
 		}
 		agentOutput = metadataOutput
 	}
 	var claudeOutput *claudeJSONOutputWriter
-	if agent == "claude" {
+	if definition.Output.Format == agent.OutputClaudeStreamJSON {
 		claudeOutput = newClaudeJSONOutputWriter(agentOutput)
 		agentOutput = claudeOutput
 	}

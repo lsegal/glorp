@@ -201,7 +201,15 @@ func namedQuotaReaders(agents []string, binaryFor func(string) string) []namedQu
 			continue
 		}
 		seen[agent] = true
-		switch agent {
+		// Which reader an agent uses is named by its definition, so an agent
+		// that arrives from a config file asks for the reader it shares rather
+		// than being matched on its own name. Registry-driven quota readers
+		// beyond the two built in here are issue #489.
+		reader := ""
+		if definition, ok := agentDefinition(agent); ok {
+			reader = definition.Quota.Reader
+		}
+		switch reader {
 		case "codex":
 			reader := &codexQuotaReader{Binary: binaryFor(agent)}
 			readers = append(readers, namedQuotaReader{name: agent, read: reader.Read})

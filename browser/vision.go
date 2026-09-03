@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lsegal/glorp/agent"
 )
 
 // The screenshot fallback exists for one situation only: GitHub changed its
@@ -183,6 +185,11 @@ type AgentSpec struct {
 	// Yolo bypasses the agent's approval prompts, matching the run's own
 	// setting.
 	Yolo bool
+	// Definition carries the agent's own description of how it is invoked, so
+	// the argv for a vision call is data rather than another branch on Name.
+	// A nil Definition falls back to the built-in one for Name, which is what
+	// lets a caller that only knows the agent's name still ask.
+	Definition *agent.Definition
 }
 
 // AgentRunner supplies and runs that invocation. The root package implements
@@ -236,7 +243,11 @@ func (a visionAgent) Ask(ctx context.Context, screenshot []byte, pageURL string,
 		return nil, fmt.Errorf("write screenshot: %w", err)
 	}
 	spec := a.Runner.VisionAgent()
-	output, err := a.Runner.RunAgent(ctx, spec.Binary, visionArgs(spec, path, pageURL, qualified))
+	args := visionArgs(spec, path, pageURL, qualified)
+	if len(args) == 0 {
+		return nil, fmt.Errorf("agent %q has no vision invocation to make", spec.Name)
+	}
+	output, err := a.Runner.RunAgent(ctx, spec.Binary, args)
 	if err != nil {
 		return nil, fmt.Errorf("agent failed: %w", err)
 	}
@@ -247,33 +258,20 @@ func (a visionAgent) Ask(ctx context.Context, screenshot []byte, pageURL string,
 // as a flag; Claude reads the path named in the prompt. Neither is asked for
 // structured streaming output, because the answer is expected to be one line.
 func visionArgs(spec AgentSpec, imagePath, pageURL string, qualified bool) []string {
-	prompt := visionPrompt(imagePath, pageURL, qualified)
-	if spec.Name == "codex" {
-		args := []string{"exec", "--image", imagePath}
-		if spec.Yolo {
-			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
-		}
-		if spec.Model != "" {
-			args = append(args, "--model", spec.Model)
-		}
-		if spec.Level != "" {
-			args = append(args, "-c", "model_reasoning_effort="+spec.Level)
-		}
-		return append(args, prompt)
+	definition := spec.Definition
+	if definition == nil {
+		definition, _ = agent.Builtin(spec.Name)
 	}
-	args := []string{"-p"}
-	if spec.Yolo {
-		args = append(args, "--dangerously-skip-permissions")
-	} else {
-		args = append(args, "--permission-mode", "auto")
+	if definition == nil {
+		return nil
 	}
-	if spec.Model != "" {
-		args = append(args, "--model", spec.Model)
-	}
-	if spec.Level != "" {
-		args = append(args, "--effort", spec.Level)
-	}
-	return append(args, prompt)
+	return definition.RenderArgs(agent.ModeVision, agent.Values{
+		Prompt: visionPrompt(imagePath, pageURL, qualified),
+		Model:  spec.Model,
+		Level:  spec.Level,
+		Image:  imagePath,
+		Yolo:   spec.Yolo,
+	})
 }
 
 // visionRefPattern is the only qualified answer shape accepted: an

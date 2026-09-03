@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lsegal/glorp/agent"
 	"github.com/lsegal/glorp/core"
 )
 
@@ -1495,9 +1496,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if identified, ok := w.runner().(AgentIdentifier); ok {
 					session.Agent = identified.AgentName()
 				}
-				// Claude accepts a caller-provided session ID. Other runners retain
-				// the historical generated ID unless they replace it after launch.
-				if agentProvider(session.Agent) != "codex" {
+				// An agent whose definition assigns the session ID is given one
+				// up front; the rest report their own on stdout after launch.
+				// A runner that names no agent at all keeps the historical
+				// generated ID, which it is free to replace once it starts.
+				definition, known := agentDefinition(agentProvider(session.Agent))
+				if !known || definition.Session.Assign {
 					session.ID, err = newSessionID()
 					if err != nil {
 						w.releasePendingClaim(ctx, pending, "creating its session identifier failed, so it was never dispatched")
@@ -2630,6 +2634,9 @@ func loadWorkState(path string) (map[int]workState, error) {
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("decode state: %w", err)
 	}
+	if _, ok := raw["agents"]; ok {
+		return nil, agent.ErrWorkStateHoldsDefinitions(path)
+	}
 	for key, value := range raw {
 		var number int
 		if _, err := fmt.Sscanf(key, "%d", &number); err != nil {
@@ -2677,6 +2684,12 @@ func loadScopedWorkState(path string, targets []string) (map[string]workState, e
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("decode state: %w", err)
+	}
+	// Agent definitions in the work-state file are the mirror of work-state
+	// records in the config file: both are easy to mix up, and both say which
+	// file they belong in rather than being read as something they are not.
+	if _, ok := raw["agents"]; ok {
+		return nil, agent.ErrWorkStateHoldsDefinitions(path)
 	}
 	watched := make(map[string]bool, len(targets))
 	for _, target := range targets {

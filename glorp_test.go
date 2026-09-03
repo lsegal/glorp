@@ -1753,8 +1753,14 @@ func TestSessionMetadataCaptureWriterPreservesOutputAndCapturesCodexSessionAndCh
 	checkout := t.TempDir()
 	var output bytes.Buffer
 	var updates []AgentSession
+	// The pattern comes from the codex definition, so this also checks the
+	// embedded definition still recognises the line codex actually prints.
+	codex, ok := agentDefinition("codex")
+	if !ok {
+		t.Fatal("codex has no agent definition")
+	}
 	w := &sessionMetadataCaptureWriter{
-		output: &output, captureSession: true,
+		output: &output, captureSession: true, sessionPattern: codex.SessionPattern(),
 		onUpdate: func(update AgentSession) { updates = append(updates, update) },
 	}
 	chunks := []string{

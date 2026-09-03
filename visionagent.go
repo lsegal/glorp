@@ -21,11 +21,12 @@ type visionAgentRunner struct {
 func (v visionAgentRunner) VisionAgent() browser.AgentSpec {
 	spec := v.runner.specForSession(AgentSession{})
 	return browser.AgentSpec{
-		Name:   spec.Name,
-		Binary: v.runner.binary(spec.Name),
-		Model:  spec.Model,
-		Level:  spec.Level,
-		Yolo:   v.runner.Yolo,
+		Name:       spec.Name,
+		Binary:     v.runner.binary(spec.Name),
+		Model:      spec.Model,
+		Level:      spec.Level,
+		Yolo:       v.runner.Yolo,
+		Definition: agentDefinitionOrDefault(spec.Name),
 	}
 }
 
