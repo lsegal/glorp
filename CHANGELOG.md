@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v1.2.35 - 2026-09-03
+
+
 ## v1.2.34 - 2026-09-03
 
 - Stand down for a claim another instance posted minutes ago on the first reap after startup, instead of asking past it and dispatching work that is actively running. The previous entry closed this hole on the uncontested pickup path; the contested path kept it on its first pass, and a freshly restarted instance is exactly where it bites, because with no local work records everything it sees reads as a candidate. That first reap is deliberately aggressive -- it runs before the periodic reap timer, so work nobody holds is picked up at startup rather than waiting -- but being aggressive was implemented as skipping the claim read entirely and going straight to the ownership handshake, and the handshake only reads answers posted after its own ask. An instance that announced `Starting work on this issue` five minutes earlier does not re-announce during the grace window, so nothing answered, the ask went unchallenged, and both instances ran an agent on the same ticket. Both reaps now read the ticket's standing claims first and stand down for a foreign claim newer than the staleness window, leaving the issue marked as seen so a later poll renegotiates it once that claim goes stale. What the first reap still skips is only the guards that exist to stop a periodic pass re-asking -- this instance's own standing claim and a handshake it already settled -- so a stale foreign claim and a ticket with no claim at all are reaped immediately on startup exactly as before, and a comment read that fails there negotiates rather than stranding abandoned work until the next reap, since the handshake is itself an ask a live instance can answer.
