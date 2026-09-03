@@ -237,6 +237,15 @@ func runWatch(args []string) int {
 	} else if mode == "none" {
 		fmt.Fprintln(output, "UI disabled")
 	}
+	// --remote-control reads as one switch for both agents, but there is nothing
+	// for it to pass to a Codex run. Say so once at startup rather than leaving an
+	// opted-in Codex watch to wonder why nothing reached the phone.
+	if notice := remoteControlCodexNotice(remoteControl, agents.names()); notice != "" {
+		fmt.Fprintln(output, notice)
+		if webUI != nil {
+			webUI.Log(notice)
+		}
+	}
 	wOut := output
 	if ui != nil {
 		wOut = io.Discard
@@ -1428,7 +1437,8 @@ type CommandRunner struct {
 	// RemoteControl asks Claude to start its Remote Control bridge so a headless
 	// run is viewable from the Claude mobile app and claude.ai/code. Claude does
 	// not honour the request under -p (see remoteControlSettings), so it is off
-	// by default. Codex has no per-run equivalent, so it only affects Claude.
+	// by default. It affects Claude runs only; see codexRemoteControlNotice for
+	// why Codex runs stay local.
 	RemoteControl bool
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
 	// round robin selection advances consistently regardless of how many
@@ -1438,6 +1448,23 @@ type CommandRunner struct {
 
 func commandArgs(r CommandRunner, issue Issue) []string {
 	return commandArgsForSession(r, issue, AgentSession{})
+}
+
+// codexRemoteControlNotice explains why --remote-control reaches no Codex run.
+// Codex exposes Remote Control only through its `codex remote-control` daemon,
+// which is the app-server hosting the threads it starts itself: there is no
+// per-run argument for `codex exec` and no way to hand it an exec process glorp
+// has already started. Reaching Codex runs from a phone would mean driving
+// Codex over the app-server protocol instead of `codex exec` altogether.
+const codexRemoteControlNotice = "remote control is not passed to codex runs: `codex exec` takes no Remote Control argument, and the separate `codex remote-control` daemon hosts only the sessions it starts itself, so codex runs stay viewable in glorp's own dashboard"
+
+// remoteControlCodexNotice returns the notice above when a watch has Remote
+// Control on and a Codex agent configured, and an empty string otherwise.
+func remoteControlCodexNotice(remoteControl bool, agents []string) string {
+	if !remoteControl || !slices.Contains(agents, "codex") {
+		return ""
+	}
+	return codexRemoteControlNotice
 }
 
 // remoteControlSettings asks Claude to start its Remote Control bridge for the

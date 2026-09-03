@@ -937,3 +937,52 @@ func TestGHCLIReportsATimedOutCommand(t *testing.T) {
 		t.Fatalf("error %v, want the shutdown reported as a cancellation", err)
 	}
 }
+
+func TestRemoteControlCodexNoticeWarnsWhenCodexIsConfigured(t *testing.T) {
+	notice := remoteControlCodexNotice(true, []string{"codex"})
+	if notice != codexRemoteControlNotice {
+		t.Fatalf("notice = %q, want the codex remote control notice", notice)
+	}
+	if !strings.Contains(notice, "codex remote-control") {
+		t.Errorf("notice = %q, want it to name the codex remote-control daemon", notice)
+	}
+}
+
+func TestRemoteControlCodexNoticeWarnsWhenCodexIsOneOfSeveralAgents(t *testing.T) {
+	if got := remoteControlCodexNotice(true, []string{"claude", "codex"}); got != codexRemoteControlNotice {
+		t.Fatalf("notice = %q, want the codex remote control notice", got)
+	}
+}
+
+func TestRemoteControlCodexNoticeSilentWithoutCodex(t *testing.T) {
+	if got := remoteControlCodexNotice(true, []string{"claude"}); got != "" {
+		t.Fatalf("notice = %q, want no notice for a claude-only watch", got)
+	}
+}
+
+func TestRemoteControlCodexNoticeSilentWhenRemoteControlIsOff(t *testing.T) {
+	if got := remoteControlCodexNotice(false, []string{"codex"}); got != "" {
+		t.Fatalf("notice = %q, want no notice when remote control is off", got)
+	}
+}
+
+// TestReadmeDocumentsCodexRemoteControlBehaviour keeps the `--remote-control`
+// row honest about Codex: the flag reaches Claude runs only, and the row has to
+// say why rather than leaving Codex looking merely overlooked.
+func TestReadmeDocumentsCodexRemoteControlBehaviour(t *testing.T) {
+	var row string
+	for _, line := range strings.Split(readDoc(t, "README.md"), "\n") {
+		if strings.HasPrefix(line, "| `--remote-control` |") {
+			row = line
+			break
+		}
+	}
+	if row == "" {
+		t.Fatal("README.md has no `--remote-control` flag row")
+	}
+	for _, required := range []string{"Codex", "codex exec", "codex remote-control"} {
+		if !strings.Contains(row, required) {
+			t.Errorf("README `--remote-control` row does not mention %q", required)
+		}
+	}
+}
