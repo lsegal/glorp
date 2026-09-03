@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.32 - 2026-09-03
+
 - Stop a `gh-fix` run short of merging when the issue itself withholds that authorization, instead of merging anyway. An issue whose body, comments, or labels said the fix should not be merged -- a `donotmerge` or `hold` label, or a comment asking that it be left for someone to look at first -- was read for its request and nothing else, so the skill drove the pull request to green CI and merged it exactly as it would any other ticket, and the only way to keep a change out of `main` was to not dispatch the issue at all. Validation now reads the issue for a merge hold before any code is written, matching a hold label case-insensitively and ignoring separators (`donotmerge`, `do-not-merge`, `no-merge`, `hold`, `needs-review`) as well as wording anywhere in the thread that asks for the merge to stop, with the most recent comment winning so a hold can be imposed or lifted mid-run. A held run is otherwise unchanged -- it implements, tests, writes the changelog note, pushes, marks the pull request ready for review, and drives CI to completion -- and then leaves the pull request open rather than merging it, keeps the branch and the originating issue, logs which label or quoted instruction withheld the merge, and posts one comment on the pull request saying the ticket is **Ready** with the fix, tests, and CI result. A held run also files no follow-up issues, since unmerged work may still change under review; the items that would have been filed are listed in that same comment under `Follow-ups (not filed)`, linking equivalent open issues, for whoever merges to pick up.
 
 ## v1.2.31 - 2026-09-02
