@@ -1,0 +1,38 @@
+{
+  "name": "claude",
+  "binary": "claude",
+  "levels": ["low", "medium", "high"],
+  "env": {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"},
+  "session": {"assign": "glorp"},
+  "output": {"format": "stream-json"},
+  "quota": {"reader": "claude"},
+  "args": {
+    "run": [
+      {"args": ["-p"]},
+      {"when": "session", "args": ["--session-id", "{session}"]},
+      {"when": "yolo", "args": ["--dangerously-skip-permissions"]},
+      {"when": "!yolo", "args": ["--permission-mode", "auto"]},
+      {"when": "remoteControl", "args": ["--settings", "{settings}", "--rc", "{sessionName}"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--effort", "{level}"]},
+      {"args": ["--output-format", "stream-json", "--verbose"]},
+      {"args": ["{prompt}"]}
+    ],
+    "resume": [
+      {"args": ["-p", "--resume", "{session}"]},
+      {"when": "yolo", "args": ["--dangerously-skip-permissions"]},
+      {"when": "!yolo", "args": ["--permission-mode", "auto"]},
+      {"when": "remoteControl", "args": ["--settings", "{settings}", "--rc", "{sessionName}"]},
+      {"args": ["--output-format", "stream-json", "--verbose"]},
+      {"args": ["{prompt}"]}
+    ],
+    "vision": [
+      {"args": ["-p"]},
+      {"when": "yolo", "args": ["--dangerously-skip-permissions"]},
+      {"when": "!yolo", "args": ["--permission-mode", "auto"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--effort", "{level}"]},
+      {"args": ["{prompt}"]}
+    ]
+  }
+}

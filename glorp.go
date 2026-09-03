@@ -1495,9 +1495,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if identified, ok := w.runner().(AgentIdentifier); ok {
 					session.Agent = identified.AgentName()
 				}
-				// Claude accepts a caller-provided session ID. Other runners retain
-				// the historical generated ID unless they replace it after launch.
-				if agentProvider(session.Agent) != "codex" {
+				// Some agents accept a caller-provided session ID; the rest
+				// assign their own and report it after launch, and their
+				// definition says which (agents.Definition.Session).
+				if agentAssignsSessionID(session.Agent) {
 					session.ID, err = newSessionID()
 					if err != nil {
 						w.releasePendingClaim(ctx, pending, "creating its session identifier failed, so it was never dispatched")

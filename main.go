@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	agents "github.com/lsegal/glorp/agents"
 	"github.com/lsegal/glorp/browser"
 	"github.com/lsegal/glorp/core"
 	"github.com/lsegal/glorp/ngrok"
@@ -39,7 +40,7 @@ var errProjectIssueNotFound = errors.New("project issue not found")
 
 // watchFlagSet builds the `glorp watch` flag set. It is also used, without
 // being parsed, to print the command's defaults in `glorp help watch`.
-func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
+func watchFlagSet(agentSpecs *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags := flag.NewFlagSet("watch", flag.ExitOnError)
 	flags.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	flags.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
@@ -53,12 +54,13 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.Int("web-ui-port", webui.DefaultPort, "starting port for the browser UI")
 	flags.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	flags.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
-	flags.Var(agents, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
+	flags.Var(agentSpecs, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
 	flags.String("ready-state", "", "project status that marks an issue ready for an agent")
 	flags.String("codex-binary", "codex", "Codex executable")
 	flags.String("claude-binary", "claude", "Claude executable")
 	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (nothing honours the request under -p yet and no alternative lever exists, so this is off by default and currently reaches nobody)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
+	flags.String("config", agents.DefaultConfigPath, "agent definition file; read only, never written, and separate from --state")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
 	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
@@ -85,9 +87,19 @@ func commandFlags(name string) *flag.FlagSet {
 }
 
 func runWatch(args []string) int {
-	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	// Agent definitions are loaded before the flags are parsed, because
+	// --agent is validated against them as it is read and the flag package
+	// hands values over in the order they were written.
+	configPath := configPathFromArgs(args, agents.DefaultConfigPath)
+	registry, err := agents.Load(configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	setAgentRegistry(registry)
+	agentSpecs := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
-	flags := watchFlagSet(&agents, &filter)
+	flags := watchFlagSet(&agentSpecs, &filter)
 	flags.Usage = func() {
 		cmd, _ := lookupCommand("watch")
 		fmt.Fprintln(os.Stderr, cmd.usage)
@@ -112,6 +124,10 @@ func runWatch(args []string) int {
 	claudeBinary := flagValue[string](flags, "claude-binary")
 	remoteControl := flagValue[bool](flags, "remote-control")
 	statePath := flagValue[string](flags, "state")
+	if err := guardWorkStateFile(statePath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	allIssues := flagValue[bool](flags, "all-issues")
 	allowedCommenters := splitAllowedCommenters(flagValue[string](flags, "allowed-commenters"))
 	browserOptions, interval, poll, err := resolveBrowserWatch(flags, interval, poll)
@@ -155,7 +171,7 @@ func runWatch(args []string) int {
 		limit = 3
 	}
 	binary := codexBinary
-	if agents.values[0].Name == "claude" {
+	if agentSpecs.values[0].Name == "claude" {
 		binary = claudeBinary
 	}
 	ctx, stop := process.ShutdownContext()
@@ -240,7 +256,7 @@ func runWatch(args []string) int {
 	// --remote-control reads as one switch for both agents, but there is nothing
 	// for it to pass to a Codex run. Say so once at startup rather than leaving an
 	// opted-in Codex watch to wonder why nothing reached the phone.
-	if notice := remoteControlCodexNotice(remoteControl, agents.names()); notice != "" {
+	if notice := remoteControlCodexNotice(remoteControl, agentSpecs.names()); notice != "" {
 		fmt.Fprintln(output, notice)
 		if webUI != nil {
 			webUI.Log(notice)
@@ -259,14 +275,14 @@ func runWatch(args []string) int {
 	if ui != nil {
 		wOut = io.Discard
 	}
-	quota := combinedQuotaReader(namedQuotaReaders(agents.names(), func(agent string) string {
+	quota := combinedQuotaReader(namedQuotaReaders(agentSpecs.names(), func(agent string) string {
 		if agent == "claude" {
 			return claudeBinary
 		}
 		return codexBinary
 	}))
 	var agentCursor *atomic.Uint64
-	if len(agents.values) > 1 {
+	if len(agentSpecs.values) > 1 {
 		agentCursor = &atomic.Uint64{}
 	}
 	identity, err := newIdentity()
@@ -274,7 +290,7 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agents.specs(), Agent: agents.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, agentCursor: agentCursor}, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, Definitions: registry, agentCursor: agentCursor}, Out: wOut}
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
@@ -598,14 +614,20 @@ func (s agentSpec) String() string {
 // parseAgentSpec parses provider/model:level, where the model and level are
 // both optional (for example codex, claude/opus, or codex/gpt-5.6:high).
 func parseAgentSpec(value string) (agentSpec, error) {
+	return parseAgentSpecIn(agentRegistry(), value)
+}
+
+// parseAgentSpecIn is parseAgentSpec against an explicit registry. The agent
+// name, and the models and levels it accepts, come from the registry rather
+// than from a hardcoded list, so an agent declared in .glorp.config.json is
+// accepted by --agent on the same terms as a built-in one.
+func parseAgentSpecIn(registry *agents.Registry, value string) (agentSpec, error) {
 	name := strings.TrimSpace(value)
 	var spec agentSpec
+	level, hasLevel := "", false
 	if index := strings.LastIndex(name, ":"); index >= 0 {
-		spec.Level = strings.TrimSpace(name[index+1:])
+		level, hasLevel = strings.TrimSpace(name[index+1:]), true
 		name = strings.TrimSpace(name[:index])
-		if spec.Level != "low" && spec.Level != "medium" && spec.Level != "high" {
-			return agentSpec{}, fmt.Errorf("agent level must be low, medium, or high")
-		}
 	}
 	if base, model, ok := strings.Cut(name, "/"); ok {
 		name, spec.Model = strings.TrimSpace(base), strings.TrimSpace(model)
@@ -613,8 +635,18 @@ func parseAgentSpec(value string) (agentSpec, error) {
 			return agentSpec{}, fmt.Errorf("agent model cannot be empty")
 		}
 	}
-	if name != "codex" && name != "claude" {
-		return agentSpec{}, fmt.Errorf("agent must be codex or claude")
+	definition, ok := registry.Lookup(name)
+	if !ok {
+		return agentSpec{}, unknownAgentError(registry, name)
+	}
+	if hasLevel {
+		if !definition.AcceptsLevel(level) {
+			return agentSpec{}, fmt.Errorf("agent level must be %s", agents.JoinOr(definition.Levels))
+		}
+		spec.Level = level
+	}
+	if spec.Model != "" && !definition.AcceptsModel(spec.Model) {
+		return agentSpec{}, fmt.Errorf("agent model must be %s", agents.JoinOr(definition.Models))
 	}
 	spec.Name = name
 	return spec, nil
@@ -1449,6 +1481,10 @@ type CommandRunner struct {
 	// by default. It affects Claude runs only; see codexRemoteControlNotice for
 	// why Codex runs stay local.
 	RemoteControl bool
+	// Definitions is the agent registry this runner renders invocations from.
+	// A nil registry falls back to the run's own, which is the built-in
+	// definitions until a config file replaces them.
+	Definitions *agents.Registry
 	// agentCursor is shared across copies of CommandRunner (via pointer) so
 	// round robin selection advances consistently regardless of how many
 	// times the struct is copied.
@@ -1581,59 +1617,49 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		}
 	}
 	spec := r.specForSession(session)
-	if spec.Name == "codex" {
-		args := []string{"exec"}
-		if session.Resume {
-			args = append(args, "resume")
-		}
-		if r.Yolo {
-			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
-		}
-		if !session.Resume && spec.Model != "" {
-			args = append(args, "--model", spec.Model)
-		}
-		if !session.Resume && spec.Level != "" {
-			args = append(args, "-c", "model_reasoning_effort="+spec.Level)
-		}
-		if session.Resume {
-			args = append(args, session.ID)
-		}
-		return append(args, prompt)
+	definition, ok := r.definition(spec.Name)
+	if !ok {
+		return nil
 	}
-	args := []string{"-p"}
+	mode := agents.ModeRun
 	if session.Resume {
-		args = append(args, "--resume", session.ID)
-	} else if session.ID != "" {
-		args = append(args, "--session-id", session.ID)
+		mode = agents.ModeResume
 	}
-	if r.Yolo {
-		args = append(args, "--dangerously-skip-permissions")
-	} else {
-		// Print mode cannot prompt for tool approval. Let Claude make its normal
-		// permission decisions autonomously instead of silently denying the
-		// shell commands the issue workflow needs and exiting successfully.
-		args = append(args, "--permission-mode", "auto")
-	}
-	if r.RemoteControl {
+	// Every argument the agent takes -- which flag carries the model, whether
+	// approvals are bypassed, how a session is named and resumed, whether the
+	// output is asked for as a JSON stream -- comes from the definition. The
+	// values below are what one dispatch substitutes into it.
+	return definition.Render(mode, agents.Values{
+		Prompt:  prompt,
+		Session: session.ID,
+		Model:   spec.Model,
+		Level:   spec.Level,
+		Yolo:    r.Yolo,
 		// Claude only reads --remote-control on its interactive startup path,
 		// so under -p the flag alone does nothing. The bridge itself is not
 		// gated on interactive mode: it starts from remoteControlAtStartup,
 		// and --settings is an accepted source for that setting. Name the
 		// session after the issue so a run is identifiable in the app rather
-		// than appearing under a bare hostname.
-		args = append(args, "--settings", remoteControlSettings, "--rc", remoteControlSessionName(target, issue))
+		// than appearing under a bare hostname. An agent whose definition
+		// declares no remote-control fragment is passed none of this.
+		RemoteControl: r.RemoteControl,
+		Settings:      remoteControlSettings,
+		SessionName:   remoteControlSessionName(target, issue),
+	})
+}
+
+// definition resolves the agent a run is dispatching to. Runners built without
+// their own registry read the one the run was configured with.
+func (r CommandRunner) definition(name string) (agents.Definition, bool) {
+	return r.registry().Lookup(name)
+}
+
+// registry returns the agent definitions this runner dispatches from.
+func (r CommandRunner) registry() *agents.Registry {
+	if r.Definitions != nil {
+		return r.Definitions
 	}
-	if !session.Resume && spec.Model != "" {
-		args = append(args, "--model", spec.Model)
-	}
-	if !session.Resume && spec.Level != "" {
-		args = append(args, "--effort", spec.Level)
-	}
-	// Claude's default text output only prints once the full response is
-	// ready. Stream JSON events instead so the dashboard shows live progress
-	// the same way Codex's plain-text output already does.
-	args = append(args, "--output-format", "stream-json", "--verbose")
-	return append(args, prompt)
+	return agentRegistry()
 }
 
 func (r CommandRunner) Run(ctx context.Context, issue Issue) error {
@@ -1698,11 +1724,15 @@ func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.C
 }
 
 type sessionMetadataCaptureWriter struct {
-	mu               sync.Mutex
-	output           io.Writer
-	buffer           []byte
-	onUpdate         func(AgentSession)
-	captureSession   bool
+	mu             sync.Mutex
+	output         io.Writer
+	buffer         []byte
+	onUpdate       func(AgentSession)
+	captureSession bool
+	// sessionPattern reads the session ID out of a line of agent output. It
+	// comes from the agent's definition; a nil pattern falls back to the
+	// shape Codex prints.
+	sessionPattern   *regexp.Regexp
 	sessionCaptured  bool
 	checkoutCaptured bool
 }
@@ -1731,8 +1761,12 @@ func (w *sessionMetadataCaptureWriter) Write(p []byte) (int, error) {
 
 func (w *sessionMetadataCaptureWriter) captureLine(line string) {
 	if w.captureSession && !w.sessionCaptured {
-		match := codexSessionIDPattern.FindStringSubmatch(line)
-		if len(match) == 2 {
+		pattern := w.sessionPattern
+		if pattern == nil {
+			pattern = codexSessionIDPattern
+		}
+		match := pattern.FindStringSubmatch(line)
+		if len(match) >= 2 && match[1] != "" {
 			w.sessionCaptured = true
 			w.onUpdate(AgentSession{ID: match[1]})
 		}
@@ -1922,11 +1956,29 @@ func truncateToolUseDetail(value string, isPath bool) string {
 }
 
 func (r CommandRunner) binary(agent string) string {
-	if agent == "codex" && r.CodexBinary != "" {
-		return r.CodexBinary
+	switch agent {
+	case "codex":
+		if r.CodexBinary != "" {
+			return r.CodexBinary
+		}
+	case "claude":
+		if r.ClaudeBinary != "" {
+			return r.ClaudeBinary
+		}
+	default:
+		// An agent declared in the config file has no executable flag of its
+		// own, and Binary holds the default agent's, so it is invoked through
+		// the executable its own definition names. Registry-driven per-agent
+		// binary flags are issue #489.
+		if definition, ok := r.definition(agent); ok && definition.Binary != "" {
+			return definition.Binary
+		}
 	}
-	if agent == "claude" && r.ClaudeBinary != "" {
-		return r.ClaudeBinary
+	if r.Binary != "" {
+		return r.Binary
+	}
+	if definition, ok := r.definition(agent); ok {
+		return definition.Binary
 	}
 	return r.Binary
 }
@@ -1990,8 +2042,9 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 	// failure nobody can act on; the issue workflow is re-entrant and adopts
 	// the existing draft pull request.
 	session.Resume = false
-	if r.specForSession(session).Name == "codex" {
-		// Codex assigns its own session IDs and reports the new one on stdout.
+	if definition, ok := r.definition(r.specForSession(session).Name); ok && definition.Session.ClearOnResumeFailure {
+		// The agent assigns its own session IDs and reports the new one on
+		// stdout, so the restarted run cannot reuse the one that is gone.
 		session.ID = ""
 	}
 	runErr, _ = r.runOnce(ctx, issue, session, updateSession, jobOutput)
@@ -2000,15 +2053,19 @@ func (r CommandRunner) run(ctx context.Context, issue Issue, session AgentSessio
 
 func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSession, updateSession func(AgentSession), jobOutput io.Writer) (error, bool) {
 	agent := r.specForSession(session).Name
+	definition, ok := r.definition(agent)
+	if !ok {
+		return unknownAgentError(r.registry(), agent), false
+	}
 	args := commandArgsForSession(r, issue, session)
 	cmd := newAgentCommand(ctx, r.binary(agent), args...)
-	if agent == "claude" {
-		// Claude Code's headless print mode (-p) caps how long it waits for
-		// in-flight background shell tasks before terminating them (10
-		// minutes by default). glorp dispatches claude for long-lived
-		// autonomous work, so disable the ceiling to prevent it from killing
-		// legitimate background tasks mid-run (issue #330).
-		cmd.Env = append(os.Environ(), "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0")
+	// The definition's env is what the agent needs beyond glorp's own
+	// environment: Claude's headless print mode, for instance, caps how long
+	// it waits for in-flight background shell tasks before terminating them
+	// (10 minutes by default), and glorp dispatches it for long-lived
+	// autonomous work (issue #330).
+	if env := definitionEnv(definition); len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
 	}
 	// Before a checkout directory exists, run outside glorp's own working
 	// directory so the agent cannot mistake an ambient git repo (e.g. the repo
@@ -2038,12 +2095,13 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	if updateSession != nil {
 		metadataOutput = &sessionMetadataCaptureWriter{
 			output: agentOutput, onUpdate: updateSession,
-			captureSession: agent == "codex" && !session.Resume,
+			captureSession: definition.CapturesSessionID() && !session.Resume,
+			sessionPattern: definition.SessionPattern(),
 		}
 		agentOutput = metadataOutput
 	}
 	var claudeOutput *claudeJSONOutputWriter
-	if agent == "claude" {
+	if definition.Output.Format == agents.FormatStreamJSON {
 		claudeOutput = newClaudeJSONOutputWriter(agentOutput)
 		agentOutput = claudeOutput
 	}
