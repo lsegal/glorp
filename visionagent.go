@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/lsegal/glorp/agents"
 	"github.com/lsegal/glorp/browser"
 	"github.com/lsegal/glorp/process"
 )
@@ -20,12 +21,17 @@ type visionAgentRunner struct {
 // advancing the round-robin cursor that load balances real issue dispatch.
 func (v visionAgentRunner) VisionAgent() browser.AgentSpec {
 	spec := v.runner.specForSession(AgentSession{})
+	var definition *agents.Definition
+	if found, ok := v.runner.definition(spec.Name); ok {
+		definition = &found
+	}
 	return browser.AgentSpec{
-		Name:   spec.Name,
-		Binary: v.runner.binary(spec.Name),
-		Model:  spec.Model,
-		Level:  spec.Level,
-		Yolo:   v.runner.Yolo,
+		Name:       spec.Name,
+		Definition: definition,
+		Binary:     v.runner.binary(spec.Name),
+		Model:      spec.Model,
+		Level:      spec.Level,
+		Yolo:       v.runner.Yolo,
 	}
 }
 

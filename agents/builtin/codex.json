@@ -1,0 +1,33 @@
+{
+  "name": "codex",
+  "binary": "codex",
+  "levels": ["low", "medium", "high"],
+  "session": {
+    "assign": "capture",
+    "capture": "(?i)session id:\\s*([0-9a-f]{8}-[0-9a-f-]{27,})",
+    "clearOnResumeFailure": true
+  },
+  "output": {"format": "text"},
+  "quota": {"reader": "codex"},
+  "args": {
+    "run": [
+      {"args": ["exec"]},
+      {"when": "yolo", "args": ["--dangerously-bypass-approvals-and-sandbox"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["-c", "model_reasoning_effort={level}"]},
+      {"args": ["{prompt}"]}
+    ],
+    "resume": [
+      {"args": ["exec", "resume"]},
+      {"when": "yolo", "args": ["--dangerously-bypass-approvals-and-sandbox"]},
+      {"args": ["{session}", "{prompt}"]}
+    ],
+    "vision": [
+      {"args": ["exec", "--image", "{image}"]},
+      {"when": "yolo", "args": ["--dangerously-bypass-approvals-and-sandbox"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["-c", "model_reasoning_effort={level}"]},
+      {"args": ["{prompt}"]}
+    ]
+  }
+}

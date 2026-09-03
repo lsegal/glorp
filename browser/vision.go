@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lsegal/glorp/agents"
 )
 
 // The screenshot fallback exists for one situation only: GitHub changed its
@@ -172,9 +174,14 @@ func (v *Vision) log(format string, args ...interface{}) {
 // AgentSpec names the one-shot coding-agent invocation a vision recovery is
 // made with: which agent, run how, from which executable.
 type AgentSpec struct {
-	// Name is the agent provider, "codex" or "claude", which decides how the
-	// screenshot is handed over.
+	// Name is the agent provider, which decides how the screenshot is handed
+	// over.
 	Name string
+	// Definition is that provider's agent definition, which carries the argv
+	// template the invocation is rendered from. The root package supplies the
+	// one the run was configured with; a spec that names only an agent falls
+	// back to the built-in definition of that name.
+	Definition *agents.Definition
 	// Binary is the executable that provider is invoked through.
 	Binary string
 	// Model and Level are the model and reasoning level to ask for. Both are
@@ -243,37 +250,40 @@ func (a visionAgent) Ask(ctx context.Context, screenshot []byte, pageURL string,
 	return parseVisionRefs(output, qualified)
 }
 
-// visionArgs builds the one-shot agent invocation. Codex takes the image
-// as a flag; Claude reads the path named in the prompt. Neither is asked for
-// structured streaming output, because the answer is expected to be one line.
+// visionArgs builds the one-shot agent invocation from the agent's own
+// definition: how the image is handed over is the definition's vision template,
+// which for Codex takes the image as a flag and for Claude leaves it to the
+// path named in the prompt. Neither is asked for structured streaming output,
+// because the answer is expected to be one line. An agent whose definition
+// declares no vision template renders nothing, and the caller reports that
+// rather than invoking it with a bare prompt.
 func visionArgs(spec AgentSpec, imagePath, pageURL string, qualified bool) []string {
-	prompt := visionPrompt(imagePath, pageURL, qualified)
-	if spec.Name == "codex" {
-		args := []string{"exec", "--image", imagePath}
-		if spec.Yolo {
-			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
-		}
-		if spec.Model != "" {
-			args = append(args, "--model", spec.Model)
-		}
-		if spec.Level != "" {
-			args = append(args, "-c", "model_reasoning_effort="+spec.Level)
-		}
-		return append(args, prompt)
+	definition := spec.definition()
+	if definition == nil {
+		return nil
 	}
-	args := []string{"-p"}
-	if spec.Yolo {
-		args = append(args, "--dangerously-skip-permissions")
-	} else {
-		args = append(args, "--permission-mode", "auto")
+	return definition.Render(agents.ModeVision, agents.Values{
+		Prompt: visionPrompt(imagePath, pageURL, qualified),
+		Image:  imagePath,
+		Model:  spec.Model,
+		Level:  spec.Level,
+		Yolo:   spec.Yolo,
+	})
+}
+
+// builtinAgents is the fallback registry for a spec that names an agent
+// without carrying its definition, which is every spec built by a test.
+var builtinAgents = sync.OnceValue(agents.MustBuiltin)
+
+// definition resolves the definition the invocation is rendered from.
+func (s AgentSpec) definition() *agents.Definition {
+	if s.Definition != nil {
+		return s.Definition
 	}
-	if spec.Model != "" {
-		args = append(args, "--model", spec.Model)
+	if found, ok := builtinAgents().Lookup(s.Name); ok {
+		return &found
 	}
-	if spec.Level != "" {
-		args = append(args, "--effort", spec.Level)
-	}
-	return append(args, prompt)
+	return nil
 }
 
 // visionRefPattern is the only qualified answer shape accepted: an

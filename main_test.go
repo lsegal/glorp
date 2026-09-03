@@ -827,7 +827,10 @@ func TestMain(m *testing.M) {
 	if log := os.Getenv(fakeAgentLogEnv); log != "" {
 		os.Exit(runFakeAgent(log, os.Args[1:]))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	// The contract harness builds testdata/fakeagent once for the whole suite.
+	removeFakeAgentCLI()
+	os.Exit(code)
 }
 
 // runFakeAgent records the invocation and answers a resume the way a dead
