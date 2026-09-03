@@ -821,6 +821,12 @@ const (
 	fakeAgentLogEnv          = "GLORP_FAKE_AGENT_LOG"
 	fakeAgentResumeOutputEnv = "GLORP_FAKE_AGENT_RESUME_OUTPUT"
 	fakeAgentResumeCodeEnv   = "GLORP_FAKE_AGENT_RESUME_CODE"
+	// The two below let the stub stand in for any agent CLI rather than only
+	// for a dead resume: a fresh run can be told to print a session ID line, a
+	// GLORP_CHECKOUT_DIRECTORY marker, or stream-json events, and to fail.
+	// See agentcontract_test.go, which drives a definition through them.
+	fakeAgentRunOutputEnv = "GLORP_FAKE_AGENT_RUN_OUTPUT"
+	fakeAgentRunCodeEnv   = "GLORP_FAKE_AGENT_RUN_CODE"
 )
 
 func TestMain(m *testing.M) {
@@ -866,7 +872,22 @@ func runFakeAgent(log string, args []string) int {
 			return code
 		}
 	}
-	fmt.Println("started")
+	output, configured := os.LookupEnv(fakeAgentRunOutputEnv)
+	if !configured {
+		fmt.Println("started")
+		return 0
+	}
+	if output != "" {
+		fmt.Println(output)
+	}
+	if code := os.Getenv(fakeAgentRunCodeEnv); code != "" {
+		exit, err := strconv.Atoi(code)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return exit
+	}
 	return 0
 }
 

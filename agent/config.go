@@ -26,6 +26,21 @@ type config struct {
 // alone. Anything else wrong with the file is, and the error names the file,
 // the agent, and the field, because a definition that is silently dropped is
 // indistinguishable from a typo in --agent.
+//
+// Merging is field by field. A definition whose name matches a built-in
+// overrides only the fields it states; everything it leaves out keeps the
+// built-in value, so a file that changes nothing but the binary does not have
+// to restate the argv. A name the built-ins do not define registers a new
+// agent, which then has to supply the fields a definition needs on its own.
+//
+// An inherited field is nulled out by stating its empty value rather than by
+// omitting it, since omission is what "keep the built-in" means: "binary": ""
+// (rejected, an agent needs one), "levels": [] to drop an allow-list,
+// "env": null to drop every inherited variable, "args": {"vision": []} to say
+// the agent has no such invocation, and "capturePattern": "" to stop reading a
+// session ID off stdout. Maps merge key by key, so "env" is the one field
+// where a partial object adds to what the built-in set rather than replacing
+// it; null replaces it with nothing.
 func Load(path string) (*Registry, error) {
 	registry, err := Builtins()
 	if err != nil {
@@ -89,8 +104,18 @@ func agentEntries(source string, raw json.RawMessage) ([]agentEntry, error) {
 			return nil, fmt.Errorf("decode agent config %s: field %q: %w", source, "agents", err)
 		}
 		entries := make([]agentEntry, 0, len(list))
-		for _, item := range list {
-			entries = append(entries, agentEntry{raw: item})
+		for i, item := range list {
+			// The array form carries each agent's name inside the definition,
+			// so it has to be read before the merge rather than after: the name
+			// is what decides whether this overrides a built-in or adds an
+			// agent.
+			var named struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(item, &named); err != nil {
+				return nil, fmt.Errorf("decode agent config %s: field %q: entry %d: %w", source, "agents", i, err)
+			}
+			entries = append(entries, agentEntry{name: named.Name, raw: item})
 		}
 		return entries, nil
 	}
