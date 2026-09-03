@@ -17,7 +17,7 @@ Install and configure these tools before installing glorp:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with access to every repository glorp will watch.
 - [Node.js](https://nodejs.org/) and `npx`. The installer uses `npx` to install the bundled `gh-fix` and `gh-discuss` skills through skills.sh.
-- [ngrok](https://ngrok.com/) for the default webhook mode. Configure its authentication before starting glorp. ngrok is not required with `--poll`.
+- [ngrok](https://ngrok.com/) for the default webhook mode. Installing it is optional: glorp runs `npx ngrok` when no `ngrok` is on `PATH`, so the Node.js above is enough. Configure ngrok authentication before starting glorp either way. ngrok is not required with `--poll`.
 - A Chromium-based browser ([Chrome](https://www.google.com/chrome/), Chromium, or Edge) for `--browser` mode. Only required with `--browser`, which needs no ngrok tunnel and no extra token. Safari cannot be used: it does not speak the DevTools Protocol. Browser mode reads GitHub as a signed-in user would, and glorp's browser profile starts signed out, so run `glorp auth` once before watching anything private; see [`glorp auth`](#glorp-auth).
 - At least one supported coding agent: [Codex CLI](https://developers.openai.com/codex/cli/) (`codex`) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`).
 
@@ -248,7 +248,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--interval DURATION` | `30s` | Periodic GitHub synchronization interval. Uses Go duration syntax such as `10s`, `2m`, or `1h30m`; must be positive. |
 | `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | Deprecated and ignored. The public tunnel URL is read from the log of the ngrok process glorp starts. |
-| `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. |
+| `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. Left at its default, glorp falls back to `npx --yes ngrok` when no `ngrok` is installed; set to anything else, the named executable must exist. |
 | `--ui MODE` | `web` | Select the UI: `web`, `tui`, or `none`. |
 | `--no-ui` | `false` | Disable all UI; equivalent to `--ui none`. |
 | `--poll` | `false` | Use polling without starting ngrok or configuring GitHub webhooks. |

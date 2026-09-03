@@ -46,7 +46,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("listen", ":0", "address for the GitHub webhook server")
 	flags.String("webhook-path", "/webhook", "path for GitHub webhook deliveries")
 	flags.String("webhook-secret", "", "optional GitHub webhook secret")
-	flags.String("ngrok-binary", "ngrok", "ngrok executable")
+	flags.String("ngrok-binary", ngrok.DefaultBinary, "ngrok executable; fetched through npx when not installed")
 	flags.String("ngrok-api", "http://127.0.0.1:4040", "deprecated and ignored: the tunnel URL is read from ngrok's own log")
 	flags.String("ui", "web", "user interface: web, tui, or none")
 	flags.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
