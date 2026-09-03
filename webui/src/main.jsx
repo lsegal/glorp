@@ -19,6 +19,7 @@ import { createRoot } from "react-dom/client";
 import {
 	buildSettingsUpdate,
 	deliveryLabel,
+	fetchAccess,
 	fetchSettings,
 	jobActionAvailability,
 	jobAgentSummary,
@@ -59,6 +60,22 @@ function useDashboardState() {
 		};
 	}, []);
 	return [state, connected];
+}
+
+// useReadOnly reports whether this page reached the published dashboard, which
+// serves the same state but accepts none of its actions (issue #508).
+function useReadOnly() {
+	const [readOnly, setReadOnly] = useState(false);
+	useEffect(() => {
+		let stopped = false;
+		fetchAccess().then((access) => {
+			if (!stopped) setReadOnly(access.readOnly);
+		});
+		return () => {
+			stopped = true;
+		};
+	}, []);
+	return readOnly;
 }
 
 function ScrollViewport({ value, empty = "waiting for output...", status }) {
@@ -110,7 +127,7 @@ function JobIcon({ status }) {
 	return <Circle className="status-icon queued" aria-label="queued" />;
 }
 
-function JobCard({ job }) {
+function JobCard({ job, readOnly = false }) {
 	const [pendingAction, setPendingAction] = useState("");
 	const [actionError, setActionError] = useState("");
 	const available = jobActionAvailability(job.Status);
@@ -143,24 +160,26 @@ function JobCard({ job }) {
 				<Cpu /> agent: {jobAgentSummary(job)}
 			</div>
 			<div className="job-viewport">
-				<div className="viewport-actions">
-					<button
-						type="button"
-						disabled={!available.retry || pendingAction !== ""}
-						onClick={() => runAction("retry")}
-						title={actionError || "Retry gh-fix"}
-					>
-						<ArrowPathIcon /> Retry
-					</button>
-					<button
-						type="button"
-						disabled={!available.stop || pendingAction !== ""}
-						onClick={() => runAction("stop")}
-						title={actionError || "Stop gh-fix"}
-					>
-						<StopIcon /> Stop
-					</button>
-				</div>
+				{!readOnly && (
+					<div className="viewport-actions">
+						<button
+							type="button"
+							disabled={!available.retry || pendingAction !== ""}
+							onClick={() => runAction("retry")}
+							title={actionError || "Retry gh-fix"}
+						>
+							<ArrowPathIcon /> Retry
+						</button>
+						<button
+							type="button"
+							disabled={!available.stop || pendingAction !== ""}
+							onClick={() => runAction("stop")}
+							title={actionError || "Stop gh-fix"}
+						>
+							<StopIcon /> Stop
+						</button>
+					</div>
+				)}
 				<ScrollViewport
 					value={job.Log}
 					status={`clone: ${job.CheckoutDirectory || "pending"}`}
@@ -339,6 +358,7 @@ function SettingsModal({ onClose }) {
 
 function App() {
 	const [state, connected] = useDashboardState();
+	const readOnly = useReadOnly();
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const snapshot = state.snapshot || emptyState.snapshot;
 	return (
@@ -352,15 +372,22 @@ function App() {
 					</h1>
 				</div>
 				<div className="masthead-actions">
-					<button
-						type="button"
-						className="settings-button"
-						onClick={() => setSettingsOpen(true)}
-						aria-label="Open settings"
-						title="Settings"
-					>
-						<Cog6ToothIcon />
-					</button>
+					{readOnly && (
+						<div className="read-only" title="Published dashboard: view only">
+							read-only
+						</div>
+					)}
+					{!readOnly && (
+						<button
+							type="button"
+							className="settings-button"
+							onClick={() => setSettingsOpen(true)}
+							aria-label="Open settings"
+							title="Settings"
+						>
+							<Cog6ToothIcon />
+						</button>
+					)}
 					<div className={`connection ${connected ? "online" : "offline"}`}>
 						<i />
 						{connected ? "live" : "reconnecting"}
@@ -372,7 +399,11 @@ function App() {
 			<section className="job-grid" aria-label="Agent jobs">
 				{(snapshot.Jobs || []).length ? (
 					snapshot.Jobs.map((job) => (
-						<JobCard key={`${job.Target}#${job.Number}`} job={job} />
+						<JobCard
+							key={`${job.Target}#${job.Number}`}
+							job={job}
+							readOnly={readOnly}
+						/>
 					))
 				) : (
 					<div className="empty-jobs">

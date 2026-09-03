@@ -118,3 +118,19 @@ export async function submitSettings(update) {
 	}
 	return response.json();
 }
+
+// fetchAccess reports what the dashboard this page is talking to allows. The
+// published dashboard (issue #508) is read-only, so the controls that would
+// retry, stop, or reconfigure a run are left out of a remote view rather than
+// shown and failing. Anything that cannot be read is treated as the local
+// dashboard, which is the one that has always allowed everything.
+export async function fetchAccess() {
+	try {
+		const response = await fetch("/api/access", { cache: "no-store" });
+		if (!response.ok) return { readOnly: false };
+		const access = await response.json();
+		return { readOnly: access?.readOnly === true };
+	} catch {
+		return { readOnly: false };
+	}
+}

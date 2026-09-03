@@ -508,3 +508,15 @@ h1 .version {
 		min-width: 0;
 	}
 }
+.read-only {
+	display: inline-flex;
+	align-items: center;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: #18181bcc;
+	color: var(--muted);
+	padding: 4px 10px;
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}

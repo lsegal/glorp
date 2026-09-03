@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildSettingsUpdate,
 	deliveryLabel,
+	fetchAccess,
 	fetchSettings,
 	formatInterval,
 	jobActionAvailability,
@@ -246,5 +247,32 @@ describe("deliveryLabel interval spelling", () => {
 		expect(deliveryLabel({ Interval: 3600 * 1_000_000_000 })).toBe(
 			"polling every 1h",
 		);
+	});
+});
+
+describe("fetchAccess", () => {
+	it("reports a published dashboard as read-only", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ readOnly: true }),
+		});
+		vi.stubGlobal("fetch", fetch);
+		expect(await fetchAccess()).toEqual({ readOnly: true });
+		expect(fetch).toHaveBeenCalledWith("/api/access", { cache: "no-store" });
+	});
+
+	it("reports the loopback dashboard as fully accessible", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
+		);
+		expect(await fetchAccess()).toEqual({ readOnly: false });
+	});
+
+	it("falls back to full access when the endpoint cannot be read", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+		expect(await fetchAccess()).toEqual({ readOnly: false });
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+		expect(await fetchAccess()).toEqual({ readOnly: false });
 	});
 });
