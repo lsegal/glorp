@@ -193,3 +193,51 @@ func TestGhFixNeverResplitsAnIssueWithSubIssues(t *testing.T) {
 		}
 	}
 }
+
+func TestGhFixDetectsDoNotMergeDirectives(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"Determine whether the issue withholds merge authorization",
+		"a label that reads as a merge hold",
+		"`donotmerge`, `do-not-merge`, `do not merge`, `no-merge`, `hold`, `needs-review`",
+		"ignoring spaces, hyphens, and underscores",
+		"asking that the fix not be merged, be left open, or stop before merging",
+		"the most recent statement wins",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require do-not-merge detection %q", required)
+		}
+	}
+}
+
+func TestGhFixHoldsReadyPullRequestInsteadOfMerging(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"## Hold the pull request when merging is withheld",
+		"ends with a ready, unmerged pull request",
+		"marking the pull request ready for review, and driving CI to completion all still happen",
+		"Do not merge the pull request, do not delete the branch, and do not close the originating issue",
+		"Never merge past a hold because CI came back green",
+		"Say the ticket is **Ready**",
+		"Skip this section entirely when the issue withheld merge authorization",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require holding the pull request %q", required)
+		}
+	}
+}
+
+func TestGhFixFilesNoFollowUpIssuesOnAHeldRun(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"Do not create, reuse, or route follow-up issues on a held run",
+		"`Follow-ups (not filed)`",
+		"linking any equivalent existing open issue rather than opening anything new",
+		"a held pull request files no follow-up issues at all",
+		"list the follow-up items reported there as unfiled rather than as issue URLs",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not suppress follow-up issues on a held run %q", required)
+		}
+	}
+}
