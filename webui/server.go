@@ -91,6 +91,12 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ui.serveSettings(w, r)
 		return
 	}
+	// The loopback dashboard allows everything; the published one (issue #508)
+	// answers this itself and reports that it does not.
+	if r.URL.Path == AccessPath {
+		writeAccess(w, false)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

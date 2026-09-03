@@ -51,6 +51,7 @@ func watchFlagSet(agents *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.String("ui", "web", "user interface: web, tui, or none")
 	flags.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
 	flags.Int("web-ui-port", webui.DefaultPort, "starting port for the browser UI")
+	flags.Bool("web-ui-public", false, "publish the browser UI through an ngrok tunnel so it can be read from a phone or another machine; the published dashboard is read-only, needs the access token in the link glorp prints once at startup, and exposes the watched repositories, issue titles, and every line the agents print")
 	flags.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	flags.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	flags.Var(agents, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
@@ -105,6 +106,7 @@ func runWatch(args []string) int {
 	uiMode := flagValue[string](flags, "ui")
 	noUI := flagValue[bool](flags, "no-ui")
 	webUIPort := flagValue[int](flags, "web-ui-port")
+	webUIPublic := flagValue[bool](flags, "web-ui-public")
 	yolo := flagValue[bool](flags, "yolo")
 	concurrency := flagValue[int](flags, "concurrency")
 	readyState := flagValue[string](flags, "ready-state")
@@ -148,6 +150,10 @@ func runWatch(args []string) int {
 	}
 	if mode == "web" && (webUIPort < 1 || webUIPort > 65535) {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
+		return 2
+	}
+	if webUIPublic && mode != "web" {
+		fmt.Fprintln(os.Stderr, "--web-ui-public publishes the browser UI, so it needs --ui web")
 		return 2
 	}
 	limit := concurrency
@@ -237,6 +243,18 @@ func runWatch(args []string) int {
 	} else if mode == "none" {
 		fmt.Fprintln(output, "UI disabled")
 	}
+	// The published dashboard is a second, guarded view of the same server
+	// (issue #508). It is created here so the tunnel that carries it — the
+	// webhook run's own, or one started below for a polling run — has something
+	// to point at.
+	var publicUI *webui.PublicAccess
+	if webUI != nil && webUIPublic {
+		publicUI, err = webui.NewPublicAccess(webUI)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	// --remote-control reads as one switch for both agents, but there is nothing
 	// for it to pass to a Codex run. Say so once at startup rather than leaving an
 	// opted-in Codex watch to wonder why nothing reached the phone.
@@ -289,7 +307,14 @@ func runWatch(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		server = &http.Server{Addr: listen, Handler: WebhookHandler{Events: events, Secret: webhookSecret, WebhookPath: webhookPath}}
+		handler := http.Handler(WebhookHandler{Events: events, Secret: webhookSecret, WebhookPath: webhookPath})
+		if publicUI != nil {
+			// One tunnel carries both: ngrok's free plan allows a single agent
+			// session, so a second tunnel for the dashboard would cost this run
+			// the webhooks it exists for.
+			handler = publicUI.Mux(webhookPath, handler)
+		}
+		server = &http.Server{Addr: listen, Handler: handler}
 		go func() {
 			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "webhook server: %v\n", err)
@@ -312,6 +337,10 @@ func runWatch(args []string) int {
 			return 1
 		}
 		fmt.Fprintf(output, "ngrok tunnel ready at %s\n", tunnel.URL())
+		if err := announcePublicWebUI(output, webUI, publicUI, tunnel.URL()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		configured := 0
 		for _, target := range targets {
 			if _, err := gh.ConfigureWebhook(ctx, target, endpoint, webhookSecret); err != nil {
@@ -336,6 +365,36 @@ func runWatch(args []string) int {
 		// again, so keep reconciling while the daemon runs (issue #238).
 		w.Webhooks = newWebhookReconciler(gh, targets, endpoint, webhookSecret, w.logf).reconcile
 	}
+	// A polling run has no tunnel of its own, so publishing the dashboard means
+	// starting one for it, pointed at a loopback listener that serves only the
+	// guarded view. The dashboard's own listener stays unauthenticated on
+	// localhost either way, so `glorp ui` is unaffected.
+	if poll && publicUI != nil {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "listen for the published web UI: %v\n", err)
+			return 1
+		}
+		publicServer := &http.Server{Handler: publicUI}
+		go func() {
+			if err := publicServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "published web UI server: %v\n", err)
+			}
+		}()
+		defer publicServer.Close()
+		publicAddr := listener.Addr().String()
+		fmt.Fprintf(output, "starting ngrok tunnel for the web UI on %s\n", publicAddr)
+		tunnel, err := ngrok.Start(ctx, ngrokBinary, publicAddr, output)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		defer tunnel.Close()
+		if err := announcePublicWebUI(output, webUI, publicUI, tunnel.URL()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	if err := w.Run(ctx); err != nil {
 		if ui != nil {
 			ui.program.Quit()
@@ -347,6 +406,28 @@ func runWatch(args []string) int {
 		ui.program.Quit()
 	}
 	return 0
+}
+
+// announcePublicWebUI hands the operator the one link that opens the published
+// dashboard, and no one else. The link carries the access token, so it goes to
+// the terminal only and is printed once: the dashboard's own log is visible to
+// everyone the link is given to and is served over the tunnel itself, so the
+// token would outlive the announcement there. The log gets the address without
+// it, which is what makes the publishing visible in the UI at all.
+func announcePublicWebUI(out io.Writer, webUI *webui.Server, public *webui.PublicAccess, tunnelURL string) error {
+	if public == nil {
+		return nil
+	}
+	link, err := public.LinkURL(tunnelURL)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "public web UI at %s\n", link)
+	fmt.Fprintln(out, "that link is the only way in and is printed once: anyone you give it to can read every watched repository, issue title, and line the agents print")
+	if webUI != nil {
+		webUI.Log("web UI published read-only at " + strings.TrimRight(tunnelURL, "/") + " (access token required)")
+	}
+	return nil
 }
 
 // splitAllowedCommenters parses the comma-separated --allowed-commenters
