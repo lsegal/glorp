@@ -80,6 +80,9 @@ func (w *ngrokLogWatcher) consume(line string) {
 	}
 	var record ngrokLogRecord
 	if err := json.Unmarshal([]byte(line), &record); err != nil {
+		if npmProgress(line) {
+			return
+		}
 		// Not a JSON record, so it cannot be classified; show it rather than
 		// swallow output that may explain a failure.
 		w.record(line, true)
@@ -148,18 +151,25 @@ func ngrokLogMessage(record ngrokLogRecord) string {
 }
 
 func Start(ctx context.Context, binary, listenAddr string, out io.Writer) (*Tunnel, error) {
+	invocation, err := resolveCommand(binary)
+	if err != nil {
+		return nil, err
+	}
+	if invocation.viaNpx && out != nil {
+		fmt.Fprintf(out, "no %s executable found; running ngrok through %s\n", binary, npxBinary)
+	}
 	// Agents abandoned by an earlier run hold the local ngrok API port and one
 	// of the account's simultaneous agent sessions, so clear them out before
 	// asking for a tunnel of glorp's own (issue #364).
 	reapOrphanedNgrokAgents(out)
 	watcher := &ngrokLogWatcher{out: out}
-	cmd := exec.CommandContext(ctx, binary, ngrokArgs(listenAddr)...)
+	cmd := exec.CommandContext(ctx, invocation.name, invocation.args(listenAddr)...)
 	cmd.Stdout, cmd.Stderr = watcher, watcher
 	if err := process.Start(cmd); err != nil {
 		return nil, fmt.Errorf("start ngrok: %w", err)
 	}
 	tunnel := &Tunnel{cmd: cmd}
-	deadline := time.NewTimer(10 * time.Second)
+	deadline := time.NewTimer(invocation.timeout())
 	defer deadline.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

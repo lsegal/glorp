@@ -108,3 +108,19 @@ func stubProcessSweep(t *testing.T, list func() ([]processEntry, error), termina
 		terminateOrphanProcess = terminate
 	}
 }
+
+// The npm package's bin is the ngrok agent itself rather than a Node shim, so
+// an agent glorp started through npx (issue #498) leaves the same argv behind
+// as an installed one and is reaped by the same match. Node is what npx runs,
+// not what the agent ends up being, so a stray npx must not be swept up with
+// it.
+func TestOrphanedNgrokAgentsMatchesAnNpxLaunchedAgent(t *testing.T) {
+	processes := parseProcessList(`
+  90100     1 /home/u/.npm/_npx/094a17e86d/node_modules/ngrok/bin/ngrok http --log=stdout --log-format=json --log-level=info 127.0.0.1:65026
+  90101     1 /usr/bin/node /home/u/.npm/_npx/094a17e86d/node_modules/.bin/npx --yes ngrok http --log=stdout
+`)
+	orphans := orphanedNgrokAgents(processes)
+	if len(orphans) != 1 || orphans[0].pid != 90100 {
+		t.Fatalf("selected %v, want only the npx-launched agent 90100", orphans)
+	}
+}
