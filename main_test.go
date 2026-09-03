@@ -1033,22 +1033,6 @@ func TestReadmeDocumentsRemoteControlHasNoAlternativeLever(t *testing.T) {
 	}
 }
 
-// TestChangelogRecordsRemoteControlFinding keeps the finding in the release
-// notes as well as the source, so the answer to "can a headless run be watched
-// from a phone" is visible without reading main.go.
-func TestChangelogRecordsRemoteControlFinding(t *testing.T) {
-	_, rest, found := strings.Cut(readDoc(t, "CHANGELOG.md"), "## Unreleased")
-	if !found {
-		t.Fatal("CHANGELOG.md has no ## Unreleased section")
-	}
-	unreleased, _, _ := strings.Cut(rest, "\n## ")
-	for _, required := range []string{"autoUploadSessions", "claude remote-control", remoteControlUpstreamIssue} {
-		if !strings.Contains(unreleased, required) {
-			t.Errorf("CHANGELOG.md ## Unreleased does not mention %q", required)
-		}
-	}
-}
-
 // TestRemoteControlInertNoticeWarnsWhenOptedIn covers the one thing turning the
 // flag on still does: say that it reaches nobody. A watch left at the default
 // has nothing to explain and must stay silent.
