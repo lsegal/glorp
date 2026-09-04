@@ -536,25 +536,77 @@ func joinVerticalWithGap(items []string, gap int) string {
 }
 
 func renderStatusBar(width int, items []string) string {
-	items = fitStatusBarItems(items, width)
-	cells := make([]string, len(items))
-	for i, item := range items {
-		cells[i] = statusBars[i%len(statusBars)].Render(item)
+	rows := wrapStatusBarItems(items, width)
+	lines := make([]string, 0, len(rows))
+	index := 0
+	for _, row := range rows {
+		row = fitStatusBarItems(row, width, index)
+		cells := make([]string, len(row))
+		for i, item := range row {
+			cells[i] = statusBars[(index+i)%len(statusBars)].Render(item)
+		}
+		index += len(row)
+		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, cells...)
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 // statusBarCellPadding is the horizontal padding statusBars adds to every cell
 // but the first, which fitStatusBarItems has to count as spent width.
 const statusBarCellPadding = 2
 
-// fitStatusBarItems shrinks the status bar's cells until the whole bar fits
-// the terminal. The quota cell grows with every agent a run is configured
-// with (issue #489), so a four-agent run would otherwise push the bar past
-// the terminal width and wrap it onto a second line, shoving the job grid up.
-// The widest cell is truncated first and repeatedly, so a long quota list
-// gives way before the counts and the targets beside it.
-func fitStatusBarItems(items []string, width int) []string {
+// minStatusBarCellWidth is the narrowest a status bar cell may be truncated to
+// before the bar stops squeezing and wraps onto another line (issue #616).
+// Under ten columns a section is shortened past the point of being readable.
+const minStatusBarCellWidth = 10
+
+// statusBarCellOverhead reports the columns the style at the given position in
+// the bar spends on padding, so the first cell of the bar costs nothing extra.
+func statusBarCellOverhead(index int) int {
+	if index%len(statusBars) == 0 {
+		return 0
+	}
+	return statusBarCellPadding
+}
+
+// wrapStatusBarItems groups the bar's sections into rows that each have room
+// to show every one of their sections at minStatusBarCellWidth. Rather than
+// truncate a section into an unreadable stub, the bar rolls onto another line
+// (issue #616). A row always keeps at least one section, so a terminal too
+// narrow for even one still gets a truncated cell instead of an empty bar.
+func wrapStatusBarItems(items []string, width int) [][]string {
+	if len(items) == 0 {
+		return nil
+	}
+	if width < 1 {
+		return [][]string{items}
+	}
+	var rows [][]string
+	var row []string
+	index, spent := 0, 0
+	for _, item := range items {
+		need := min(lipgloss.Width(item), minStatusBarCellWidth) + statusBarCellOverhead(index)
+		if len(row) > 0 && spent+need > width {
+			rows = append(rows, row)
+			row, spent = nil, 0
+			need = min(lipgloss.Width(item), minStatusBarCellWidth) + statusBarCellOverhead(index)
+		}
+		row = append(row, item)
+		spent += need
+		index++
+	}
+	return append(rows, row)
+}
+
+// fitStatusBarItems shrinks one row's cells until it fits the terminal. The
+// quota cell grows with every agent a run is configured with (issue #489), so
+// a four-agent run would otherwise push the bar past the terminal width and
+// wrap it mid-cell, shoving the job grid up. The widest cell is truncated
+// first and repeatedly, so a long quota list gives way before the counts and
+// the targets beside it, and no cell is squeezed below
+// minStatusBarCellWidth. offset is the row's first cell's position in the
+// whole bar, which decides how much padding each cell spends.
+func fitStatusBarItems(items []string, width, offset int) []string {
 	if width < 1 || len(items) == 0 {
 		return items
 	}
@@ -562,26 +614,30 @@ func fitStatusBarItems(items []string, width int) []string {
 	spent := func() int {
 		total := 0
 		for i, item := range fitted {
-			total += lipgloss.Width(item)
-			if i > 0 {
-				total += statusBarCellPadding
-			}
+			total += lipgloss.Width(item) + statusBarCellOverhead(offset+i)
 		}
 		return total
 	}
 	for spent() > width {
-		widest := 0
+		widest := -1
 		for i, item := range fitted {
-			if lipgloss.Width(item) > lipgloss.Width(fitted[widest]) {
+			if lipgloss.Width(item) <= minStatusBarCellWidth {
+				continue
+			}
+			if widest < 0 || lipgloss.Width(item) > lipgloss.Width(fitted[widest]) {
 				widest = i
 			}
 		}
-		room := lipgloss.Width(fitted[widest]) - (spent() - width)
-		if room < 1 {
-			// Every cell is already as short as it can usefully be; leave the
-			// rest rather than looping on zero-width cells.
-			room = 1
+		if widest < 0 {
+			// Every cell already sits at the minimum useful width, which only
+			// leaves the bar over budget on a terminal too narrow for a single
+			// section. Truncate that lone cell rather than overflow.
+			if len(fitted) == 1 {
+				fitted[0] = truncate(fitted[0], max(1, width-statusBarCellOverhead(offset)))
+			}
+			break
 		}
+		room := max(minStatusBarCellWidth, lipgloss.Width(fitted[widest])-(spent()-width))
 		shrunk := truncate(fitted[widest], room)
 		if shrunk == fitted[widest] {
 			break
