@@ -1,6 +1,7 @@
 {
   "name": "agy",
   "binary": "agy",
+  "defaultModel": "claude-sonnet-4-6",
   "levels": ["low", "medium", "high"],
   "session": {"assign": "none"},
   "output": {"format": "text"},
