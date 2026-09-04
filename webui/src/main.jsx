@@ -22,7 +22,7 @@ import {
 	agentSpecOptions,
 	buildSettingsUpdate,
 	deliveryLabel,
-	fetchSettings,
+	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
 	submitJobAction,
@@ -220,10 +220,15 @@ function SettingsModal({ onClose }) {
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
 	useEffect(() => {
-		let cancelled = false;
-		fetchSettings()
+		// The dashboard can start serving before glorp's run loop is ready to
+		// answer a settings request -- in webhook mode, ngrok startup and
+		// per-target webhook configuration can take several seconds. Retrying
+		// with backoff here keeps the modal on its loading state through that
+		// window instead of surfacing it as an error the user can't act on
+		// (issue #579).
+		const controller = new AbortController();
+		fetchSettingsWithRetry(controller.signal)
 			.then((snapshot) => {
-				if (cancelled) return;
 				setAgentOptions(agentOptionsFrom(snapshot));
 				setReadyStateDefault(snapshot.readyStateDefault ?? "");
 				setForm({
@@ -233,9 +238,9 @@ function SettingsModal({ onClose }) {
 					agent: snapshot.agent ?? "",
 				});
 			})
-			.catch((err) => !cancelled && setError(err.message));
+			.catch((err) => err.name !== "AbortError" && setError(err.message));
 		return () => {
-			cancelled = true;
+			controller.abort();
 		};
 	}, []);
 	const update = (field) => (event) =>
