@@ -173,6 +173,30 @@ func TestGHCLIPostCommentReturnsError(t *testing.T) {
 	}
 }
 
+func TestGHCLIAddReaction(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte(`{}`), nil
+	}}
+	if err := gh.AddReaction(context.Background(), "owner/repo", 42, "eyes"); err != nil {
+		t.Fatalf("AddReaction: %v", err)
+	}
+	want := []string{"api", "repos/owner/repo/issues/comments/42/reactions", "-f", "content=eyes"}
+	if !reflect.DeepEqual(calls[0], want) {
+		t.Fatalf("call = %#v, want %#v", calls[0], want)
+	}
+}
+
+func TestGHCLIAddReactionReturnsError(t *testing.T) {
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte("boom"), errors.New("exit status 1")
+	}}
+	if err := gh.AddReaction(context.Background(), "owner/repo", 42, "eyes"); err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
 func TestGHCLIListComments(t *testing.T) {
 	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`[{"body":"Starting work on this issue /glorp:AAA","created_at":"2026-07-20T12:00:00Z"}]`), nil

@@ -2195,6 +2195,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}
 			}
 			if event.Kind == "issue_comment" && event.Action == "created" && mentionedIdentity(event.CommentBody, w.Identity) {
+				// Acknowledge the mention was read regardless of whether it goes on
+				// to authorize a run (issue #581): a human watching the thread should
+				// see the eyes reaction even when the mention is stale or from an
+				// unauthorized commenter, since either way this instance saw it.
+				if reactor, ok := w.Comments.(CommentReactor); ok && event.CommentID != 0 {
+					if err := reactor.AddReaction(ctx, event.Repository, event.CommentID, "eyes"); err != nil {
+						w.logf("issue #%d failed to react to mention of instance %s: %v", event.IssueNumber, w.Identity, err)
+					}
+				}
 				// A mention in the webhook payload alone is not enough to trigger a
 				// run (issue #294): the mentioning comment must also be the current
 				// last comment and come from an allowed commenter, both reverified
