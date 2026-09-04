@@ -2116,8 +2116,14 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		detector = &missingSessionDetector{output: agentOutput}
 		agentOutput = detector
 	}
+	var ansiOutput *ansiStrippingWriter
+	if definition.Output.Format != agents.FormatStreamJSON {
+		ansiOutput = &ansiStrippingWriter{output: agentOutput}
+		agentOutput = ansiOutput
+	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := process.Run(cmd)
+	ansiOutput.Flush()
 	if claudeOutput != nil {
 		if err := claudeOutput.Flush(); runErr == nil && err != nil {
 			runErr = err
@@ -2154,6 +2160,60 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 // percent-encoding.
 const agentOutputTailLimit = 4000
 
+// ansiStrippingWriter removes terminal control sequences from a text-format
+// agent's output before anything downstream sees it. Agents whose output is a
+// JSON event stream never emit them, but a plain-text CLI writes them even to a
+// pipe: opencode, for instance, prefixes every tool call it runs with a colored
+// marker, so the dashboard job log would otherwise accumulate raw escape bytes
+// that a browser renders as garbage (issue #531). Stripping here, outermost in
+// the writer chain, also means the session and missing-session matchers below
+// read uncolored text.
+type ansiStrippingWriter struct {
+	mu      sync.Mutex
+	output  io.Writer
+	pending []byte
+}
+
+// ansiHoldbackLimit caps how much of a trailing, still-incomplete escape
+// sequence is held back for the next write. Real sequences are far shorter, so
+// a longer run of bytes after an ESC is stray data that should be emitted
+// rather than buffered forever.
+const ansiHoldbackLimit = 32
+
+func (w *ansiStrippingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	buf := append(w.pending, p...)
+	w.pending = nil
+	// A sequence can straddle two writes, so hold back a trailing escape that
+	// has not terminated yet instead of passing its bytes through as text.
+	if idx := bytes.LastIndexByte(buf, 0x1b); idx >= 0 && len(buf)-idx <= ansiHoldbackLimit {
+		if ansiIncompletePrefixPattern.Match(buf[idx:]) {
+			w.pending = append([]byte(nil), buf[idx:]...)
+			buf = buf[:idx]
+		}
+	}
+	if cleaned := ansiEscapePattern.ReplaceAll(buf, nil); len(cleaned) > 0 {
+		if _, err := w.output.Write(cleaned); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+// Flush discards any held-back bytes once the agent has exited and no
+// terminating byte is coming.
+func (w *ansiStrippingWriter) Flush() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// Anything still held back is an escape sequence the agent never finished,
+	// so it is dropped rather than surfaced as literal bytes.
+	w.pending = nil
+}
+
 // agentOutputTailWriter passes output straight through while keeping the last
 // agentOutputTailLimit bytes, so a failed run can report what the agent
 // actually printed before it died.
@@ -2185,7 +2245,13 @@ func (w *agentOutputTailWriter) Tail() string {
 	return strings.TrimSpace(ansiEscapePattern.ReplaceAllString(string(w.buffer), ""))
 }
 
-var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|\r`)
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]|\r|\x1b`)
+
+// ansiIncompletePrefixPattern matches the whole of a trailing buffer that is a
+// valid escape sequence so far but has not reached its terminating byte, which
+// is how ansiStrippingWriter tells a sequence split across two writes from a
+// stray ESC byte that will never terminate.
+var ansiIncompletePrefixPattern = regexp.MustCompile(`^\x1b(?:\[[0-9;?]*[ -/]*)?$`)
 
 func bugReportURL(repo string, issue Issue, args []string, output string) (string, error) {
 	target, err := parseTarget(repo)

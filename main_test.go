@@ -1044,3 +1044,39 @@ func TestRemoteControlInertNoticeWarnsWhenOptedIn(t *testing.T) {
 		t.Errorf("notice = %q, want no notice when remote control is off", got)
 	}
 }
+
+func TestANSIStrippingWriterRemovesSequencesAcrossWrites(t *testing.T) {
+	var seen bytes.Buffer
+	w := &ansiStrippingWriter{output: &seen}
+	// The escape straddles the write boundary the way a pipe hands it over.
+	for _, chunk := range []string{"\x1b[0m$ \x1b", "[0mgit status\r\n", "done\x1b["} {
+		if n, err := w.Write([]byte(chunk)); err != nil || n != len(chunk) {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
+	}
+	if got := seen.String(); got != "$ git status\ndone" {
+		t.Fatalf("stream = %q, want the escape sequences removed", got)
+	}
+	w.Flush()
+	if got := seen.String(); got != "$ git status\ndone" {
+		t.Fatalf("after Flush = %q, want the unterminated escape dropped", got)
+	}
+}
+
+func TestANSIStrippingWriterFlushesStrayEscapeBytes(t *testing.T) {
+	var seen bytes.Buffer
+	w := &ansiStrippingWriter{output: &seen}
+	if _, err := w.Write([]byte("tail\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen.String(); got != "tail" {
+		t.Fatalf("stream = %q, want the pending escape held back", got)
+	}
+	if _, err := w.Write([]byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+	w.Flush()
+	if got := seen.String(); got != "tailok" {
+		t.Fatalf("after Flush = %q, want the held bytes emitted once complete", got)
+	}
+}
