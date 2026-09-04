@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make browser polling the default delivery mode and replace the competing `--browser` and `--poll` transport choices with `--pollmode=browser|webhook|poll`; the older switches remain as deprecated aliases for existing scripts.
+
 - Expand the web UI settings modal from a narrow fixed dialog into a responsive desktop workspace, while keeping its contents scrollable within smaller viewports (issue #599).
 - Expand the WebUI settings modal to use substantially more desktop space while keeping it bounded and scrollable on smaller screens (issue #599).
 - Put signed-in agents ahead of signed-out agents in the WebUI settings Models tab and grey out their groups and choices, so models that are immediately usable are easiest to find (issue #597).
