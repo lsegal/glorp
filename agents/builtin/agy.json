@@ -1,0 +1,26 @@
+{
+  "name": "agy",
+  "binary": "agy",
+  "levels": ["low", "medium", "high"],
+  "session": {"assign": "none"},
+  "output": {"format": "text"},
+  "skills": {"target": "antigravity-cli"},
+  "doctor": {
+    "models": ["{binary}", "models"]
+  },
+  "args": {
+    "run": [
+      {"when": "yolo", "args": ["--dangerously-skip-permissions"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--effort", "{level}"]},
+      {"args": ["--output-format", "text"]},
+      {"args": ["--print", "{prompt}"]}
+    ],
+    "vision": [
+      {"when": "yolo", "args": ["--dangerously-skip-permissions"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--effort", "{level}"]},
+      {"args": ["--print", "{prompt}"]}
+    ]
+  }
+}
