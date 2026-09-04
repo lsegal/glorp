@@ -374,7 +374,7 @@ h1 .version {
 	display: grid;
 	place-items: center;
 	z-index: 10;
-	padding: 16px;
+	padding: clamp(12px, 3vw, 48px);
 }
 .modal-overlay-dismiss {
 	position: absolute;
@@ -434,6 +434,8 @@ h1 .version {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
+	min-height: 0;
+	overflow-y: auto;
 }
 .modal-body label {
 	display: flex;

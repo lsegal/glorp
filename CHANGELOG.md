@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Expand the web UI settings modal from a narrow fixed dialog into a responsive desktop workspace, while keeping its contents scrollable within smaller viewports (issue #599).
 - Expand the WebUI settings modal to use substantially more desktop space while keeping it bounded and scrollable on smaller screens (issue #599).
 - Put signed-in agents ahead of signed-out agents in the WebUI settings Models tab and grey out their groups and choices, so models that are immediately usable are easiest to find (issue #597).
 - Ask before reclaiming a ticket another glorp instance claimed more than five minutes ago, instead of treating its claim as live for two hours and silently leaving the ticket untouched. Fresh claims still prevent a duplicate pickup during the five-minute cooldown; afterwards the normal ownership handoff asks the other instance whether it is still working before this instance proceeds (issue #594).
