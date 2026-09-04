@@ -644,12 +644,12 @@ func parseAgentSpecIn(registry *agents.Registry, value string) (agentSpec, error
 	}
 	if hasLevel {
 		if !definition.AcceptsLevel(level) {
-			return agentSpec{}, fmt.Errorf("agent level must be %s", agents.JoinOr(definition.Levels))
+			return agentSpec{}, definition.LevelError()
 		}
 		spec.Level = level
 	}
 	if spec.Model != "" && !definition.AcceptsModel(spec.Model) {
-		return agentSpec{}, fmt.Errorf("agent model must be %s", agents.JoinOr(definition.Models))
+		return agentSpec{}, definition.ModelError()
 	}
 	spec.Name = name
 	return spec, nil

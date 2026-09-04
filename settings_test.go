@@ -316,9 +316,9 @@ func registryForSettings(t *testing.T) *agents.Registry {
 		}
 	}
 	codex := definition("codex")
-	codex.Levels = []string{"low", "medium", "high"}
+	codex.Levels = agents.NewAllowList("low", "medium", "high")
 	muse := definition("muse")
-	muse.Models = []string{"muse-1", "muse-2"}
+	muse.Models = agents.NewAllowList("muse-1", "muse-2")
 	registry, err := agents.NewRegistry(codex, muse)
 	if err != nil {
 		t.Fatal(err)
