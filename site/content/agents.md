@@ -18,7 +18,7 @@ This page is the reference for that file and that schema.
 | `codex` | [Codex CLI](https://developers.openai.com/codex/cli/) | `low`, `medium`, `high` | yes — Codex prints the ID, glorp reads it back | `codex` | `codex` |
 | `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `low`, `medium`, `high` | yes — glorp assigns the ID | `claude` | `claude-code` |
 | `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | none — the CLI has no reasoning-effort flag | yes — glorp assigns the ID | none | `gemini-cli` |
-| `muse` | Meta Muse Code | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | yes — glorp assigns the ID | none | `universal` |
+| `muse` | [Meta Muse Code](https://dev.meta.ai/docs/muse-code) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | yes — glorp assigns the ID | none | `universal` |
 | `opencode` | [opencode](https://opencode.ai) | `low`, `medium`, `high` | no — recovery restarts the work | none | `opencode` |
 | `cline` | [Cline](https://cline.bot) | `none`, `low`, `medium`, `high`, `xhigh` | no — recovery restarts the work | none | `cline` |
 
