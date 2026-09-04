@@ -136,37 +136,56 @@ export function agentOptionsFrom(snapshot) {
 	return (snapshot?.agents || []).map((name) => ({ name }));
 }
 
-// agentOptionHint describes the models and levels a given agent name accepts,
-// so the agents tab's multiselect (issue #572) shows what --agent-style spec
-// each checkbox stands for.
-export function agentOptionHint(agentOptions, value) {
-	const name = String(value || "")
+// specAgentName extracts the agent name from a bare agent name or a full
+// agent/model:level spec, so callers can look up state that's shared across
+// every model a given agent offers (issue #582).
+function specAgentName(value) {
+	return String(value || "")
 		.trim()
 		.split(":")[0]
 		.split("/")[0];
-	if (!name) return "";
-	const option = (agentOptions || []).find(
-		(entry) => entry && entry.name === name,
-	);
-	if (!option) return "";
-	const parts = [];
-	if (option.models?.length) parts.push(`models: ${option.models.join(", ")}`);
-	if (option.levels?.length) parts.push(`levels: ${option.levels.join(", ")}`);
-	return parts.join(" · ");
 }
 
-// agentStatusFor finds the probe result for one agent name in the list
-// /api/agents returns, so the agents tab (issue #572) can pair each
-// checkbox with its own auth and quota reading.
-export function agentStatusFor(statuses, name) {
-	return (statuses || []).find((status) => status && status.name === name);
+// modelOptionsFrom flattens the settings snapshot's agent list into one
+// selectable entry per agent/model pair (issue #582): a fix for #572, which
+// put the multiselect on agents even though picking an agent alone can't
+// choose a model. Selecting a model drives which agent dispatches, so the
+// multiselect belongs here instead. An agent with no declared model
+// allow-list offers itself as a single bare entry, the same spec --agent
+// accepts unqualified.
+export function modelOptionsFrom(snapshot) {
+	const agentOptions = agentOptionsFrom(snapshot);
+	const options = [];
+	for (const option of agentOptions) {
+		if (!option?.name) continue;
+		if (option.models?.length) {
+			for (const model of option.models) {
+				options.push({
+					value: `${option.name}/${model}`,
+					agent: option.name,
+					model,
+				});
+			}
+		} else {
+			options.push({ value: option.name, agent: option.name, model: "" });
+		}
+	}
+	return options;
 }
 
-// toggleActiveAgent adds or removes name from the multiselect's checked set
-// (issue #572), used as the agents tab's checkbox change handler.
-export function toggleActiveAgent(activeAgents, name, checked) {
+// agentStatusFor finds the probe result for the agent behind a model option's
+// value in the list /api/agents returns, so a model chip (issue #582) can
+// show its agent's auth and quota reading.
+export function agentStatusFor(statuses, value) {
+	const agent = specAgentName(value);
+	return (statuses || []).find((status) => status && status.name === agent);
+}
+
+// toggleActiveModel adds or removes value from the multiselect's checked set
+// (issue #582), used as the models tab's chip click handler.
+export function toggleActiveModel(activeAgents, value, checked) {
 	const set = new Set(activeAgents || []);
-	if (checked) set.add(name);
-	else set.delete(name);
+	if (checked) set.add(value);
+	else set.delete(value);
 	return Array.from(set);
 }

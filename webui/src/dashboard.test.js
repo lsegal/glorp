@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-	agentOptionHint,
 	agentOptionsFrom,
 	agentStatusFor,
 	buildSettingsUpdate,
@@ -11,10 +10,11 @@ import {
 	jobActionAvailability,
 	jobAgentSummary,
 	lastPollLabel,
+	modelOptionsFrom,
 	parseAllowedCommenters,
 	submitJobAction,
 	submitSettings,
-	toggleActiveAgent,
+	toggleActiveModel,
 } from "./dashboard";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -274,16 +274,29 @@ describe("agent options", () => {
 		]);
 		expect(agentOptionsFrom({})).toEqual([]);
 	});
+});
 
-	it("describes what the agent currently typed accepts", () => {
-		expect(agentOptionHint(options, "codex")).toBe("levels: low, high");
-		expect(agentOptionHint(options, "muse/muse-1")).toBe(
-			"models: muse-1, muse-2",
-		);
-		expect(agentOptionHint(options, " codex:high ")).toBe("levels: low, high");
-		expect(agentOptionHint(options, "plain")).toBe("");
-		expect(agentOptionHint(options, "bogus")).toBe("");
-		expect(agentOptionHint(options, "")).toBe("");
+describe("modelOptionsFrom", () => {
+	const options = [
+		{ name: "codex", levels: ["low", "high"] },
+		{ name: "muse", models: ["muse-1", "muse-2"] },
+		{ name: "plain" },
+	];
+
+	it("expands each agent's models into their own qualified entry", () => {
+		expect(modelOptionsFrom({ agentOptions: options })).toEqual([
+			{ value: "codex", agent: "codex", model: "" },
+			{ value: "muse/muse-1", agent: "muse", model: "muse-1" },
+			{ value: "muse/muse-2", agent: "muse", model: "muse-2" },
+			{ value: "plain", agent: "plain", model: "" },
+		]);
+	});
+
+	it("falls back to the bare agent names with no allow-list", () => {
+		expect(modelOptionsFrom({ agents: ["codex"] })).toEqual([
+			{ value: "codex", agent: "codex", model: "" },
+		]);
+		expect(modelOptionsFrom({})).toEqual([]);
 	});
 });
 
@@ -315,8 +328,15 @@ describe("agentStatusFor", () => {
 		{ name: "muse", auth: "unknown" },
 	];
 
-	it("finds the status matching an agent name", () => {
+	it("finds the status matching a bare agent name", () => {
 		expect(agentStatusFor(statuses, "muse")).toEqual({
+			name: "muse",
+			auth: "unknown",
+		});
+	});
+
+	it("finds the status matching a full agent/model spec", () => {
+		expect(agentStatusFor(statuses, "muse/muse-1")).toEqual({
 			name: "muse",
 			auth: "unknown",
 		});
@@ -328,21 +348,21 @@ describe("agentStatusFor", () => {
 	});
 });
 
-describe("toggleActiveAgent", () => {
-	it("adds a name when checked", () => {
-		expect(toggleActiveAgent(["codex"], "muse", true)).toEqual([
+describe("toggleActiveModel", () => {
+	it("adds a value when checked", () => {
+		expect(toggleActiveModel(["codex"], "muse/muse-1", true)).toEqual([
 			"codex",
-			"muse",
+			"muse/muse-1",
 		]);
 	});
 
-	it("removes a name when unchecked", () => {
-		expect(toggleActiveAgent(["codex", "muse"], "codex", false)).toEqual([
-			"muse",
-		]);
+	it("removes a value when unchecked", () => {
+		expect(toggleActiveModel(["codex", "muse/muse-1"], "codex", false)).toEqual(
+			["muse/muse-1"],
+		);
 	});
 
-	it("does not duplicate a name already checked", () => {
-		expect(toggleActiveAgent(["codex"], "codex", true)).toEqual(["codex"]);
+	it("does not duplicate a value already checked", () => {
+		expect(toggleActiveModel(["codex"], "codex", true)).toEqual(["codex"]);
 	});
 });
