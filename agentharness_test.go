@@ -121,6 +121,14 @@ func (f fakeAgentRun) install(t *testing.T, definition agents.Definition) (agent
 	t.Setenv(fakeAgentMissingEnv, invocationValue(f.MissingOn))
 	t.Setenv(fakeAgentMissingText, f.MissingText)
 	t.Setenv(fakeAgentFailEnv, invocationValue(f.FailOn))
+	// A definition declaring a minimum CLI version has that version asked of
+	// its binary before every dispatch (issue #535). The fake agent has no
+	// version of its own, so the check is answered here with exactly the
+	// minimum: the harness is proving argv, not the version gate, which has
+	// its own tests.
+	if definition.MinVersion != "" {
+		stubAgentVersion(t, definition.MinVersion, nil)
+	}
 	definition.Binary = binary
 	return definition, record
 }

@@ -644,12 +644,12 @@ func parseAgentSpecIn(registry *agents.Registry, value string) (agentSpec, error
 	}
 	if hasLevel {
 		if !definition.AcceptsLevel(level) {
-			return agentSpec{}, fmt.Errorf("agent level must be %s", agents.JoinOr(definition.Levels))
+			return agentSpec{}, definition.LevelError()
 		}
 		spec.Level = level
 	}
 	if spec.Model != "" && !definition.AcceptsModel(spec.Model) {
-		return agentSpec{}, fmt.Errorf("agent model must be %s", agents.JoinOr(definition.Models))
+		return agentSpec{}, definition.ModelError()
 	}
 	spec.Name = name
 	return spec, nil
@@ -2110,8 +2110,17 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	if !ok {
 		return unknownAgentError(r.registry(), agent), false
 	}
+	binary := r.binary(agent)
+	// An agent whose definition declares a minimum CLI version is checked
+	// before it is dispatched, so an install too old for the definition's
+	// argv reports the version as the cause instead of dying on an
+	// unrecognized argument (issue #535).
+	versionWarning, versionErr := checkAgentVersion(ctx, definition, binary)
+	if versionErr != nil {
+		return versionErr, false
+	}
 	args := commandArgsForSession(r, issue, session)
-	cmd := newAgentCommand(ctx, r.binary(agent), args...)
+	cmd := newAgentCommand(ctx, binary, args...)
 	// The definition's env is what the agent needs beyond glorp's own
 	// environment: Claude's headless print mode, for instance, caps how long
 	// it waits for in-flight background shell tasks before terminating them
@@ -2144,6 +2153,9 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	// rather than raw agent JSON.
 	outputTail := &agentOutputTailWriter{output: agentOutput, limit: agentOutputTailLimit}
 	agentOutput = outputTail
+	if versionWarning != "" {
+		fmt.Fprintln(agentOutput, versionWarning)
+	}
 	var metadataOutput *sessionMetadataCaptureWriter
 	if updateSession != nil {
 		metadataOutput = &sessionMetadataCaptureWriter{

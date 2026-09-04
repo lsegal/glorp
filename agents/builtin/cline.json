@@ -21,13 +21,6 @@
       {"args": ["--json"]},
       {"args": ["{prompt}"]}
     ],
-    "resume": [
-      {"args": ["--auto-approve", "true"]},
-      {"when": "model", "args": ["--model", "{model}"]},
-      {"when": "level", "args": ["--thinking", "{level}"]},
-      {"args": ["--json"]},
-      {"args": ["{prompt}"]}
-    ],
     "vision": [
       {"args": ["--auto-approve", "true"]},
       {"when": "model", "args": ["--model", "{model}"]},

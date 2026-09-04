@@ -1,6 +1,8 @@
 {
   "name": "gemini",
   "binary": "gemini",
+  "minVersion": "0.58.0",
+  "levels": [],
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},
   "output": {"format": "text"},

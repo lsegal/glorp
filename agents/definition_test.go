@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -164,6 +165,10 @@ func TestInvalidDefinitionsNameTheirField(t *testing.T) {
 		{"no binary", func(d *Definition) { d.Binary = "" }, `"binary"`},
 		{"no run template", func(d *Definition) { d.Args.Run = nil }, `"args.run"`},
 		{"no resume template", func(d *Definition) { d.Args.Resume = nil }, `"args.resume"`},
+		{"no resume template with a captured session", func(d *Definition) {
+			d.Args.Resume = nil
+			d.Session = Session{Assign: AssignCapture, Capture: `session (\S+)`}
+		}, `"args.resume"`},
 		{"empty fragment", func(d *Definition) { d.Args.Run = []Fragment{{}} }, `"args.run"[0].args`},
 		{"unknown condition", func(d *Definition) {
 			d.Args.Run = []Fragment{{When: "sandbox", Args: []string{"x"}}}
@@ -181,8 +186,8 @@ func TestInvalidDefinitionsNameTheirField(t *testing.T) {
 		}, `"session.capture"`},
 		{"capture where none is read", func(d *Definition) { d.Session.Capture = "x" }, `"session.capture"`},
 		{"unknown output format", func(d *Definition) { d.Output.Format = "yaml" }, `"output.format"`},
-		{"empty level", func(d *Definition) { d.Levels = []string{"high", " "} }, `"levels"`},
-		{"empty model", func(d *Definition) { d.Models = []string{""} }, `"models"`},
+		{"empty level", func(d *Definition) { d.Levels = NewAllowList("high", " ") }, `"levels"`},
+		{"empty model", func(d *Definition) { d.Models = NewAllowList("") }, `"models"`},
 		{"unusable env name", func(d *Definition) { d.Env = map[string]string{"A=B": "c"} }, `"env"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -210,7 +215,7 @@ func TestAllowListsAdmitAnythingWhenEmpty(t *testing.T) {
 	if !open.AcceptsLevel("whatever") || !open.AcceptsModel("whatever") {
 		t.Fatal("an empty allow-list rejected a value")
 	}
-	limited := Definition{Levels: []string{"low"}, Models: []string{"opus"}}
+	limited := Definition{Levels: NewAllowList("low"), Models: NewAllowList("opus")}
 	if limited.AcceptsLevel("high") || limited.AcceptsModel("sonnet") {
 		t.Fatal("an allow-list admitted a value it does not list")
 	}
@@ -402,6 +407,154 @@ func TestBuiltinAgentsKeepTheirQuotaReaders(t *testing.T) {
 		}
 		if got := definition.Quota.ReaderName(); got != want {
 			t.Fatalf("%s quota reader = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestADeclaredEmptyAllowListAdmitsNothing checks the third state the schema
+// spells: an agent whose CLI has no reasoning-effort flag declares the empty
+// list and rejects a level instead of accepting one it cannot render (issue
+// #532).
+func TestADeclaredEmptyAllowListAdmitsNothing(t *testing.T) {
+	none := Definition{Name: "acme", Levels: NewAllowList()}
+	if !none.Levels.Declared() || !none.Levels.AcceptsNothing() {
+		t.Fatal("an empty list did not read as declared-and-empty")
+	}
+	for _, level := range []string{"high", "none", ""} {
+		if none.AcceptsLevel(level) {
+			t.Fatalf("level %q was admitted by a list that admits nothing", level)
+		}
+	}
+	// The message names the agent rather than telling the caller to pick from
+	// an empty set, which is the whole reason the state exists.
+	if err := none.LevelError(); err == nil || err.Error() != "agent acme takes no reasoning level" {
+		t.Fatalf("LevelError() = %v, want it to name the agent", err)
+	}
+	listed := Definition{Name: "acme", Levels: NewAllowList("low", "high")}
+	if err := listed.LevelError(); err == nil || err.Error() != "agent level must be low or high" {
+		t.Fatalf("LevelError() = %v, want the allow-list", err)
+	}
+	models := Definition{Name: "acme", Models: NewAllowList()}
+	if models.AcceptsModel("acme-1") {
+		t.Fatal("a model was admitted by a list that admits nothing")
+	}
+	if err := models.ModelError(); err == nil || err.Error() != "agent acme takes no model" {
+		t.Fatalf("ModelError() = %v, want it to name the agent", err)
+	}
+}
+
+// TestAllowListRoundTripsItsThreeStates checks absent, empty, and populated
+// survive the marshal-and-merge trip the agent config file puts a definition
+// through, since an empty list flattened back to an absent one would silently
+// restore the accept-anything behaviour it exists to replace.
+func TestAllowListRoundTripsItsThreeStates(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		encoded string
+		want    string
+	}{
+		{"absent", `{"binary":"acme"}`, "null"},
+		{"null", `{"binary":"acme","levels":null}`, "null"},
+		{"empty", `{"binary":"acme","levels":[]}`, "[]"},
+		{"listed", `{"binary":"acme","levels":["low","high"]}`, `["low","high"]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var definition Definition
+			if err := json.Unmarshal([]byte(test.encoded), &definition); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(definition.Levels)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != test.want {
+				t.Fatalf("levels = %s, want %s", encoded, test.want)
+			}
+			var again Definition
+			if err := json.Unmarshal([]byte(`{"levels":`+string(encoded)+`}`), &again); err != nil {
+				t.Fatal(err)
+			}
+			if again.Levels.Declared() != definition.Levels.Declared() ||
+				again.Levels.AcceptsNothing() != definition.Levels.AcceptsNothing() ||
+				!reflect.DeepEqual(again.Levels.Values(), definition.Levels.Values()) {
+				t.Fatalf("round trip lost the state: %#v", again.Levels)
+			}
+		})
+	}
+}
+
+// TestSessionlessAgentMayOmitResume pins the answer issue #541 chose: an agent
+// that declares no resumable session may leave args.resume out, and a resume
+// renders its run template rather than nothing. Rendering nothing would fail
+// the job it was supposed to recover, so the fallback is the whole point.
+func TestSessionlessAgentMayOmitResume(t *testing.T) {
+	definition := Definition{
+		Name: "acme", Binary: "acme",
+		Args:    Args{Run: []Fragment{{Args: []string{"--go"}}, {When: "model", Args: []string{"--model", "{model}"}}, {Args: []string{"{prompt}"}}}},
+		Session: Session{Assign: AssignNone},
+		Output:  Output{Format: FormatText},
+	}
+	if err := definition.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil", err)
+	}
+	if !definition.Supports(ModeResume) {
+		t.Error("Supports(ModeResume) = false, want true through the run fallback")
+	}
+	values := Values{Prompt: "continue", Model: "acme-1", Session: "sess-1"}
+	want := []string{"--go", "--model", "acme-1", "continue"}
+	if got := definition.Render(ModeResume, values); !reflect.DeepEqual(got, want) {
+		t.Errorf("Render(ModeResume) = %q, want %q", got, want)
+	}
+	// A declared resume still wins over the fallback.
+	definition.Args.Resume = []Fragment{{Args: []string{"--continue", "{prompt}"}}}
+	if got, want := definition.Render(ModeResume, values), []string{"--continue", "continue"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Render(ModeResume) with a declared resume = %q, want %q", got, want)
+	}
+}
+
+// TestSessionlessBuiltinsResumeAsTheyRan checks cline and opencode recover
+// exactly as they did when each duplicated its run template under "resume":
+// the argv a resume renders is still the argv a fresh run renders.
+func TestSessionlessBuiltinsResumeAsTheyRan(t *testing.T) {
+	registry := MustBuiltin()
+	for _, name := range []string{"cline", "opencode"} {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("Lookup(%q) missing", name)
+		}
+		if definition.Session.Assign != AssignNone {
+			t.Fatalf("%s session.assign = %q, want %q", name, definition.Session.Assign, AssignNone)
+		}
+		if len(definition.Args.Resume) != 0 {
+			t.Errorf("%s declares args.resume, which duplicates its run template", name)
+		}
+		values := Values{Prompt: "continue", Model: "m", Level: "high"}
+		run, resume := definition.Render(ModeRun, values), definition.Render(ModeResume, values)
+		if len(resume) == 0 || !reflect.DeepEqual(run, resume) {
+			t.Errorf("%s resume argv = %q, want the run argv %q", name, resume, run)
+		}
+	}
+}
+
+// TestResumingAgentsKeepTheirOwnTemplate checks the fallback is confined to
+// sessionless agents: an agent glorp holds a session ID for still resumes with
+// the arguments its definition declares.
+func TestResumingAgentsKeepTheirOwnTemplate(t *testing.T) {
+	registry := MustBuiltin()
+	for _, name := range []string{"codex", "claude", "gemini", "muse"} {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("Lookup(%q) missing", name)
+		}
+		if len(definition.Args.Resume) == 0 {
+			t.Errorf("%s declares no args.resume", name)
+		}
+		// The fallback must not reach these: a resume renders the resume
+		// fragments the definition declares, whatever the run declares.
+		values := Values{Prompt: "continue", Session: "sess-1"}
+		declared := Definition{Args: Args{Run: definition.Args.Resume}}
+		if got, want := definition.Render(ModeResume, values), declared.Render(ModeRun, values); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s resume argv = %q, want its declared template %q", name, got, want)
 		}
 	}
 }

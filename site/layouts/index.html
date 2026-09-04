@@ -33,6 +33,7 @@
         <a href="#skills">Skills</a>
         <a class="nav-skill" href="{{ "skills/gh-fix/" | relURL }}">/gh-fix</a>
         <a class="nav-skill" href="{{ "skills/gh-discuss/" | relURL }}">/gh-discuss</a>
+        <a href="{{ "agents/" | relURL }}">Agents</a>
         <a class="nav-install" href="#install">Install</a>
         <a class="repo-link" href="https://github.com/lsegal/glorp">View on GitHub</a>
       </nav>
@@ -155,7 +156,7 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
       <section id="skills" class="skill-index" aria-labelledby="skill-guides">
         <p class="eyebrow">Two focused skills</p>
         <h2 id="skill-guides">Hand work to the right robot.</h2>
-        <p class="section-lede">Both ship with the installer and register globally for Codex and Claude Code.</p>
+        <p class="section-lede">Both ship with the installer and register globally for every agent glorp knows about.</p>
         <div class="skill-index-grid">
           <a class="skill-index-card fix" href="{{ "skills/gh-fix/" | relURL }}"><span class="skill-command">/gh-fix</span><strong>Issue to merged fix</strong><span>Investigate, ship, prove, and close the loop. Dispatched for every issue that clears its dependencies.</span></a>
           <a class="skill-index-card discuss" href="{{ "skills/gh-discuss/" | relURL }}"><span class="skill-command">/gh-discuss</span><strong>One useful answer</strong><span>Read the thread, research the repo, reply only when certain. Read-only, and silent when it isn&rsquo;t sure.</span></a>
@@ -180,7 +181,7 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
               <li><strong>Node.js and npx</strong><span>The installer uses <code>npx</code> to install the bundled gh-fix and gh-discuss skills through skills.sh.</span></li>
               <li><strong>ngrok</strong><span>For the default webhook mode; installing it is optional, since glorp falls back to <code>npx ngrok</code>. Configure its auth before starting. Not required with <code>--poll</code>.</span></li>
               <li><strong>Chrome, Chromium or Edge</strong><span>Only for <code>--browser</code> mode, which needs no ngrok tunnel and no extra token. Safari has no DevTools Protocol and cannot be used.</span></li>
-              <li><strong>A coding agent</strong><span>At least one of Codex CLI (<code>codex</code>) or Claude Code (<code>claude</code>) on your PATH.</span></li>
+              <li><strong>A coding agent</strong><span>At least one of Codex CLI (<code>codex</code>), Claude Code (<code>claude</code>), Gemini CLI (<code>gemini</code>), Meta Muse Code (<code>muse</code>), opencode (<code>opencode</code>), or Cline (<code>cline</code>) on your PATH. Any other CLI can be added with an <a href="{{ "agents/" | relURL }}">agent definition</a>.</span></li>
             </ul>
             <p class="alert alert-important"><strong class="alert-title">Note.</strong> glorp launches agents non-interactively. Agent sandbox and permission controls remain enabled by default. <code>--yolo</code> disables those protections; use it only with repositories and issues whose contents you trust.</p>
           </div>

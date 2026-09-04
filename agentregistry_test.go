@@ -90,7 +90,7 @@ func TestAgentLevelErrorComesFromTheDefinition(t *testing.T) {
 		t.Fatalf("error = %v, want the built-in levels", err)
 	}
 	registry, err := agents.NewRegistry(agents.Definition{
-		Name: "acme", Binary: "acme", Levels: []string{"fast", "thorough"},
+		Name: "acme", Binary: "acme", Levels: agents.NewAllowList("fast", "thorough"),
 		Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
 		Session: agents.Session{Assign: agents.AssignNone},
 		Output:  agents.Output{Format: agents.FormatText},
@@ -111,7 +111,7 @@ func TestAgentLevelErrorComesFromTheDefinition(t *testing.T) {
 // none, keep accepting any model.
 func TestAgentModelAllowListIsEnforced(t *testing.T) {
 	registry, err := agents.NewRegistry(agents.Definition{
-		Name: "acme", Binary: "acme", Models: []string{"acme-1"},
+		Name: "acme", Binary: "acme", Models: agents.NewAllowList("acme-1"),
 		Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
 		Session: agents.Session{Assign: agents.AssignNone},
 		Output:  agents.Output{Format: agents.FormatText},
@@ -307,5 +307,41 @@ func TestWatchAcceptsAgentBinaryAndItsAliases(t *testing.T) {
 	}
 	if got := runner.binary("codex"); got != "/opt/codex" {
 		t.Fatalf("codex binary = %q, want --codex-binary to still work", got)
+	}
+}
+
+// TestAgentThatTakesNoLevelRejectsOne checks the declared-empty allow-list
+// reaches --agent: gemini has no reasoning-effort flag and no {level} fragment
+// to render one into, so a level is refused at startup instead of being parsed
+// and then dropped, which from the prompt looked exactly like one that was
+// honoured (issue #532).
+func TestAgentThatTakesNoLevelRejectsOne(t *testing.T) {
+	_, err := parseAgentSpec("gemini:high")
+	if err == nil || !strings.Contains(err.Error(), "agent gemini takes no reasoning level") {
+		t.Fatalf("error = %v, want gemini to report that it takes no level", err)
+	}
+	// A bare colon is a level too, and an empty one is no more renderable.
+	if _, err := parseAgentSpec("gemini:"); err == nil {
+		t.Fatal("an empty level was accepted by an agent that takes none")
+	}
+	// The agent itself, and a model for it, keep working: the model list is
+	// deliberately left open because Gemini's model names move too fast to pin.
+	for _, value := range []string{"gemini", "gemini/gemini-2.5-pro", "gemini/anything-at-all"} {
+		if _, err := parseAgentSpec(value); err != nil {
+			t.Fatalf("parseAgentSpec(%q) error = %v", value, err)
+		}
+	}
+	// Every agent that does declare levels is untouched by the new state.
+	for _, agent := range []string{"codex", "claude", "cline", "muse"} {
+		definition, ok := agents.MustBuiltin().Lookup(agent)
+		if !ok {
+			t.Fatalf("%s is not registered", agent)
+		}
+		if !definition.Levels.Declared() || definition.Levels.AcceptsNothing() {
+			t.Fatalf("%s no longer declares the levels it accepts", agent)
+		}
+		if _, err := parseAgentSpec(agent + ":high"); err != nil {
+			t.Fatalf("parseAgentSpec(%q) error = %v", agent+":high", err)
+		}
 	}
 }
