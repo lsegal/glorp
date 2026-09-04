@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"reflect"
 	"strings"
@@ -192,5 +193,41 @@ func TestClineLevelsMatchTheCLI(t *testing.T) {
 	}
 	if _, err := parseAgentSpecIn(agents.MustBuiltin(), "cline/anthropic/claude-fable-5.1:xhigh"); err != nil {
 		t.Fatalf("--agent cline/anthropic/claude-fable-5.1:xhigh was rejected: %v", err)
+	}
+}
+
+// TestClineDispatchReportsItsCheckoutDirectory is the end-to-end half of issue
+// #552. A cline run announced its checkout by running a shell command, so the
+// GLORP_CHECKOUT_DIRECTORY marker only ever appeared inside the content_end
+// tool result the definition maps nothing in, and the dashboard read
+// "checkout: pending" for the whole run. The stdout below is that event, and
+// the dispatch has to end holding the directory.
+func TestClineDispatchReportsItsCheckoutDirectory(t *testing.T) {
+	checkout := t.TempDir()
+	definition, _ := fakeAgentRun{
+		Stdout: `{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolCallId":"call_1","toolName":"execute_command","output":[{"query":"echo GLORP_CHECKOUT_DIRECTORY=` + checkout + `","result":"GLORP_CHECKOUT_DIRECTORY=` + checkout + `","success":true}]}}\n` +
+			`{"ts":"2026-09-04T00:52:27.743Z","type":"agent_event","event":{"type":"content_end","contentType":"text","text":"cloned"}}`,
+	}.install(t, builtinDefinition(t, "cline"))
+	registry, err := agents.NewRegistry(definition)
+	if err != nil {
+		t.Fatalf("register %q: %v", definition.Name, err)
+	}
+	runner := CommandRunner{Agent: definition.Name, Definitions: registry, Repo: "o/r"}
+	var updates []AgentSession
+	var output strings.Builder
+	session := AgentSession{Agent: definition.Name}
+	err = runner.RunSessionWithOutput(context.Background(), Issue{Number: 552, Target: "o/r"}, session, func(update AgentSession) {
+		updates = append(updates, update)
+	}, &output)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if want := []AgentSession{{CheckoutDirectory: checkout}}; !reflect.DeepEqual(updates, want) {
+		t.Fatalf("captured metadata = %#v, want %#v", updates, want)
+	}
+	// The decoded output is unchanged: reading the marker off the raw stream
+	// neither adds a line to what the dashboard shows nor drops one.
+	if got, want := strings.TrimSpace(output.String()), "Running: execute_command\ncloned"; got != want {
+		t.Fatalf("decoded output = %q, want %q", got, want)
 	}
 }
