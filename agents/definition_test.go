@@ -14,7 +14,7 @@ func TestBuiltinDefinitionsLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Builtin() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
+	if got, want := registry.Names(), []string{"claude", "codex", "muse"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("built-in agents = %v, want %v", got, want)
 	}
 	for _, name := range registry.Names() {
@@ -146,7 +146,7 @@ func TestRenderSkipsUnknownMode(t *testing.T) {
 func TestInvalidDefinitionsNameTheirField(t *testing.T) {
 	valid := func() Definition {
 		return Definition{
-			Name: "muse", Binary: "muse",
+			Name: "acme", Binary: "acme",
 			Args:    Args{Run: []Fragment{{Args: []string{"{prompt}"}}}, Resume: []Fragment{{Args: []string{"{session}"}}}},
 			Session: Session{Assign: AssignGlorp},
 			Output:  Output{Format: FormatText},

@@ -1,0 +1,36 @@
+{
+  "name": "muse",
+  "binary": "muse",
+  "levels": ["none", "minimal", "low", "medium", "high", "xhigh", "ultra"],
+  "session": {"assign": "glorp"},
+  "output": {"format": "text"},
+  "args": {
+    "run": [
+      {"args": ["exec"]},
+      {"when": "session", "args": ["--session-id", "{session}"]},
+      {"when": "yolo", "args": ["--yolo"]},
+      {"when": "!yolo", "args": ["--approval-mode", "never"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--reasoning-effort", "{level}"]},
+      {"args": ["--user-input-auto-resolve"]},
+      {"args": ["{prompt}"]}
+    ],
+    "resume": [
+      {"args": ["exec", "--session-id", "{session}"]},
+      {"when": "yolo", "args": ["--yolo"]},
+      {"when": "!yolo", "args": ["--approval-mode", "never"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--reasoning-effort", "{level}"]},
+      {"args": ["--user-input-auto-resolve"]},
+      {"args": ["{prompt}"]}
+    ],
+    "vision": [
+      {"args": ["exec", "--image", "{image}"]},
+      {"when": "yolo", "args": ["--yolo"]},
+      {"when": "!yolo", "args": ["--approval-mode", "never"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--reasoning-effort", "{level}"]},
+      {"args": ["{prompt}"]}
+    ]
+  }
+}
