@@ -24,7 +24,7 @@ func TestLoadWithoutAConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
+	if got, want := registry.Names(), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("agents = %v, want the built-ins %v", got, want)
 	}
 }
@@ -55,7 +55,7 @@ func TestConfigOverridesABuiltinFieldByField(t *testing.T) {
 	if got := claude.Render(ModeRun, Values{Prompt: "go"}); !reflect.DeepEqual(got, []string{"-p", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", "go"}) {
 		t.Fatalf("argv = %#v, want the built-in template", got)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
+	if got, want := registry.Names(), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("agents = %v, want %v", got, want)
 	}
 }
@@ -93,7 +93,7 @@ func TestConfigRegistersANewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex", "muse"}; !reflect.DeepEqual(got, want) {
+	if got, want := registry.Names(), []string{"claude", "codex", "gemini", "muse"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("agents = %v, want %v", got, want)
 	}
 	muse, _ := registry.Lookup("muse")

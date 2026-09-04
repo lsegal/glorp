@@ -653,7 +653,7 @@ func TestAgentFlagAccumulatesValues(t *testing.T) {
 
 func TestAgentFlagRejectsUnknownAgent(t *testing.T) {
 	got := agentFlag{values: []agentSpec{{Name: "codex"}}}
-	if err := got.Set("gemini"); err == nil {
+	if err := got.Set("nosuchagent"); err == nil {
 		t.Fatal("expected error for unknown agent")
 	}
 }
