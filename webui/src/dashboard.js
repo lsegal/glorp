@@ -252,7 +252,9 @@ export function probedModelsByAgent(statuses) {
 // the chips already read their auth and quota from, so they fill that gap
 // here, and an agent no list can be built for contributes no entry rather
 // than a nonsensical one. A spec the run is already dispatching with is kept
-// regardless, so an active choice can always be switched back off.
+// regardless while its agent has not answered the probe yet, so an active
+// choice can always be switched back off without leaving stale choices in a
+// completed model list.
 export function modelOptionsFrom(snapshot, statuses, selected) {
 	const probed = probedModelsByAgent(statuses);
 	const options = [];
@@ -273,6 +275,10 @@ export function modelOptionsFrom(snapshot, statuses, selected) {
 	for (const value of selected || []) {
 		const agent = specAgentName(value);
 		const spec = String(value || "").trim();
+		// Once an agent has reported its models, that report is authoritative.
+		// In particular, a bare default such as `codex` must not become a fake
+		// model chip beside the real Codex models (issue #609).
+		if (probed.has(agent)) continue;
 		add(
 			agent,
 			spec.startsWith(`${agent}/`) ? spec.slice(agent.length + 1) : "",
@@ -319,8 +325,14 @@ export function agentStatusFor(statuses, value) {
 // (issue #582), used as the models tab's chip click handler.
 export function toggleActiveModel(activeAgents, value, checked) {
 	const set = new Set(activeAgents || []);
-	if (checked) set.add(value);
-	else set.delete(value);
+	if (checked) {
+		// Selecting a concrete model replaces this agent's bare default spec.
+		// Keeping both would dispatch with the default as well as the model the
+		// user just selected (issue #609).
+		const agent = specAgentName(value);
+		if (value !== agent) set.delete(agent);
+		set.add(value);
+	} else set.delete(value);
 	return Array.from(set);
 }
 

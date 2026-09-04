@@ -33,16 +33,16 @@ None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL`
 
 Agent definitions live in `.glorp.config.json` in the directory glorp is started from. `--config PATH` reads a different file. A missing file is not an error — glorp runs on the built-in definitions alone.
 
-**glorp never writes this file.** That is the whole reason it exists separately from the state file:
+**glorp does not rewrite this file as it works.** That is the whole reason it exists separately from the state file — the one exception is the `settings` section below, which the web dashboard saves a changed setting into, leaving every other section and every switch it does not mention untouched:
 
 | File | Flag | Who writes it | What it holds |
 | --- | --- | --- | --- |
-| `.glorp.config.json` | `--config PATH` | you, by hand | agent definitions |
+| `.glorp.config.json` | `--config PATH` | you, by hand; the dashboard, when a setting is changed | agent definitions and default switch values |
 | `.glorp.json` | `--state PATH` | glorp, on every dispatch | handled issues and active sessions |
 
 Putting a definition in `.glorp.json` is the mistake this split exists to prevent: the next state save rewrites that file and the definition is gone. glorp catches the mix-up in the other direction too — hand it a work-state file as `--config` and it reports the state record it found by name rather than a pile of unknown fields.
 
-The file's top level is an object with one section defined so far:
+The file's top level is an object with two sections defined so far, `agents` and [`settings`](#settings):
 
 ```json
 {
@@ -63,6 +63,30 @@ The file's top level is an object with one section defined so far:
 ```
 
 Any other top-level section is rejected by name, so a typo is reported rather than ignored.
+
+## `settings`
+
+The `settings` section holds default values for the switches `glorp watch` takes, so a run's usual configuration lives in the file rather than in a shell alias. It is an object keyed by switch name — the same names `glorp help watch` prints, with or without the leading dashes:
+
+```json
+{
+  "settings": {
+    "concurrency": 5,
+    "pollmode": "poll",
+    "interval": "90s",
+    "no-headless": true,
+    "ready-state": "Queued",
+    "agent": ["claude/opus", "codex"],
+    "filter": ["is:open label:bug", "is:open label:chore"]
+  }
+}
+```
+
+Every switch may be given here except `--config`, which selects the file being read and so cannot be set from inside it. Values follow the switch's own type: a string for a string or duration switch, a number for a numeric one, `true`/`false` for a boolean, and an array for a repeatable switch such as `--agent`, `--agent-binary`, or `--filter`, whose entries are applied in the order they are written.
+
+**The command line wins.** The section supplies defaults, not overrides: a switch written on the command line keeps the value given there, and the file only fills in what was left alone. An unknown switch name, a value the switch will not accept, or a value that is not a string, number, boolean, or array of those stops the run naming the file and the key, for the same reason a malformed agent definition does — a setting dropped quietly is indistinguishable from a typo.
+
+The web dashboard's settings modal writes back to this section. Changing concurrency, the ready state, the allowed commenters, or the active agent set applies to the running instance and is saved as `concurrency`, `ready-state`, `allowed-commenters`, and `agent`, so the change survives a restart. Nothing else in the file is touched, and a file that cannot be written is logged rather than failing the change that has already taken effect.
 
 ### Merge and override rules
 
