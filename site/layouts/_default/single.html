@@ -26,7 +26,7 @@
   <body class="skill-page">
     <header class="site-header">
       <a class="brand" href="{{ site.Home.RelPermalink }}" aria-label="glorp home"><img src="{{ "assets/glorp-logo.svg" | relURL }}" alt=""><span>glorp</span></a>
-      <nav class="site-nav" aria-label="Primary navigation"><a class="nav-skill" href="{{ "skills/gh-fix/" | relURL }}">/gh-fix</a><a class="nav-skill" href="{{ "skills/gh-discuss/" | relURL }}">/gh-discuss</a><a class="nav-install" href="{{ site.Home.RelPermalink }}#install">Install</a><a class="repo-link" href="https://github.com/lsegal/glorp">View on GitHub</a></nav>
+      <nav class="site-nav" aria-label="Primary navigation"><a class="nav-skill" href="{{ "skills/gh-fix/" | relURL }}">/gh-fix</a><a class="nav-skill" href="{{ "skills/gh-discuss/" | relURL }}">/gh-discuss</a><a href="{{ "agents/" | relURL }}">Agents</a><a class="nav-install" href="{{ site.Home.RelPermalink }}#install">Install</a><a class="repo-link" href="https://github.com/lsegal/glorp">View on GitHub</a></nav>
     </header>
     <main class="skill-doc">{{ .Content }}</main>
     <footer>Part of <a href="https://github.com/lsegal/glorp">glorp on GitHub</a>.</footer>
