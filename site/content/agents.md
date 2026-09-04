@@ -108,12 +108,12 @@ Overriding an allow-list with `null` restores accepting *anything*, not acceptin
 
 ### `args`
 
-`args` carries one argv template per shape of invocation glorp makes. `run` and `resume` are required; `vision` is optional and an agent without one is simply never asked to read a screenshot.
+`args` carries one argv template per shape of invocation glorp makes. `run` is always required, and `resume` is required of every agent glorp can hold a session ID for; `vision` is optional and an agent without one is simply never asked to read a screenshot.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `args.run` | array of fragment | yes | A fresh dispatch. |
-| `args.resume` | array of fragment | yes | Continuing an earlier session. An agent with no resumable session gives a template that restarts the work with the recovery prompt. |
+| `args.resume` | array of fragment | unless `session.assign` is `"none"` | Continuing an earlier session. An agent with no resumable session may leave it out: a resume renders `args.run` instead, restarting the work with the recovery prompt. Declaring one anyway overrides that fallback. |
 | `args.vision` | array of fragment | no | Browser mode's one-shot screenshot read (`--browser-vision`). |
 
 Each template is a list of **fragments**, appended in order. A fragment is deliberately not an expression language: it tests one named value for presence, and nothing else.
@@ -419,12 +419,6 @@ These are the shipped documents, verbatim, and they are the best worked examples
       {"when": "level", "args": ["--variant", "{level}"]},
       {"args": ["{prompt}"]}
     ],
-    "resume": [
-      {"args": ["run", "--auto"]},
-      {"when": "model", "args": ["--model", "{model}"]},
-      {"when": "level", "args": ["--variant", "{level}"]},
-      {"args": ["{prompt}"]}
-    ],
     "vision": [
       {"args": ["run", "--auto", "--file", "{image}"]},
       {"when": "model", "args": ["--model", "{model}"]},
@@ -447,12 +441,6 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "skills": {"target": "cline"},
   "args": {
     "run": [
-      {"args": ["--auto-approve", "true"]},
-      {"when": "model", "args": ["--model", "{model}"]},
-      {"when": "level", "args": ["--thinking", "{level}"]},
-      {"args": ["{prompt}"]}
-    ],
-    "resume": [
       {"args": ["--auto-approve", "true"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--thinking", "{level}"]},
@@ -484,7 +472,7 @@ Everything the definition says comes from the CLI itself, so answer these five q
 
 ### 2. Write the minimal definition
 
-`name`, `binary`, `args.run`, `args.resume`, `session`, and `output` are all that is required:
+`name`, `binary`, `args.run`, `session`, and `output` are all that is required. `robo` has no resumable session, so it leaves `args.resume` out and a recovery re-runs it with the recovery prompt:
 
 ```json
 {
@@ -496,10 +484,6 @@ Everything the definition says comes from the CLI itself, so answer these five q
       "output": {"format": "text"},
       "args": {
         "run": [
-          {"args": ["run", "--auto-approve"]},
-          {"args": ["{prompt}"]}
-        ],
-        "resume": [
           {"args": ["run", "--auto-approve"]},
           {"args": ["{prompt}"]}
         ]
