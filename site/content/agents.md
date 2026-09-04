@@ -477,7 +477,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
       "type": "event.type",
       "text": "event.text",
       "toolName": "event.toolName",
-      "ignore": ["content_start", "iteration_start", "iteration_end", "usage", "done"]
+      "ignore": ["content_start", "content_update", "iteration_start", "iteration_end", "usage", "done"]
     }
   },
   "skills": {"target": "cline"},
