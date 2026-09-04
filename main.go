@@ -215,6 +215,8 @@ func runWatch(args []string) int {
 	}
 	var webUI *webui.Server
 	var webServer *http.Server
+	var webListener net.Listener
+	var webPort int
 	if !noWebUI {
 		var err error
 		webUI, err = webui.New(version)
@@ -222,14 +224,14 @@ func runWatch(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		listener, port, err := webui.Listen(webUIPort)
+		webListener, webPort, err = webui.Listen(webUIPort)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		// Record the bound port so `glorp ui` finds this instance even when it
 		// listens far away from the default scan range.
-		removeRecord, err := writeDashboardRecord(dashboardRecordsDir(os.Getenv), port, os.Getpid())
+		removeRecord, err := writeDashboardRecord(dashboardRecordsDir(os.Getenv), webPort, os.Getpid())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "record dashboard port: %v\n", err)
 		}
@@ -241,15 +243,7 @@ func runWatch(args []string) int {
 			return 1
 		}
 		defer stopFrontend()
-		go func() {
-			if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
-			}
-		}()
 		defer webServer.Close()
-		webURL := fmt.Sprintf("http://localhost:%d", port)
-		fmt.Fprintf(output, "web UI listening on %s\n", webURL)
-		webUI.Log("web UI listening on " + webURL)
 	}
 	if ui == nil && webUI == nil {
 		fmt.Fprintln(output, "UI disabled")
@@ -294,8 +288,7 @@ func runWatch(args []string) int {
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
 	if webUI != nil {
-		webUI.SetJobActionHandler(w.handleJobAction)
-		webUI.SetSettingsHandler(w.ApplySettings)
+		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, w.ApplySettings)
 	}
 	var server *http.Server
 	if !poll {
@@ -362,6 +355,24 @@ func runWatch(args []string) int {
 		ui.program.Quit()
 	}
 	return 0
+}
+
+// startWebUI wires the dashboard's job-action and settings handlers, then
+// begins serving requests. The handlers must be wired before the server
+// starts accepting connections: a request that lands in the gap sees the
+// handler as unset and gets a spurious "unavailable" response, which the
+// settings modal has no retry for and so is left stuck (issue #571).
+func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)) {
+	webUI.SetJobActionHandler(jobActionHandler)
+	webUI.SetSettingsHandler(settingsHandler)
+	go func() {
+		if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
+		}
+	}()
+	webURL := fmt.Sprintf("http://localhost:%d", port)
+	fmt.Fprintf(output, "web UI listening on %s\n", webURL)
+	webUI.Log("web UI listening on " + webURL)
 }
 
 // splitAllowedCommenters parses the comma-separated --allowed-commenters
