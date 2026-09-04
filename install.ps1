@@ -42,8 +42,22 @@ try {
     if (($userPath -split ';') -notcontains $installDir) {
         [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $installDir).Trim(';')), 'User')
     }
-    & npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code --agent universal -y
-    & npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code --agent universal -y
+    # Which agents the skills are installed for comes from the agent registry
+    # in the binary just installed, so adding an agent definition never means
+    # editing this script.
+    $targets = @(& (Join-Path $installDir 'glorp.exe') agents -skills 2>$null)
+    if ($LASTEXITCODE -ne 0) { $targets = @() }
+    $agentFlags = @()
+    foreach ($target in $targets) {
+        $target = "$target".Trim()
+        if ($target) { $agentFlags += @('--agent', $target) }
+    }
+    if ($agentFlags.Count -eq 0) {
+        Write-Host "Installed glorp $tag to $installDir\glorp.exe."
+        throw "Could not read the agent list from glorp, so gh-fix/gh-discuss were not installed. Install them with: npx skills add $repo@gh-fix --global --agent <agent> -y"
+    }
+    & npx --yes skills add "$repo@gh-fix" --global @agentFlags -y
+    & npx --yes skills add "$repo@gh-discuss" --global @agentFlags -y
     Write-Host "Installed glorp $tag to $installDir\glorp.exe and gh-fix/gh-discuss globally."
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue

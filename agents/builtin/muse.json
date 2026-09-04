@@ -4,6 +4,7 @@
   "levels": ["none", "minimal", "low", "medium", "high", "xhigh", "ultra"],
   "session": {"assign": "glorp"},
   "output": {"format": "text"},
+  "skills": {"target": "universal"},
   "args": {
     "run": [
       {"args": ["exec"]},
