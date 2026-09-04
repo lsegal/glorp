@@ -493,9 +493,12 @@ func TestGeminiDefinitionContract(t *testing.T) {
 		Number:     7,
 		SessionID:  "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
 		Stdout:     "working on it",
+		// The spec names no model, so the argv carries the definition's own
+		// defaultModel (issue #622).
 		WantRun: []string{
 			"--session-id", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
-			"--approval-mode", "auto_edit", "--output-format", "text",
+			"--approval-mode", "auto_edit", "--model", "gemini-3.5-flash",
+			"--output-format", "text",
 			"-p", freshPrompt("o/r", 7),
 		},
 		WantResume: []string{
@@ -521,7 +524,8 @@ func TestGeminiDefinitionYoloContract(t *testing.T) {
 		Stdout:     "working on it",
 		WantRun: []string{
 			"--session-id", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
-			"--yolo", "--output-format", "text", "-p", freshPrompt("o/r", 7),
+			"--yolo", "--model", "gemini-3.5-flash",
+			"--output-format", "text", "-p", freshPrompt("o/r", 7),
 		},
 		WantResume: []string{
 			"--resume", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
