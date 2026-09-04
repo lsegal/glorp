@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	agentOptionsFrom,
 	agentStatusFor,
+	agentSummaries,
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchAgentStatuses,
@@ -345,6 +346,37 @@ describe("agentStatusFor", () => {
 	it("returns undefined for an agent with no probe result yet", () => {
 		expect(agentStatusFor(statuses, "claude")).toBeUndefined();
 		expect(agentStatusFor(undefined, "codex")).toBeUndefined();
+	});
+});
+
+describe("agentSummaries", () => {
+	const statuses = [
+		{ name: "codex", auth: "signed in", quota: "80%", installed: true },
+		{ name: "muse", auth: "unknown", quota: "n/a", installed: false },
+	];
+
+	it("collects one summary per unique agent, in first-seen order", () => {
+		const options = [
+			{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" },
+			{ value: "codex/gpt-5.6-mini", agent: "codex", model: "gpt-5.6-mini" },
+			{ value: "muse", agent: "muse", model: "" },
+		];
+		expect(agentSummaries(options, statuses)).toEqual([
+			{ agent: "codex", status: statuses[0] },
+			{ agent: "muse", status: statuses[1] },
+		]);
+	});
+
+	it("leaves status undefined for an agent with no probe result yet", () => {
+		const options = [{ value: "claude", agent: "claude", model: "" }];
+		expect(agentSummaries(options, statuses)).toEqual([
+			{ agent: "claude", status: undefined },
+		]);
+	});
+
+	it("returns an empty list for no options", () => {
+		expect(agentSummaries([], statuses)).toEqual([]);
+		expect(agentSummaries(undefined, statuses)).toEqual([]);
 	});
 });
 

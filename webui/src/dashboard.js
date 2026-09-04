@@ -189,3 +189,22 @@ export function toggleActiveModel(activeAgents, value, checked) {
 	else set.delete(value);
 	return Array.from(set);
 }
+
+// agentSummaries collects one status entry per unique agent behind a model
+// options list, in the order each agent's models first appear. #583 moved
+// each agent's auth/quota reading into a chip's hover-only title, so it's no
+// longer visible without hovering every chip; this lets the models tab also
+// render one always-visible status line per agent (issue #585).
+export function agentSummaries(options, statuses) {
+	const seen = new Set();
+	const summaries = [];
+	for (const option of options || []) {
+		if (!option?.agent || seen.has(option.agent)) continue;
+		seen.add(option.agent);
+		summaries.push({
+			agent: option.agent,
+			status: agentStatusFor(statuses, option.agent),
+		});
+	}
+	return summaries;
+}
