@@ -2,6 +2,7 @@
   "name": "gemini",
   "binary": "gemini",
   "minVersion": "0.58.0",
+  "defaultModel": "gemini-3.5-flash",
   "levels": [],
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},

@@ -49,9 +49,14 @@ type Definition struct {
 	// issues on, so glorp picks the mid-tier one instead of leaving the
 	// choice to the CLI. An empty value keeps the old behaviour: no
 	// {model} is rendered and the CLI decides for itself, which is what a
-	// definition whose catalog is per-account and cannot be named up front
-	// has to do. It must be admitted by Models when that allow-list names
-	// values.
+	// definition whose catalog is fetched for the signed-in account and
+	// cannot be named up front has to do -- muse, cline, and opencode name
+	// none for that reason (issue #622), since an id glorp wrote down would
+	// fail the dispatch on an account that cannot reach it. A default also
+	// has to leave the level to {level}: an id with the reasoning level
+	// spelled into it renders beside the fragment that names one, which is
+	// why agy's default is the id in its catalog that carries none. It must
+	// be admitted by Models when that allow-list names values.
 	DefaultModel string `json:"defaultModel,omitempty"`
 	// Output names how the agent's stdout is decoded: passed through as it
 	// is written, decoded as Claude's streaming envelope, or decoded by the

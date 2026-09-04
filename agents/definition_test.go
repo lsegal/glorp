@@ -677,16 +677,27 @@ func TestDefaultModelHasToBeOneTheAgentAccepts(t *testing.T) {
 // glorp means to spend a queue of issues on rather than each CLI's own largest
 // model (issue #612), and that the agents whose catalogs are per-account name
 // none rather than a model id glorp cannot promise every account has.
+//
+// The four ids here were each read out of the CLI's own catalog rather than
+// guessed (issue #622). gemini's list is built inside the CLI rather than
+// fetched for the account, so a flash id can be promised the way codex's and
+// claude's can; agy's is fetched, but every id it offers except the Claude and
+// GPT-OSS ones ends in its own reasoning level. muse, cline, and opencode name
+// none deliberately: their catalogs are whatever the signed-in account can
+// reach, so any id glorp wrote down here would fail the dispatch outright on
+// an account that does not have it -- strictly worse than letting the CLI
+// choose. See TestBuiltinDefaultModelsCarryNoReasoningLevel for the other half
+// of the agy decision.
 func TestBuiltinDefaultModelsAreMidTier(t *testing.T) {
 	registry := MustBuiltin()
 	for name, want := range map[string]string{
 		"codex":    "gpt-5.6-terra",
 		"claude":   "sonnet",
-		"gemini":   "",
+		"gemini":   "gemini-3.5-flash",
+		"agy":      "claude-sonnet-4-6",
 		"muse":     "",
 		"cline":    "",
 		"opencode": "",
-		"agy":      "",
 	} {
 		definition, ok := registry.Lookup(name)
 		if !ok {
@@ -694,6 +705,36 @@ func TestBuiltinDefaultModelsAreMidTier(t *testing.T) {
 		}
 		if got := definition.ModelOrDefault(""); got != want {
 			t.Errorf("%s default model = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestBuiltinDefaultModelsCarryNoReasoningLevel guards the other half of the
+// agy decision in issue #622: agy renders {level} into its own --effort
+// fragment, and most of the ids its catalog offers spell the level into the id
+// itself (gemini-3.8-flash-medium, gemini-3.1-pro-high). A default carrying an
+// embedded level would have glorp dispatch --model gemini-3.8-flash-medium
+// --effort high and let the CLI pick which of the two contradictory levels
+// wins, so the default has to be an id with no level in it. The same holds for
+// any built-in that declares levels at all.
+func TestBuiltinDefaultModelsCarryNoReasoningLevel(t *testing.T) {
+	registry := MustBuiltin()
+	for _, name := range registry.Names() {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("built-in agent %q is missing", name)
+		}
+		model := definition.ModelOrDefault("")
+		if model == "" {
+			continue
+		}
+		for _, level := range definition.Levels.Values() {
+			if level == "none" {
+				continue
+			}
+			if strings.HasSuffix(model, "-"+level) {
+				t.Errorf("%s default model %q ends in its own reasoning level %q; --agent %s:LEVEL would render both", name, model, level, name)
+			}
 		}
 	}
 }

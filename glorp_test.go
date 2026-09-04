@@ -1456,13 +1456,14 @@ func TestGlorpKeepsWatchingWhenProjectResetFails(t *testing.T) {
 	}
 }
 
-// codexDefaultModel and claudeDefaultModel are the managed defaults those two
-// built-in definitions declare (issue #612), read from the definitions rather
-// than restated here so a default that moves does not need every argv
-// expectation below edited with it.
+// codexDefaultModel, claudeDefaultModel, and geminiDefaultModel are the
+// managed defaults those built-in definitions declare (issues #612 and #622),
+// read from the definitions rather than restated here so a default that moves
+// does not need every argv expectation below edited with it.
 var (
 	codexDefaultModel  = builtinDefaultModel("codex")
 	claudeDefaultModel = builtinDefaultModel("claude")
+	geminiDefaultModel = builtinDefaultModel("gemini")
 )
 
 func builtinDefaultModel(name string) string {
@@ -1600,10 +1601,14 @@ func TestParseAgentSpec(t *testing.T) {
 		{"codex:high", agentSpec{Name: "codex", Model: codexDefaultModel, Level: "high"}},
 		{"codex/gpt-5.6:medium", agentSpec{Name: "codex", Model: "gpt-5.6", Level: "medium"}},
 		{"claude/anthropic/claude-opus:low", agentSpec{Name: "claude", Model: "anthropic/claude-opus", Level: "low"}},
-		// gemini names no default model, so its bare spec still carries
-		// none and the CLI keeps choosing for itself.
-		{"gemini", agentSpec{Name: "gemini"}},
+		{"gemini", agentSpec{Name: "gemini", Model: geminiDefaultModel}},
 		{"gemini/gemini-2.5-pro", agentSpec{Name: "gemini", Model: "gemini-2.5-pro"}},
+		// cline's catalog is whatever its account can reach, so it names no
+		// default and its bare spec still carries none: the CLI keeps
+		// choosing for itself rather than glorp naming an id the account may
+		// not have (issue #622).
+		{"cline", agentSpec{Name: "cline"}},
+		{"cline/anthropic/claude-sonnet-5", agentSpec{Name: "cline", Model: "anthropic/claude-sonnet-5"}},
 	} {
 		got, err := parseAgentSpec(test.value)
 		if err != nil {

@@ -17,11 +17,11 @@ This page is the reference for that file and that schema.
 | --- | --- | --- | --- | --- | --- | --- |
 | `codex` | [Codex CLI](https://developers.openai.com/codex/cli/) | `low`, `medium`, `high` | `gpt-5.6-terra` | yes — Codex prints the ID, glorp reads it back | `codex` | `codex` |
 | `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `low`, `medium`, `high` | `sonnet` | yes — glorp assigns the ID | `claude` | `claude-code` |
-| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | none — the CLI has no reasoning-effort flag | the CLI's own | yes — glorp assigns the ID | none | `gemini-cli` |
-| `muse` | [Meta Muse Code](https://dev.meta.ai/docs/muse-code) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | the CLI's own | yes — glorp assigns the ID | none | `universal` |
-| `opencode` | [opencode](https://opencode.ai) | `low`, `medium`, `high` | the CLI's own | no — recovery restarts the work | none | `opencode` |
-| `cline` | [Cline](https://cline.bot) | `none`, `low`, `medium`, `high`, `xhigh` | the CLI's own | no — recovery restarts the work | none | `cline` |
-| `agy` | [Antigravity CLI](https://antigravity.google/docs/cli/overview) | `low`, `medium`, `high` | the CLI's own | no — recovery restarts the work | none | `antigravity-cli` |
+| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | none — the CLI has no reasoning-effort flag | `gemini-3.5-flash` | yes — glorp assigns the ID | none | `gemini-cli` |
+| `muse` | [Meta Muse Code](https://dev.meta.ai/docs/muse-code) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | none — per-account catalog | yes — glorp assigns the ID | none | `universal` |
+| `opencode` | [opencode](https://opencode.ai) | `low`, `medium`, `high` | none — per-account catalog | no — recovery restarts the work | none | `opencode` |
+| `cline` | [Cline](https://cline.bot) | `none`, `low`, `medium`, `high`, `xhigh` | none — per-account catalog | no — recovery restarts the work | none | `cline` |
+| `agy` | [Antigravity CLI](https://antigravity.google/docs/cli/overview) | `low`, `medium`, `high` | `claude-sonnet-4-6` | no — recovery restarts the work | none | `antigravity-cli` |
 
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
@@ -145,7 +145,9 @@ The default is resolved where the `--agent` spec is parsed, so it is the model t
 
 The value must be one `models` admits when that allow-list names values. A config file that narrows `models` on a built-in therefore has to name a `defaultModel` the narrowed list allows, or drop the inherited one with `"defaultModel": null`, rather than have glorp quietly run a model the file just said it would not accept.
 
-Leaving the field out keeps the older behaviour: no `{model}` fragment is rendered and the CLI decides for itself. That is what the built-ins whose catalogs are per-account do -- `gemini`, `muse`, `cline`, `opencode`, and `agy` name no default, because there is no model id glorp can promise every account has.
+Leaving the field out keeps the older behaviour: no `{model}` fragment is rendered and the CLI decides for itself. That is what a built-in whose catalog is per-account has to do, because there is no model id glorp can promise every account has: `muse`, `cline`, and `opencode` name no default deliberately. Their catalogs are fetched for the signed-in account -- `cline` answers with 289 provider-prefixed ids drawn from whatever that account can reach, `opencode` with 20 of the same shape, and `muse` with none at all, since its rows are hidden from the wire until an account is entitled to them -- so any id written into the definition would fail the dispatch outright on an account that does not carry it, which is strictly worse than letting the CLI choose. Naming a model explicitly still works for all three.
+
+`gemini` and `agy` do name one. Gemini CLI builds its `availableModels` list inside the CLI rather than fetching it for the account, so `gemini-3.5-flash` is promised by the binary the same way `codex`'s and `claude`'s defaults are, and it is the mid-tier of what that list offers rather than the `gemini-3.1-pro-preview` at the top of it. `agy` is the one whose default is constrained by its own argv: it renders `{level}` into `--effort`, and almost every id its catalog offers spells the reasoning level into the id itself (`gemini-3.8-flash-medium`, `gemini-3.1-pro-high`), so a default like that would have glorp dispatch `--model gemini-3.8-flash-medium --effort high` and leave the CLI to decide which of the two contradictory levels wins. `claude-sonnet-4-6` is the mid-tier id in that catalog with no level embedded in it, so the `--effort` fragment stays the only thing that names one.
 
 ### `args`
 
@@ -417,6 +419,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "name": "gemini",
   "binary": "gemini",
   "minVersion": "0.58.0",
+  "defaultModel": "gemini-3.5-flash",
   "levels": [],
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},
@@ -615,6 +618,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
 {
   "name": "agy",
   "binary": "agy",
+  "defaultModel": "claude-sonnet-4-6",
   "levels": ["low", "medium", "high"],
   "session": {"assign": "none"},
   "output": {"format": "text"},
