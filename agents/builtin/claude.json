@@ -8,7 +8,8 @@
   "quota": {"reader": "claude"},
   "skills": {"target": "claude-code"},
   "doctor": {
-    "modelsNote": "not listed by the claude CLI, which has no listing command: --model takes an alias or a full model id"
+    "knownModels": ["opus", "sonnet", "haiku"],
+    "modelsNote": "known Claude aliases; the CLI also accepts full model ids"
   },
   "args": {
     "run": [
