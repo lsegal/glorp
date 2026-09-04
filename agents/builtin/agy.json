@@ -7,7 +7,7 @@
   "skills": {"target": "antigravity-cli"},
   "doctor": {
     "models": ["{binary}", "models"],
-    "modelPattern": "^[A-Za-z0-9][A-Za-z0-9 ._/:()-]*$"
+    "modelPattern": "^([A-Za-z0-9][A-Za-z0-9._/:-]*)\\t"
   },
   "args": {
     "run": [
