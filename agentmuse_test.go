@@ -15,6 +15,7 @@ import (
 // tool.result is ignored too because its payload.text is the tool's entire
 // output rather than a summary of the call.
 const museStream = `{"payload_type":"run.lifecycle.started","payload":{"session_id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301"}}\n` +
+	`{"payload_type":"task.lifecycle.proposed","payload":{"task":{"kind":"model.meta.response"}}}\n` +
 	`{"payload_type":"task.lifecycle.proposed","payload":{"task":{"kind":"tool.read_file"}}}\n` +
 	`{"payload_type":"tool.result","payload":{"text":"1: hi"}}\n` +
 	`{"payload_type":"run.output.delta","payload":{"text":"a.txt "}}\n` +
@@ -22,10 +23,12 @@ const museStream = `{"payload_type":"run.lifecycle.started","payload":{"session_
 	`{"payload_type":"run.output.delta","payload":{"text":"hi"}}\n` +
 	`{"payload_type":"run.terminal.completed","payload":{"text":"a.txt contains hi"}}`
 
-// museDecoded is museStream read through the definition: one sentence rather
-// than the three lines an event-per-line decoder would write, and no second
-// copy of it from the terminal event.
-const museDecoded = "a.txt contains hi"
+// museDecoded is museStream read through the definition: the tool call the run
+// proposed, then one sentence rather than the three lines an event-per-line
+// decoder would write, and no second copy of it from the terminal event. The
+// model turn proposed on the same event type carries no "tool." prefix, so it
+// contributes no progress line of its own.
+const museDecoded = "Running: read_file\na.txt contains hi"
 
 // TestMuseDefinitionContract proves the shipped Meta Muse Code definition
 // against the fake CLI. Muse takes a caller-assigned session ID like Claude
@@ -73,21 +76,37 @@ func TestMuseYoloDefinitionContract(t *testing.T) {
 	}.check(t)
 }
 
-// TestMuseProgressCarriesNoToolCalls records the one thing the Muse stream
-// still cannot give the dashboard, so it is not re-investigated on every pass
-// over the definition. No event pairs a tool name with the input it was called
-// with: the name appears alone on task.lifecycle.proposed as a task kind
-// shared with model turns ("tool.read_file" beside "model.meta.response"), and
-// on tool.result beside payload.text, which is the tool's entire output rather
-// than a summary of the call. Muse progress therefore carries text but no
-// "Running: <tool> <detail>" line until Muse's stream gains a call event or
-// the decoder can map fields per event type, tracked as its own issue. Nothing
-// here is special-cased for Muse in Go.
-func TestMuseProgressCarriesNoToolCalls(t *testing.T) {
-	definition := builtinDefinition(t, "muse")
-	if definition.Output.JSONL.ToolName != "" || definition.Output.JSONL.ToolInput != "" {
-		t.Fatal("muse names a tool-call path, but no event in its stream pairs a tool name with its input")
+// TestMuseProgressCarriesToolCalls pins the one thing Muse's stream needed the
+// decoder to learn. No single Muse event pairs a tool name with the input it
+// was called with: the name appears alone on task.lifecycle.proposed as a task
+// kind shared with model turns ("tool.read_file" beside "model.meta.response"),
+// and on tool.result beside payload.text, which is the tool's entire output
+// rather than a summary of the call. The definition therefore reads the name
+// out of task.lifecycle.proposed through a per-event-type override, and tells
+// the two kinds apart by the "tool." prefix that only a call carries. The name
+// renders without a detail because no event carries the call's arguments.
+// Nothing here is special-cased for Muse in Go.
+func TestMuseProgressCarriesToolCalls(t *testing.T) {
+	jsonl := builtinDefinition(t, "muse").Output.JSONL
+	if jsonl.ToolName != "" {
+		t.Fatal("muse names a shared tool-call path, but only task.lifecycle.proposed carries a tool name")
 	}
+	proposed, ok := jsonl.Events["task.lifecycle.proposed"]
+	if !ok {
+		t.Fatal("muse names no per-event-type override for task.lifecycle.proposed, which is where its tool names are")
+	}
+	if proposed.ToolName == "" {
+		t.Fatal("the task.lifecycle.proposed override reads no tool name")
+	}
+	if proposed.ToolNamePrefix == "" {
+		t.Fatal("the task.lifecycle.proposed override matches no prefix, so a model turn renders as a tool call")
+	}
+}
+
+// TestMuseAsksForItsJSONStreamOnlyWhereItIsDecoded keeps the modes whose output
+// is read as an event stream asking for one, and the vision read off it.
+func TestMuseAsksForItsJSONStreamOnlyWhereItIsDecoded(t *testing.T) {
+	definition := builtinDefinition(t, "muse")
 	// The vision call reads a board screenshot and its answer is parsed as
 	// prose, so that mode alone stays on Muse's plain output.
 	for _, arg := range definition.Render(agents.ModeVision, agents.Values{Prompt: "do it", Image: "/tmp/shot.png"}) {
