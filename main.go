@@ -288,7 +288,10 @@ func runWatch(args []string) int {
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
 	if webUI != nil {
-		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, w.ApplySettings)
+		agentsHandler := func(ctx context.Context) ([]core.AgentStatus, error) {
+			return agentStatuses(ctx, w.registry())
+		}
+		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, w.ApplySettings, agentsHandler)
 	}
 	var server *http.Server
 	if !poll {
@@ -362,9 +365,10 @@ func runWatch(args []string) int {
 // starts accepting connections: a request that lands in the gap sees the
 // handler as unset and gets a spurious "unavailable" response, which the
 // settings modal has no retry for and so is left stuck (issue #571).
-func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)) {
+func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error)) {
 	webUI.SetJobActionHandler(jobActionHandler)
 	webUI.SetSettingsHandler(settingsHandler)
+	webUI.SetAgentsHandler(agentsHandler)
 	go func() {
 		if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)

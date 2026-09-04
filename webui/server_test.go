@@ -111,3 +111,57 @@ func TestServerRejectsUnavailableJobActions(t *testing.T) {
 		t.Fatalf("POST action = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }
+
+// TestServerHandlesAgents checks the settings modal's agents tab (issue
+// #572) reads back exactly what the run's agent probe reports.
+func TestServerHandlesAgents(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := []core.AgentStatus{
+		{Name: "codex", Installed: true, Auth: "signed in", Quota: "80% left", Status: "ok"},
+		{Name: "claude", Installed: false, Auth: "unknown", Status: "missing"},
+	}
+	ui.SetAgentsHandler(func(context.Context) ([]core.AgentStatus, error) { return statuses, nil })
+	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET agents = %d, body = %q", response.Code, response.Body.String())
+	}
+	var got []core.AgentStatus
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "codex" || got[1].Status != "missing" {
+		t.Fatalf("agents = %#v", got)
+	}
+}
+
+func TestServerRejectsUnavailableAgents(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET agents = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestServerRejectsAgentsPost(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.SetAgentsHandler(func(context.Context) ([]core.AgentStatus, error) { return nil, nil })
+	request := httptest.NewRequest(http.MethodPost, "/api/agents", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST agents = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+	}
+}
