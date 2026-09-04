@@ -43,7 +43,7 @@ func TestConfigOverridesABuiltinFieldByField(t *testing.T) {
 	if claude.Binary != "/opt/claude" {
 		t.Fatalf("binary = %q, want the override", claude.Binary)
 	}
-	if !reflect.DeepEqual(claude.Models, []string{"opus"}) {
+	if !reflect.DeepEqual(claude.Models.Values(), []string{"opus"}) {
 		t.Fatalf("models = %v, want the override", claude.Models)
 	}
 	// Everything the document did not mention is still the built-in's.
@@ -69,7 +69,7 @@ func TestConfigNullClearsAnInheritedField(t *testing.T) {
 	if len(claude.Env) != 0 {
 		t.Fatalf("env = %v, want it cleared", claude.Env)
 	}
-	if len(claude.Levels) != 0 {
+	if claude.Levels.Declared() {
 		t.Fatalf("levels = %v, want them cleared", claude.Levels)
 	}
 	if !claude.AcceptsLevel("blazing") {
