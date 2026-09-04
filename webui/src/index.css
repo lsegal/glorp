@@ -563,6 +563,12 @@ h1 .version {
 .model-chip-agent {
 	font-weight: 600;
 }
+.model-chip.default {
+	border-style: dashed;
+}
+.model-chip-default {
+	font-style: italic;
+}
 .agent-model-empty {
 	margin: 0;
 	font-size: 12px;

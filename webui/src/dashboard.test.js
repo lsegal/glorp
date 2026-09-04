@@ -410,21 +410,40 @@ describe("modelOptionsFrom", () => {
 
 	it("keeps an active spec selectable while its agent has not reported models", () => {
 		expect(modelOptionsFrom({ agents: ["codex"] }, [], ["codex"])).toEqual([
-			{ value: "codex", agent: "codex", model: "" },
+			{ value: "codex", agent: "codex", model: "", isDefault: true },
 		]);
 		expect(
 			modelOptionsFrom({ agents: ["codex"] }, [], ["codex/gpt-5.6"]),
 		).toEqual([{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }]);
 	});
 
-	it("drops a bare active default after the agent reports concrete models", () => {
+	it("keeps a bare active default beside the concrete models it auto-picks from", () => {
 		expect(
 			modelOptionsFrom(
 				{ agents: ["codex"] },
 				[{ name: "codex", models: ["codex/gpt-5.6"] }],
 				["codex"],
 			),
+		).toEqual([
+			{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" },
+			{ value: "codex", agent: "codex", model: "", isDefault: true },
+		]);
+	});
+
+	it("flags only the bare default, not an active fully qualified spec", () => {
+		expect(
+			modelOptionsFrom({ agents: ["codex"] }, [], ["codex/gpt-5.6"]),
 		).toEqual([{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }]);
+	});
+
+	it("offers no default entry for an agent that is not active", () => {
+		expect(
+			modelOptionsFrom(
+				{ agents: ["codex"] },
+				[{ name: "codex", models: ["codex/gpt-5.6"] }],
+				["codex/gpt-5.6"],
+			).some((option) => option.isDefault),
+		).toBe(false);
 	});
 
 	it("does not duplicate an active spec the probe already offers", () => {
@@ -451,6 +470,23 @@ describe("modelGroupsFrom", () => {
 			"claude",
 		]);
 	});
+	it("leads an agent's group with the default chip its bare spec selects", () => {
+		const groups = modelGroupsFrom(
+			{ agents: ["codex"] },
+			[{ name: "codex", models: ["codex/gpt-5.6", "codex/gpt-5.6-codex"] }],
+			["codex"],
+		);
+		expect(groups[0].options).toEqual([
+			{ value: "codex", agent: "codex", model: "", isDefault: true },
+			{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" },
+			{
+				value: "codex/gpt-5.6-codex",
+				agent: "codex",
+				model: "gpt-5.6-codex",
+			},
+		]);
+	});
+
 	it("groups model choices by agent and retains an empty agent group", () => {
 		expect(
 			modelGroupsFrom({ agents: ["codex", "claude"] }, [

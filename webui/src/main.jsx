@@ -219,13 +219,19 @@ function StatusBar({ snapshot, connected }) {
 // agent, so toggling which models are active reads the same information
 // `glorp agents` prints to the terminal.
 function ModelChip({ option, checked, onToggle, status }) {
-	const title = status
+	const probe = status
 		? `auth: ${status.auth} · quota: ${status.quota}${status.installed ? "" : " · not installed"}`
 		: "probing...";
+	// A default chip pins no model, so its tooltip says which choice it is
+	// standing in for rather than leaving it to be read as a model name
+	// (issue #611).
+	const title = option.isDefault
+		? `${option.agent}'s own default model · ${probe}`
+		: probe;
 	return (
 		<button
 			type="button"
-			className={`model-chip${checked ? " active" : ""}${status?.auth === "signed out" ? " signed-out" : ""}`}
+			className={`model-chip${checked ? " active" : ""}${option.isDefault ? " default" : ""}${status?.auth === "signed out" ? " signed-out" : ""}`}
 			aria-pressed={checked}
 			title={title}
 			onClick={() => onToggle(option.value, !checked)}
@@ -234,6 +240,11 @@ function ModelChip({ option, checked, onToggle, status }) {
 				<>
 					<span className="model-chip-agent">{option.agent}</span>/
 					{option.model}
+				</>
+			) : option.isDefault ? (
+				<>
+					<span className="model-chip-agent">{option.agent}</span>/
+					<span className="model-chip-default">default model</span>
 				</>
 			) : (
 				option.agent
