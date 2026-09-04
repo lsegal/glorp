@@ -3,6 +3,7 @@
   "binary": "claude",
   "levels": ["low", "medium", "high"],
   "env": {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"},
+  "defaultModel": "sonnet",
   "session": {"assign": "glorp"},
   "output": {"format": "stream-json"},
   "quota": {"reader": "claude"},

@@ -690,7 +690,9 @@ func TestAgentFlagAccumulatesValues(t *testing.T) {
 	if err := got.Set("codex"); err != nil {
 		t.Fatal(err)
 	}
-	if want := "claude,codex"; got.String() != want {
+	// Each accumulated spec carries the managed default its definition
+	// declares, so the flag's string form is what a resumed run parses back.
+	if want := "claude/" + claudeDefaultModel + ",codex/" + codexDefaultModel; got.String() != want {
 		t.Fatalf("agents = %q, want %q", got.String(), want)
 	}
 }

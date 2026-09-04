@@ -620,3 +620,80 @@ func doctorFixture(doctor Doctor) Definition {
 		Doctor:  doctor,
 	}
 }
+
+// TestDefaultModelFillsInAnUnspecifiedModel checks the managed default an
+// --agent spec with no model of its own falls back to (issue #612), and that a
+// definition naming none still leaves the choice to the agent's own CLI.
+func TestDefaultModelFillsInAnUnspecifiedModel(t *testing.T) {
+	withDefault := Definition{DefaultModel: "gpt-5.6-terra"}
+	if got := withDefault.ModelOrDefault(""); got != "gpt-5.6-terra" {
+		t.Fatalf("ModelOrDefault(\"\") = %q, want the definition's default", got)
+	}
+	if got := withDefault.ModelOrDefault("gpt-5.6-sol"); got != "gpt-5.6-sol" {
+		t.Fatalf("ModelOrDefault(explicit) = %q, want the model the spec named", got)
+	}
+	if got := (Definition{}).ModelOrDefault(""); got != "" {
+		t.Fatalf("ModelOrDefault(\"\") = %q, want none for a definition declaring no default", got)
+	}
+}
+
+// TestDefaultModelHasToBeOneTheAgentAccepts checks the default is held to the
+// same allow-list --agent is, so a definition cannot promise a model it says in
+// the next field it would reject.
+func TestDefaultModelHasToBeOneTheAgentAccepts(t *testing.T) {
+	base := func() Definition {
+		return Definition{
+			Name:    "acme",
+			Binary:  "acme",
+			Session: Session{Assign: AssignNone},
+			Output:  Output{Format: FormatText},
+			Args:    Args{Run: []Fragment{{Args: []string{"{prompt}"}}}},
+		}
+	}
+	accepted := base()
+	accepted.Models = AllowList{}
+	accepted.Models.UnmarshalJSON([]byte(`["fast","slow"]`))
+	accepted.DefaultModel = "fast"
+	if err := accepted.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a default the allow-list admits to pass", err)
+	}
+	rejected := accepted
+	rejected.DefaultModel = "enormous"
+	err := rejected.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want a default outside the allow-list rejected")
+	}
+	if !strings.Contains(err.Error(), "defaultModel") {
+		t.Fatalf("Validate() error = %v, want it to name the field", err)
+	}
+	unconstrained := base()
+	unconstrained.DefaultModel = "anything"
+	if err := unconstrained.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want any default on a definition with no models allow-list", err)
+	}
+}
+
+// TestBuiltinDefaultModelsAreMidTier checks the shipped defaults are the ones
+// glorp means to spend a queue of issues on rather than each CLI's own largest
+// model (issue #612), and that the agents whose catalogs are per-account name
+// none rather than a model id glorp cannot promise every account has.
+func TestBuiltinDefaultModelsAreMidTier(t *testing.T) {
+	registry := MustBuiltin()
+	for name, want := range map[string]string{
+		"codex":    "gpt-5.6-terra",
+		"claude":   "sonnet",
+		"gemini":   "",
+		"muse":     "",
+		"cline":    "",
+		"opencode": "",
+		"agy":      "",
+	} {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("built-in agent %q is missing", name)
+		}
+		if got := definition.ModelOrDefault(""); got != want {
+			t.Errorf("%s default model = %q, want %q", name, got, want)
+		}
+	}
+}

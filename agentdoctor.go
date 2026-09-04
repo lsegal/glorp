@@ -65,6 +65,9 @@ type agentReport struct {
 	quotaErr  error
 	models    []string
 	modelNote string
+	// defaultModel is the model glorp runs the agent with when --agent names
+	// none, empty for a definition that leaves that to the CLI (issue #612).
+	defaultModel string
 }
 
 // installed reports whether the agent's CLI was found on PATH.
@@ -233,17 +236,18 @@ func (d *agentDoctor) Report(ctx context.Context) []agentReport {
 // renders as text.
 func agentStatus(report agentReport) core.AgentStatus {
 	status := core.AgentStatus{
-		Name:        report.name,
-		Installed:   report.installed(),
-		Binary:      report.binary,
-		Version:     report.version,
-		VersionNote: report.versionNote,
-		Auth:        report.auth,
-		Quota:       describeQuota(report),
-		TracksQuota: report.tracksQuota,
-		Models:      report.models,
-		ModelNote:   report.modelNote,
-		Status:      report.statusKey(),
+		Name:         report.name,
+		Installed:    report.installed(),
+		Binary:       report.binary,
+		Version:      report.version,
+		VersionNote:  report.versionNote,
+		Auth:         report.auth,
+		Quota:        describeQuota(report),
+		TracksQuota:  report.tracksQuota,
+		Models:       report.models,
+		ModelNote:    report.modelNote,
+		DefaultModel: report.defaultModel,
+		Status:       report.statusKey(),
 	}
 	if report.quotaErr != nil {
 		status.QuotaError = report.quotaErr.Error()
@@ -272,6 +276,7 @@ func (d *agentDoctor) reportAgent(ctx context.Context, name string) agentReport 
 		return report
 	}
 	report.binary = definition.Binary
+	report.defaultModel = definition.ModelOrDefault("")
 	path, err := d.lookPath(definition.Binary)
 	if err != nil {
 		report.models, report.modelNote = declaredModels(definition)
@@ -416,6 +421,9 @@ func writeAgentReports(out io.Writer, reports []agentReport) {
 		}
 		writeAgentField(out, "auth", report.auth)
 		writeAgentField(out, "quota", describeQuota(report))
+		if report.defaultModel != "" {
+			writeAgentField(out, "default", qualify(report.name, []string{report.defaultModel})[0])
+		}
 		writeAgentModels(out, report)
 	}
 }
