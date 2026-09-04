@@ -24,7 +24,7 @@ This page is the reference for that file and that schema.
 
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
-Models are not listed because most of these CLIs take a live catalog. A definition may name a `models` allow-list, and none of the built-ins do: whatever `--agent NAME/MODEL` names is passed straight through to the CLI.
+None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL` names is passed straight through to the CLI, because these CLIs take a live catalog and a list that validated it would reject a model released this morning. `glorp agents` enumerates them all the same -- `opencode` lists its own with `opencode models`, and the rest declare the names they are known to take in `doctor.knownModels`, which the report labels *known to glorp; the CLI may accept others* rather than presenting it as the catalog.
 
 `gemini` is the built-in that declares `"levels": []`. That is not the same as naming no list at all: an empty list accepts nothing, so `--agent gemini:high` stops the run naming the agent instead of accepting a level the definition has no `{level}` fragment to pass on. See [allow-lists](#allow-lists) below.
 
@@ -258,9 +258,10 @@ The set of ids skills.sh knows grows without glorp, so the shape of the id is ch
 | `doctor.signedIn` | regular expression | no | none | What the auth command's output has to match for the agent to count as signed in, for the CLIs that report a signed-out account on a zero exit status. Needs `doctor.auth`. |
 | `doctor.models` | array of string | no | none | The argv that lists the models the agent accepts, one per line on its stdout. `{binary}` substitutes as above. |
 | `doctor.modelPattern` | regular expression | no | none | Narrows what counts as a model in that output, for a command that decorates its list. Only a matching line is a model, and its first capture group, when it has one, is the model id. Needs `doctor.models`. |
+| `doctor.knownModels` | array of string | no | none | The models the definition itself knows the CLI accepts, for a CLI with no listing command to ask. Reported as `agent/model` names labelled *known to glorp; the CLI may accept others*, and never used to validate `--agent`, so a model released after the definition still runs. |
 | `doctor.timeout` | duration string | no | `20s` | Bounds one probe. The report is a diagnostic, so a CLI that hangs is reported as unknown rather than allowed to hold the listing up. Must be positive. |
 
-Both probes are optional, and neither is ever run by a dispatch — `glorp agents` is the only caller. An agent that declares nothing here still appears in the report: what it could not answer is shown as `unknown`, and its models come from its `models` allow-list, or from a note saying the CLI accepts any model, or that it accepts none. A field belonging to a probe the definition does not declare is rejected rather than ignored, for the same reason the `quota` block rejects one.
+Both probes are optional, and neither is ever run by a dispatch — `glorp agents` is the only caller. An agent that declares nothing here still appears in the report: what it could not answer is shown as `unknown`, and its models come from its `models` allow-list, then from `doctor.knownModels`, and otherwise from a note saying the CLI accepts any model, or that it accepts none. A field belonging to a probe the definition does not declare is rejected rather than ignored, for the same reason the `quota` block rejects one.
 
 Sign-in has a fallback that costs nothing: an agent with no `doctor.auth` whose quota could be read is reported as signed in, because every quota reader asks the CLI something only a signed-in account can answer.
 
@@ -288,7 +289,15 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "skills": {"target": "codex"},
   "doctor": {
     "auth": ["{binary}", "login", "status"],
-    "signedIn": "(?im)^\\s*Logged in"
+    "signedIn": "(?im)^\\s*Logged in",
+    "knownModels": [
+      "gpt-5.6-terra",
+      "gpt-5.1-codex-max",
+      "gpt-5.1-codex",
+      "gpt-5.1",
+      "gpt-5-codex",
+      "gpt-5"
+    ]
   },
   "args": {
     "run": [
@@ -326,6 +335,18 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "output": {"format": "stream-json"},
   "quota": {"reader": "claude"},
   "skills": {"target": "claude-code"},
+  "doctor": {
+    "knownModels": [
+      "fable",
+      "opus",
+      "sonnet",
+      "haiku",
+      "claude-fable-5",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5"
+    ]
+  },
   "args": {
     "run": [
       {"args": ["-p"]},
@@ -371,6 +392,14 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "output": {"format": "text"},
   "missingSession": ["no previous sessions found", "invalid session identifier"],
   "skills": {"target": "gemini-cli"},
+  "doctor": {
+    "knownModels": [
+      "gemini-3-pro-preview",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite"
+    ]
+  },
   "args": {
     "run": [
       {"when": "session", "args": ["--session-id", "{session}"]},
@@ -418,6 +447,12 @@ These are the shipped documents, verbatim, and they are the best worked examples
     }
   },
   "skills": {"target": "universal"},
+  "doctor": {
+    "knownModels": [
+      "muse-spark-1.3",
+      "muse-spark-1.2"
+    ]
+  },
   "args": {
     "run": [
       {"args": ["exec"]},
@@ -511,6 +546,15 @@ These are the shipped documents, verbatim, and they are the best worked examples
     }
   },
   "skills": {"target": "cline"},
+  "doctor": {
+    "knownModels": [
+      "anthropic/claude-fable-5.1",
+      "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5",
+      "openai/gpt-5.6-terra",
+      "google/gemini-3-pro-preview"
+    ]
+  },
   "args": {
     "run": [
       {"args": ["--auto-approve", "true"]},

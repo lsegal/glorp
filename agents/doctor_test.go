@@ -123,6 +123,7 @@ func TestDoctorValidate(t *testing.T) {
 		{name: "empty models argument", doctor: Doctor{Models: []string{"opencode", ""}}, want: "doctor.models"},
 		{name: "signedIn without auth", doctor: Doctor{SignedIn: "ok"}, want: "doctor.signedIn"},
 		{name: "modelPattern without models", doctor: Doctor{ModelPattern: "."}, want: "doctor.modelPattern"},
+		{name: "empty known model", doctor: Doctor{KnownModels: []string{"opus", " "}}, want: "doctor.knownModels"},
 		{name: "unparseable signedIn", doctor: Doctor{Auth: []string{"codex"}, SignedIn: "("}, want: "doctor.signedIn"},
 		{name: "unparseable modelPattern", doctor: Doctor{Models: []string{"opencode"}, ModelPattern: "("}, want: "doctor.modelPattern"},
 		{name: "unparseable timeout", doctor: Doctor{Timeout: "soon"}, want: "doctor.timeout"},
