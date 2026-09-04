@@ -24,7 +24,7 @@ This page is the reference for that file and that schema.
 
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
-Models are not listed because most of these CLIs take a live catalog. A definition may name a `models` allow-list; the built-ins that do not pass whatever `--agent NAME/MODEL` was given straight through to the CLI.
+Models are not listed because most of these CLIs take a live catalog. A definition may name a `models` allow-list, and none of the built-ins do: whatever `--agent NAME/MODEL` names is passed straight through to the CLI.
 
 ## `.glorp.config.json`
 
