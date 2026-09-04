@@ -17,14 +17,13 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-	agentStatusFor,
-	agentSummaries,
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchAgentStatuses,
 	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
+	modelGroupsFrom,
 	modelOptionsFrom,
 	submitJobAction,
 	submitSettings,
@@ -243,37 +242,6 @@ function ModelChip({ option, checked, onToggle, status }) {
 	);
 }
 
-// AgentStatusList renders one always-visible auth/quota line per agent behind
-// the models tab's chips (issue #585), since #583 left that reading
-// reachable only by hovering a chip's title. Once the probe has answered, an
-// agent it said nothing about reads "unavailable" rather than sitting on
-// "probing..." forever, and an agent it listed no models for says so, since
-// that is why it contributes no chip (issue #589).
-function AgentStatusList({ summaries, probed }) {
-	if (!summaries.length) return null;
-	return (
-		<ul className="agent-status-list">
-			{summaries.map(({ agent, status }) => (
-				<li key={agent} className="agent-status-row">
-					<span className="agent-status-name">{agent}</span>
-					<span className="agent-status-meta">
-						{status ? (
-							<>
-								auth: {status.auth} · quota: {status.quota}
-								{!status.installed && " · not installed"}
-								{!status.models?.length &&
-									` · ${status.modelNote || "no models reported"}`}
-							</>
-						) : (
-							(probed && "unavailable") || "probing..."
-						)}
-					</span>
-				</li>
-			))}
-		</ul>
-	);
-}
-
 function SettingsModal({ onClose }) {
 	const [tab, setTab] = useState("general");
 	const [form, setForm] = useState(null);
@@ -324,6 +292,11 @@ function SettingsModal({ onClose }) {
 	// after the settings snapshot does, and an agent's entries only exist once
 	// they have (issue #589).
 	const modelOptions = modelOptionsFrom(
+		settings,
+		agentStatuses,
+		form?.activeAgents,
+	);
+	const modelGroups = modelGroupsFrom(
 		settings,
 		agentStatuses,
 		form?.activeAgents,
@@ -435,21 +408,43 @@ function SettingsModal({ onClose }) {
 											: "probing agents for models..."}
 									</p>
 								)}
-								<div className="model-chips">
-									{modelOptions.map((option) => (
-										<ModelChip
-											key={option.value}
-											option={option}
-											checked={form.activeAgents.includes(option.value)}
-											onToggle={toggleModel}
-											status={agentStatusFor(agentStatuses, option.value)}
-										/>
+								<div className="agent-model-groups">
+									{modelGroups.map((group) => (
+										<details
+											key={group.agent}
+											className="agent-model-group"
+											open
+										>
+											<summary>
+												<span>{group.agent}</span>
+												<span className="agent-model-status">
+													{group.status
+														? `auth: ${group.status.auth} · quota: ${group.status.quota}${group.status.installed ? "" : " · not installed"}`
+														: probed
+															? "unavailable"
+															: "probing..."}
+												</span>
+											</summary>
+											<div className="agent-model-options">
+												{group.options.length ? (
+													group.options.map((option) => (
+														<ModelChip
+															key={option.value}
+															option={option}
+															checked={form.activeAgents.includes(option.value)}
+															onToggle={toggleModel}
+															status={group.status}
+														/>
+													))
+												) : (
+													<p className="agent-model-empty">
+														{group.status?.modelNote || "no models reported"}
+													</p>
+												)}
+											</div>
+										</details>
 									))}
 								</div>
-								<AgentStatusList
-									summaries={agentSummaries(settings, agentStatuses)}
-									probed={probed}
-								/>
 							</fieldset>
 						)}
 						{error && <p className="modal-error">{error}</p>}
