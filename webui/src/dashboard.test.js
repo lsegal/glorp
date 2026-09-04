@@ -12,6 +12,7 @@ import {
 	jobActionAvailability,
 	jobAgentSummary,
 	lastPollLabel,
+	modelGroupsFrom,
 	modelOptionsFrom,
 	parseAllowedCommenters,
 	probedModelsByAgent,
@@ -423,6 +424,23 @@ describe("modelOptionsFrom", () => {
 				["codex/gpt-5.6"],
 			),
 		).toEqual([{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }]);
+	});
+});
+
+describe("modelGroupsFrom", () => {
+	it("groups model choices by agent and retains an empty agent group", () => {
+		expect(
+			modelGroupsFrom({ agents: ["codex", "claude"] }, [
+				{ name: "codex", models: ["codex/gpt-5.6"] },
+			]),
+		).toEqual([
+			{
+				agent: "codex",
+				options: [{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }],
+				status: { name: "codex", models: ["codex/gpt-5.6"] },
+			},
+			{ agent: "claude", options: [], status: undefined },
+		]);
 	});
 });
 

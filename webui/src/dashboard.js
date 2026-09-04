@@ -263,6 +263,26 @@ export function modelOptionsFrom(snapshot, statuses, selected) {
 	return options;
 }
 
+// modelGroupsFrom keeps each agent's choices together in the settings modal
+// (issue #596), while retaining a group for agents with no reported models.
+export function modelGroupsFrom(snapshot, statuses, selected) {
+	const groups = new Map();
+	const add = (agent) => {
+		if (!agent || groups.has(agent)) return;
+		groups.set(agent, {
+			agent,
+			options: [],
+			status: agentStatusFor(statuses, agent),
+		});
+	};
+	for (const option of agentOptionsFrom(snapshot)) add(option?.name);
+	for (const option of modelOptionsFrom(snapshot, statuses, selected)) {
+		add(option.agent);
+		groups.get(option.agent).options.push(option);
+	}
+	return Array.from(groups.values());
+}
+
 // agentStatusFor finds the probe result for the agent behind a model option's
 // value in the list /api/agents returns, so a model chip (issue #582) can
 // show its agent's auth and quota reading.
