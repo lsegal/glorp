@@ -53,7 +53,7 @@ On macOS or Linux:
 curl -fsSL https://github.com/lsegal/glorp/releases/latest/download/install.sh | bash
 ```
 
-The script downloads the release for the current operating system and architecture, installs `glorp` into `~/.local/bin`, and installs the repository's `gh-fix` and `gh-discuss` skills globally for Codex and Claude Code through skills.sh.
+The script downloads the release for the current operating system and architecture, installs `glorp` into `~/.local/bin`, and installs the repository's `gh-fix` and `gh-discuss` skills globally through skills.sh, for every agent glorp ships a definition for. The installer asks the binary it just installed for that list (`glorp agents -skills`), so an agent added to the registry is covered without the installer changing.
 
 On Windows PowerShell:
 
@@ -61,7 +61,7 @@ On Windows PowerShell:
 irm https://github.com/lsegal/glorp/releases/latest/download/install.ps1 | iex
 ```
 
-The PowerShell installer places `glorp.exe` in `%USERPROFILE%\AppData\Local\glorp`, adds that directory to the user `PATH`, and installs the same `gh-fix` and `gh-discuss` skills through skills.sh. Restart the terminal if `glorp` is not immediately found.
+The PowerShell installer places `glorp.exe` in `%USERPROFILE%\AppData\Local\glorp`, adds that directory to the user `PATH`, and installs the same `gh-fix` and `gh-discuss` skills through skills.sh, for the same registry-derived agent list. Restart the terminal if `glorp` is not immediately found.
 
 Installer behavior can be overridden with environment variables:
 
@@ -72,6 +72,15 @@ Installer behavior can be overridden with environment variables:
 | `GLORP_BIN_DIR` | Destination directory for the executable | `~/.local/bin` on Unix; `%USERPROFILE%\AppData\Local\glorp` on Windows |
 
 The public `.agents/skills/gh-fix` and `.agents/skills/gh-discuss` directories in this repository are the skills.sh package sources.
+
+The installers cover the built-in agents only. An agent declared in `--config` may name its own skills.sh target with `"skills": {"target": "ID"}` -- a dedicated id such as `opencode`, `cline`, or `gemini-cli`, or `universal` for a CLI skills.sh has no dedicated id for -- and installs its own skills with the same command the installers use:
+
+```sh
+npx --yes skills add lsegal/glorp@gh-fix --global --agent ID -y
+npx --yes skills add lsegal/glorp@gh-discuss --global --agent ID -y
+```
+
+`glorp agents` lists the agents in force, and `glorp agents -skills` lists the target ids they install skills for.
 
 ### Upgrading
 
@@ -88,6 +97,7 @@ Every glorp invocation starts with a subcommand:
 | Command | Description |
 | --- | --- |
 | `glorp watch [flags] [TARGET ...]` | Watch GitHub targets and dispatch agents for ready issues. |
+| `glorp agents [flags]` | List the agents glorp can dispatch to, or with `-skills` the skills.sh target ids they install skills for. |
 | `glorp ui [flags]` | Open a running glorp dashboard in a browser. |
 | `glorp version` | Print the glorp version. |
 | `glorp upgrade` | Upgrade glorp to the latest release. |
@@ -215,6 +225,7 @@ glorp <command> [arguments]
 | Command | Description |
 | --- | --- |
 | `watch` | Watch GitHub targets and dispatch agents for ready issues. |
+| `agents` | List the agents glorp can dispatch to, or with `-skills` the skills.sh target ids they install skills for. |
 | `ui` | Open a running glorp dashboard in a browser. |
 | `auth` | Sign glorp's browser profile in to GitHub for `--browser` mode. |
 | `version` | Print the glorp version. |
@@ -255,7 +266,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--ready-state NAME` | auto (`Todo` or `Ready`) | Project status that marks an issue ready for an agent; matching is case-insensitive. |
 | `--remote-control` | `false` | Ask Claude runs to start Remote Control so a headless agent is viewable, and steerable, from the Claude mobile app and claude.ai/code. Claude receives `--settings {"remoteControlAtStartup":true}`, layered on top of your own settings, plus `--rc "glorp owner/repo#N"` so concurrent runs are told apart by issue instead of sharing a host name. **Claude does not honour this under `-p`**: measured against Claude Code 2.1.248, a headless run started with exactly these arguments starts no bridge and never reaches the app, which is why the flag is off by default. It is kept as an opt-in so a Claude release that reads the setting in print mode needs no change here. **No substitute lever exists either** (issue #506): `autoUploadSessions`, the hoped-for view-only mirror, is not a Claude Code setting at all — it is absent from the settings reference, and a `-p` run with every debug category on makes no upload or session-share request of any kind. `claude remote-control`, the separate server mode, hosts only the sessions it creates itself: its `--session-id` takes a server-side code session rather than a local session UUID, so reattaching to a run glorp started is rejected as `invalid session ID: must be a cse_… or session_… tagged ID`, and it also refuses to start until the workspace trust dialog has been accepted interactively — which a `-p` run never triggers, because print mode skips that dialog — and then asks `Enable Remote Control? (y/n)` on the terminal. The remaining answer is a Claude Code change, filed upstream as [anthropics/claude-code#91906](https://github.com/anthropics/claude-code/issues/91906); until it lands, a run is followed in glorp's own dashboard, which is localhost only, and turning the flag on prints that once at startup rather than silently reaching nobody. Codex runs are unaffected and stay viewable in glorp's own dashboard only, so opting in on a watch that has Codex configured prints that once at startup rather than leaving the run's absence from the phone unexplained. `codex exec` takes no Remote Control argument, and Codex's separate `codex remote-control` daemon is not a way around that: it is the app-server hosting the threads it starts itself, so glorp has nothing to hand it an already-running `codex exec`, its `start`, `stop`, and `pair` commands run on Unix only, and pairing a device to it is a manual step. Reaching Codex runs from a phone would mean driving Codex over the app-server protocol instead of `codex exec` altogether. |
 | `--state PATH` | `.glorp.json` | File used to persist handled issues and active session state. |
-| `--config PATH` | `.glorp.config.json` | Agent definition file. Every agent glorp can dispatch to is described by a JSON definition -- the executable, the argv for a fresh run, a resume, and a vision call, the environment its child gets, how its session ID is established, and which models and levels `--agent` accepts -- and this file overrides the definitions glorp ships or adds new ones, so another CLI is a JSON blob rather than a new build. Its shape is `{"agents": [...]}`, an array of definitions or an object keyed by agent name. A definition whose name matches a built-in overrides it field by field, keeping every field it does not mention; a field given as `null` drops what it inherited; an unknown name registers a new agent. A missing file is not an error, and glorp only ever reads this one -- work state stays in `--state`, which glorp rewrites, so definitions kept there would be lost on the next save. Malformed JSON, an unknown field, or an invalid value stops the run naming the file, the agent, and the field, since a definition dropped quietly is indistinguishable from a typo in `--agent`. |
+| `--config PATH` | `.glorp.config.json` | Agent definition file. Every agent glorp can dispatch to is described by a JSON definition -- the executable, the argv for a fresh run, a resume, and a vision call, the environment its child gets, how its session ID is established, and which models and levels `--agent` accepts -- and this file overrides the definitions glorp ships or adds new ones, so another CLI is a JSON blob rather than a new build. A definition may also name the skills.sh target its copy of `gh-fix`/`gh-discuss` installs for with `"skills": {"target": "ID"}`; the installer scripts derive their `skills add --agent` list from the built-in definitions, so a config-defined agent installs its own skills with that command. Its shape is `{"agents": [...]}`, an array of definitions or an object keyed by agent name. A definition whose name matches a built-in overrides it field by field, keeping every field it does not mention; a field given as `null` drops what it inherited; an unknown name registers a new agent. A missing file is not an error, and glorp only ever reads this one -- work state stays in `--state`, which glorp rewrites, so definitions kept there would be lost on the next save. Malformed JSON, an unknown field, or an invalid value stops the run naming the file, the agent, and the field, since a definition dropped quietly is indistinguishable from a typo in `--agent`. |
 | `--web-ui-port PORT` | `8765` | Starting localhost port for the browser dashboard; glorp uses the next available port if occupied. |
 | `--webhook-path PATH` | `/webhook` | HTTP path that accepts GitHub webhook deliveries. |
 | `--webhook-secret SECRET` | empty | Shared secret used to verify GitHub `X-Hub-Signature-256` signatures. The same secret is set when glorp creates each webhook. |
