@@ -16,6 +16,12 @@
     }
   },
   "skills": {"target": "universal"},
+  "doctor": {
+    "knownModels": [
+      "muse-spark-1.3",
+      "muse-spark-1.2"
+    ]
+  },
   "args": {
     "run": [
       {"args": ["exec"]},

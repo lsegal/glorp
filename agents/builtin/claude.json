@@ -7,6 +7,18 @@
   "output": {"format": "stream-json"},
   "quota": {"reader": "claude"},
   "skills": {"target": "claude-code"},
+  "doctor": {
+    "knownModels": [
+      "fable",
+      "opus",
+      "sonnet",
+      "haiku",
+      "claude-fable-5",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5"
+    ]
+  },
   "args": {
     "run": [
       {"args": ["-p"]},
