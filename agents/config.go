@@ -18,6 +18,11 @@ import (
 // glorp only ever reads this file.
 const DefaultConfigPath = ".glorp.config.json"
 
+// SettingsSection is the other section that file takes: default values for
+// glorp's own switches (issue #614). The agent loader does not read it, but
+// it has to know the name so a file carrying it is not rejected as unknown.
+const SettingsSection = "settings"
+
 // config is the shape of that file. The top level is an object so later
 // configuration sections can be added beside the agents rather than the file
 // being a bare array of definitions.
@@ -83,8 +88,8 @@ func parseConfig(path string, raw []byte) ([]override, error) {
 		if stateKeyPattern.MatchString(key) {
 			return nil, fmt.Errorf("agent config %s: %q looks like a work-state record; work state belongs in the --state file (%s) and agent definitions in this file", path, key, "default .glorp.json")
 		}
-		if key != "agents" {
-			return nil, fmt.Errorf("agent config %s: unknown section %q; the only section defined so far is \"agents\"", path, key)
+		if key != "agents" && key != SettingsSection {
+			return nil, fmt.Errorf("agent config %s: unknown section %q; the sections defined so far are \"agents\" and %q", path, key, SettingsSection)
 		}
 	}
 	var parsed config
