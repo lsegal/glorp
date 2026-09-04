@@ -13,14 +13,8 @@
   "doctor": {
     "auth": ["{binary}", "login", "status"],
     "signedIn": "(?im)^\\s*Logged in",
-    "knownModels": [
-      "gpt-6-astra",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.3-codex-spark",
-      "gpt-5.5"
-    ]
+    "models": ["{binary}", "debug", "models"],
+    "modelsJSON": "models[visibility=list].slug"
   },
   "args": {
     "run": [
