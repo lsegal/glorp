@@ -463,7 +463,9 @@ func TestUnknownAgentIsReportedRatherThanRun(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `unknown agent "gemini"`) {
 		t.Fatalf("error = %v, want it to name the unknown agent", err)
 	}
-	if !strings.Contains(err.Error(), "claude, codex") {
-		t.Fatalf("error = %v, want it to list the known agents", err)
+	for _, name := range agents.MustBuiltin().Names() {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("error = %v, want it to list the known agent %q", err, name)
+		}
 	}
 }

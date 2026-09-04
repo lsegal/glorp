@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -121,8 +122,25 @@ func TestSkillsTargetsMergeConfigAndDeduplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.SkillsTargets(), []string{"claude-code", "codex", "universal"}; !reflect.DeepEqual(got, want) {
+	// The expectation is the built-in targets plus the config's own, rather
+	// than a written-out list, so an agent definition added later does not
+	// have to edit a test about deduplication to say so.
+	want := append(agents.MustBuiltin().SkillsTargets(), "universal")
+	sort.Strings(want)
+	got := registry.SkillsTargets()
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("targets = %v, want %v", got, want)
+	}
+	// claude-next names the same target as the built-in claude, which is the
+	// duplicate this test exists to catch.
+	seen := 0
+	for _, target := range got {
+		if target == "claude-code" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("targets = %v, want claude-code exactly once", got)
 	}
 }
 
