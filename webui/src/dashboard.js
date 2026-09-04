@@ -255,7 +255,10 @@ export function modelOptionsFrom(snapshot, statuses, selected) {
 	for (const value of selected || []) {
 		const agent = specAgentName(value);
 		const spec = String(value || "").trim();
-		add(agent, spec.startsWith(`${agent}/`) ? spec.slice(agent.length + 1) : "");
+		add(
+			agent,
+			spec.startsWith(`${agent}/`) ? spec.slice(agent.length + 1) : "",
+		);
 	}
 	return options;
 }

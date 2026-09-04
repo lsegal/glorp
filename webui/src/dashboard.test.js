@@ -393,9 +393,10 @@ describe("modelOptionsFrom", () => {
 
 	it("prefers the declared allow-list over what the probe reported", () => {
 		expect(
-			modelOptionsFrom({ agentOptions: [{ name: "muse", models: ["muse-1"] }] }, [
-				{ name: "muse", models: ["muse/other"] },
-			]),
+			modelOptionsFrom(
+				{ agentOptions: [{ name: "muse", models: ["muse-1"] }] },
+				[{ name: "muse", models: ["muse/other"] }],
+			),
 		).toEqual([{ value: "muse/muse-1", agent: "muse", model: "muse-1" }]);
 	});
 
