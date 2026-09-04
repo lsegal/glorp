@@ -655,6 +655,14 @@ func parseAgentSpecIn(registry *agents.Registry, value string) (agentSpec, error
 	if spec.Model != "" && !definition.AcceptsModel(spec.Model) {
 		return agentSpec{}, definition.ModelError()
 	}
+	// A spec that names no model takes the definition's managed default
+	// rather than whatever the agent's CLI would reach for on its own, which
+	// is usually its largest model (issue #612). Resolving it here, where the
+	// spec is built, is what makes the choice visible everywhere a spec goes:
+	// the rendered argv, the dashboard line, and the agent/model:level string
+	// persisted in the work state, so a resumed session keeps the model it
+	// started with even if the default later moves.
+	spec.Model = definition.ModelOrDefault(spec.Model)
 	spec.Name = name
 	return spec, nil
 }

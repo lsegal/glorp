@@ -43,6 +43,16 @@ type Definition struct {
 	// and to say what was expected when it does not match.
 	Levels AllowList `json:"levels"`
 	Models AllowList `json:"models"`
+	// DefaultModel is the model glorp runs this agent with when --agent
+	// names no model of its own (issue #612). Agent CLIs mostly default to
+	// their largest model, which is the wrong thing to spend a queue of
+	// issues on, so glorp picks the mid-tier one instead of leaving the
+	// choice to the CLI. An empty value keeps the old behaviour: no
+	// {model} is rendered and the CLI decides for itself, which is what a
+	// definition whose catalog is per-account and cannot be named up front
+	// has to do. It must be admitted by Models when that allow-list names
+	// values.
+	DefaultModel string `json:"defaultModel,omitempty"`
 	// Output names how the agent's stdout is decoded: passed through as it
 	// is written, decoded as Claude's streaming envelope, or decoded by the
 	// generic JSONL decoder configured with the agent's own field paths.
@@ -785,6 +795,9 @@ func (d Definition) Validate() error {
 	if err := d.Models.validate("models"); err != nil {
 		return err
 	}
+	if model := strings.TrimSpace(d.DefaultModel); model != "" && !d.AcceptsModel(model) {
+		return fmt.Errorf(`field "defaultModel": %q is not one this agent accepts; %s`, model, d.ModelError())
+	}
 	if err := d.Quota.validate(); err != nil {
 		return err
 	}
@@ -831,6 +844,18 @@ func (d Definition) AcceptsLevel(level string) bool { return d.Levels.Admits(lev
 
 // AcceptsModel reports whether the definition's model allow-list admits a model.
 func (d Definition) AcceptsModel(model string) bool { return d.Models.Admits(model) }
+
+// ModelOrDefault is the model one dispatch runs with: the one the --agent spec
+// named, or the definition's managed default when it named none. It is the
+// single place the fallback happens, so the model glorp chose is the one the
+// argv, the dashboard, and the persisted work state all agree on rather than
+// something only the agent's own CLI knows.
+func (d Definition) ModelOrDefault(model string) string {
+	if strings.TrimSpace(model) != "" {
+		return model
+	}
+	return strings.TrimSpace(d.DefaultModel)
+}
 
 // LevelError says why AcceptsLevel refused, in the shape --agent reports it.
 // An agent that takes no level at all is named rather than being told to pick
