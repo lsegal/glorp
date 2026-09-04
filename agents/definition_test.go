@@ -14,9 +14,10 @@ func TestBuiltinDefinitionsLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Builtin() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("built-in agents = %v, want %v", got, want)
-	}
+	// Asserted as a superset rather than an exact list: every agent glorp
+	// adds a definition for lands here, and a test that has to be edited to
+	// add one only ever reports that an agent was added.
+	requireRegistered(t, registry, "claude", "codex")
 	for _, name := range registry.Names() {
 		definition, _ := registry.Lookup(name)
 		for _, mode := range []Mode{ModeRun, ModeResume, ModeVision} {
@@ -255,5 +256,18 @@ func TestSessionAccessors(t *testing.T) {
 	}
 	if !codex.Session.ClearOnResumeFailure {
 		t.Fatal("codex should drop a session ID it can no longer resume")
+	}
+}
+
+// requireRegistered checks a registry holds at least the named agents. The
+// built-in set grows an agent at a time, so the tests that care which agents
+// exist state the ones they are about rather than the whole list, which would
+// otherwise have to be edited by every agent added after them.
+func requireRegistered(t *testing.T, registry *Registry, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, ok := registry.Lookup(name); !ok {
+			t.Fatalf("agents = %v, want them to include %q", registry.Names(), name)
+		}
 	}
 }
