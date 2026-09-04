@@ -53,32 +53,41 @@ const browserWatchInterval = browser.DefaultWatchInterval
 // command line says.
 var browserExclusiveFlags = []string{"listen", "webhook-path", "webhook-secret", "ngrok-binary"}
 
-// resolveBrowserWatch reads the browser-mode flags and reports the transport
-// settings the run should actually use. Browser mode implies -poll and, unless
-// -interval was passed explicitly, shortens the interval; an explicit interval
-// still wins. Combining it with a webhook-transport flag is an error rather
-// than a silent no-op, so a user who asked for a tunnel is told it cannot
-// happen instead of watching browser mode ignore them. -no-headless is the
-// debugging escape hatch: it drives the same run through a visible browser, and
-// is refused where no window could appear rather than launching one nobody can
-// see.
+// resolveBrowserWatch resolves -pollmode and its legacy aliases. Browser is the
+// default, while webhook and poll retain the API-backed delivery modes.
 func resolveBrowserWatch(flags *flag.FlagSet, interval time.Duration, poll bool) (browserWatchOptions, time.Duration, bool, error) {
 	options := browserWatchOptions{
-		Enabled: flagValue[bool](flags, "browser"),
 		Binary:  flagValue[string](flags, "browser-binary"),
 		Profile: flagValue[string](flags, "browser-profile"),
 		Vision:  flagValue[bool](flags, "browser-vision"),
 		Headed:  flagValue[bool](flags, "no-headless"),
 	}
 	explicit := explicitFlags(flags)
+	mode := flagValue[string](flags, "pollmode")
+	if mode != "browser" && mode != "webhook" && mode != "poll" {
+		return options, interval, poll, fmt.Errorf("-pollmode must be browser, webhook, or poll, got %q", mode)
+	}
+	if explicit["browser"] && mode != "browser" {
+		return options, interval, poll, fmt.Errorf("-browser is an alias for -pollmode=browser and cannot be combined with -pollmode=%s", mode)
+	}
+	if explicit["browser"] && explicit["poll"] {
+		return options, interval, poll, fmt.Errorf("-browser and -poll select different -pollmode values")
+	}
+	if explicit["poll"] && mode != "browser" && mode != "poll" {
+		return options, interval, poll, fmt.Errorf("-poll is an alias for -pollmode=poll and cannot be combined with -pollmode=%s", mode)
+	}
+	if explicit["poll"] {
+		mode = "poll"
+	}
+	options.Enabled = mode == "browser"
 	if !options.Enabled {
 		if explicit["browser-vision"] {
-			return options, interval, poll, fmt.Errorf("-browser-vision only applies to browser mode, so it cannot be used without -browser")
+			return options, interval, poll, fmt.Errorf("-browser-vision only applies to -pollmode=browser")
 		}
 		if explicit["no-headless"] {
-			return options, interval, poll, fmt.Errorf("-no-headless only applies to browser mode, so it cannot be used without -browser")
+			return options, interval, poll, fmt.Errorf("-no-headless only applies to -pollmode=browser")
 		}
-		return options, interval, poll, nil
+		return options, interval, mode == "poll", nil
 	}
 	var conflicting []string
 	for _, name := range browserExclusiveFlags {
