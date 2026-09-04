@@ -859,3 +859,98 @@ func TestCombineUIReportersReturnsNilWhenOnlyTypedNils(t *testing.T) {
 		t.Fatalf("combineUIReporters(nil, (*webui.Server)(nil)) = %#v, want nil", reporter)
 	}
 }
+
+// pagedJobsSnapshot builds `count` running jobs, newest first, for the paging tests.
+func pagedJobsSnapshot(count int) GlorpSnapshot {
+	jobs := make([]JobSnapshot, count)
+	for i := range jobs {
+		jobs[i] = JobSnapshot{Number: i + 1, Title: "job", Status: "active", Started: time.Unix(int64(count-i), 0)}
+	}
+	return GlorpSnapshot{Concurrency: count, Jobs: jobs}
+}
+
+// A terminal shorter than one card row plus its chrome cannot show an agent
+// viewport at all, so the grid keeps a single row there and overflows; every
+// height that can fit a row must not.
+func TestDashboardGridNeverOverflowsTerminalHeight(t *testing.T) {
+	for _, height := range []int{24, 30, 36, 40, 50, 60} {
+		m := newDashboard()
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: height})
+		updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
+		if lines := len(strings.Split(updated.(dashboard).View(), "\n")); lines > height {
+			t.Fatalf("dashboard rendered %d lines at height %d; the top agent viewports would be cut off", lines, height)
+		}
+	}
+}
+
+func TestDashboardPagesAgentsThatDoNotFitAndShowsTheKeys(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
+	m = updated.(dashboard)
+	visible, page, pages := m.visibleJobs()
+	if pages < 2 || page != 0 || len(visible) != jobGridColumns {
+		t.Fatalf("visibleJobs() = %d jobs, page %d, %d pages; want one row on the first of several pages", len(visible), page, pages)
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, fmt.Sprintf("page 1/%d", pages)) || !strings.Contains(view, "←/→") {
+		t.Fatalf("dashboard did not show the page number and paging keys: %s", view)
+	}
+	if strings.Contains(view, "#3 ") {
+		t.Fatalf("dashboard rendered a job from a later page: %s", view)
+	}
+}
+
+func TestDashboardPagesAgentsWithLeftAndRightKeys(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
+	m = updated.(dashboard)
+	_, _, pages := m.visibleJobs()
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(dashboard)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "#3 ") || strings.Contains(view, "#1 ") {
+		t.Fatalf("right did not move to the second page of agents: %s", view)
+	}
+	if _, page, _ := m.visibleJobs(); page != 1 {
+		t.Fatalf("right moved to page %d, want 1", page)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if _, page, _ := updated.(dashboard).visibleJobs(); page != 0 {
+		t.Fatalf("left did not return to the first page, got %d", page)
+	}
+	updated, _ = updated.(dashboard).Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if _, page, _ := updated.(dashboard).visibleJobs(); page != pages-1 {
+		t.Fatalf("left on the first page did not wrap to the last, got %d", page)
+	}
+}
+
+func TestDashboardPagingClampsWhenJobsDisappear(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
+	updated, _ = updated.(dashboard).Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ = updated.(dashboard).Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(1)))
+	m = updated.(dashboard)
+	visible, page, pages := m.visibleJobs()
+	if page != 0 || pages != 1 || len(visible) != 1 {
+		t.Fatalf("visibleJobs() = %d jobs, page %d, %d pages after the grid shrank; want the only page", len(visible), page, pages)
+	}
+	if view := ansi.Strip(m.View()); strings.Contains(view, "page 1/1") {
+		t.Fatalf("dashboard showed a pager for a single page: %s", view)
+	}
+}
+
+func TestJobsPerPageGrowsWithTerminalHeight(t *testing.T) {
+	short, tall := jobsPerPage(24, 0), jobsPerPage(60, 0)
+	if short < jobGridColumns || short%jobGridColumns != 0 {
+		t.Fatalf("jobsPerPage(24, 0) = %d, want at least one full row of %d", short, jobGridColumns)
+	}
+	if tall <= short {
+		t.Fatalf("jobsPerPage did not grow with height: %d at 24 rows, %d at 60 rows", short, tall)
+	}
+	if withHint := jobsPerPage(60, 1); withHint > tall {
+		t.Fatalf("jobsPerPage(60, 1) = %d, want no more than %d once a bottom line is reserved", withHint, tall)
+	}
+}

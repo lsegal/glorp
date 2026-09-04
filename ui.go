@@ -82,6 +82,7 @@ type dashboard struct {
 	width    int
 	height   int
 	ready    bool
+	page     int
 	dragging *viewportTarget
 }
 
@@ -159,6 +160,7 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.jobs[job.Number] = jobViewport
 		}
+		_, m.page, _ = m.visibleJobs()
 	case logMsg:
 		followOutput := m.viewport.AtBottom()
 		m.logs = append(m.logs, string(msg))
@@ -176,6 +178,16 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if _, page, pages := m.visibleJobs(); pages > 1 {
+			switch msg.String() {
+			case "left", "h":
+				m.page = (page + pages - 1) % pages
+				return m, nil
+			case "right", "l":
+				m.page = (page + 1) % pages
+				return m, nil
+			}
 		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -279,9 +291,10 @@ func (m dashboard) regionFor(target viewportTarget) (viewportRegion, bool) {
 }
 
 func (m dashboard) viewportRegions() []viewportRegion {
-	regions := make([]viewportRegion, 0, len(m.snapshot.Jobs)+1)
+	visible, _, _ := m.visibleJobs()
+	regions := make([]viewportRegion, 0, len(visible)+1)
 	cardRenderWidth := lipgloss.Width(panel.Copy().Padding(0, 1).Width(jobCardWidth(m.width)).Height(jobCardHeight).Render(""))
-	for i, job := range m.snapshot.Jobs {
+	for i, job := range visible {
 		view, ok := m.jobs[job.Number]
 		if !ok {
 			continue
@@ -293,7 +306,7 @@ func (m dashboard) viewportRegions() []viewportRegion {
 			width: view.Width + 1, height: view.Height, contentEnd: x + view.Width,
 		})
 	}
-	gridRows := (len(m.snapshot.Jobs) + jobGridColumns - 1) / jobGridColumns
+	gridRows := (len(visible) + jobGridColumns - 1) / jobGridColumns
 	logsY := 1
 	if gridRows > 0 {
 		logsY = gridRows*jobCardHeight + (gridRows-1)*dashboardGap + dashboardGap + 1
@@ -309,8 +322,9 @@ func (m dashboard) View() string {
 	if !m.ready {
 		return "Starting glorp dashboard..."
 	}
-	jobs := make([]string, 0, len(m.snapshot.Jobs))
-	for _, job := range m.snapshot.Jobs {
+	visible, page, pages := m.visibleJobs()
+	jobs := make([]string, 0, len(visible))
+	for _, job := range visible {
 		status := job.Status
 		jobViewport := m.jobs[job.Number]
 		if job.Log == "" {
@@ -348,6 +362,9 @@ func (m dashboard) View() string {
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
 	footer := renderStatusBar(m.width, []string{counts, tokens, push, targets})
 	sections := []string{logs, footer}
+	if pages > 1 {
+		sections = append(sections, muted.Render(fmt.Sprintf(pagerHint, page+1, pages)))
+	}
 	if m.snapshot.WebUIURL != "" {
 		sections = append(sections, muted.Render("web dashboard: "+m.snapshot.WebUIURL))
 	}
@@ -355,6 +372,50 @@ func (m dashboard) View() string {
 		sections = append([]string{grid}, sections...)
 	}
 	return joinVerticalWithGap(sections, dashboardGap)
+}
+
+// pagerHint tells the operator that agent cards continue on another page and
+// which keys move between them. Without it a paged grid is indistinguishable
+// from a truncated one (issue #617).
+const pagerHint = "page %d/%d  ←/→ (or h/l) for more agents"
+
+// jobsPerPage reports how many agent cards fit above the log panel at this
+// terminal height. The grid used to render a fixed three rows of cards, so on
+// a shorter terminal the top row was pushed off screen entirely and those
+// viewports could neither be read nor scrolled (issue #617).
+//
+// extraLines counts the persistent bottom lines rendered under the status bar
+// (the web dashboard URL, the pager hint), each of which also costs the gap
+// line joinVerticalWithGap puts above it.
+func jobsPerPage(height, extraLines int) int {
+	logHeight := max(3, height/3)
+	// The grid, the log panel, the status bar, and each extra line are joined
+	// with one blank gap line between them.
+	chrome := max(1, logHeight-2) + 1 + extraLines
+	available := height - chrome - (2 + extraLines)
+	rows := (available + dashboardGap) / (jobCardHeight + dashboardGap)
+	return max(1, rows) * jobGridColumns
+}
+
+// visibleJobs returns the agent cards belonging to the current page, the page
+// index clamped to the pages that exist, and the total number of pages.
+func (m dashboard) visibleJobs() ([]JobSnapshot, int, int) {
+	extraLines := 0
+	if m.snapshot.WebUIURL != "" {
+		extraLines++
+	}
+	perPage := jobsPerPage(m.height, extraLines)
+	if len(m.snapshot.Jobs) > perPage {
+		// Paging costs one more bottom line, which can cost a whole card row.
+		perPage = jobsPerPage(m.height, extraLines+1)
+	}
+	if len(m.snapshot.Jobs) == 0 {
+		return nil, 0, 0
+	}
+	pages := (len(m.snapshot.Jobs) + perPage - 1) / perPage
+	page := min(max(m.page, 0), pages-1)
+	start := page * perPage
+	return m.snapshot.Jobs[start:min(start+perPage, len(m.snapshot.Jobs))], page, pages
 }
 
 const moreIndicator = "more ↓"
