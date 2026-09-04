@@ -19,6 +19,8 @@
 //	GLORP_FAKE_AGENT_CHECKOUT directory announced as GLORP_CHECKOUT_DIRECTORY=
 //	GLORP_FAKE_AGENT_ENV      comma-separated variables to record
 //	GLORP_FAKE_AGENT_MISSING  0-based invocation that reports a missing session
+//	GLORP_FAKE_AGENT_MISSING_TEXT  what that invocation prints, so a definition
+//	                          naming its own missing-session phrase is exercised
 //	GLORP_FAKE_AGENT_FAIL     0-based invocation that exits non-zero
 package main
 
@@ -60,8 +62,13 @@ func main() {
 	}
 	if matchesInvocation("GLORP_FAKE_AGENT_MISSING", index) {
 		// The wording is one of the messages glorp watches for when a resume
-		// names a session the agent no longer holds.
-		fmt.Fprintln(os.Stderr, "error: session not found")
+		// names a session the agent no longer holds, or the one the agent's
+		// own definition says it prints instead.
+		missing := os.Getenv("GLORP_FAKE_AGENT_MISSING_TEXT")
+		if missing == "" {
+			missing = "error: session not found"
+		}
+		fmt.Fprintln(os.Stderr, missing)
 		os.Exit(1)
 	}
 	if matchesInvocation("GLORP_FAKE_AGENT_FAIL", index) {
