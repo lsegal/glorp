@@ -4,8 +4,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
