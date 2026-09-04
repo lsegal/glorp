@@ -37,10 +37,15 @@ type Definition struct {
 	// anything.
 	Levels []string `json:"levels,omitempty"`
 	Models []string `json:"models,omitempty"`
-	// Output names how the agent's stdout is decoded. Only the two formats
-	// glorp already decodes are understood here; pluggable decoding is issue
-	// #488, which fills this section in rather than reshaping it.
+	// Output names how the agent's stdout is decoded: passed through as it
+	// is written, decoded as Claude's streaming envelope, or decoded by the
+	// generic JSONL decoder configured with the agent's own field paths.
 	Output Output `json:"output"`
+	// MissingSession are the phrases this agent prints, beyond the shared
+	// defaults, when asked to resume a session it no longer holds; they are
+	// matched case-insensitively anywhere in its output. Naming one here adds
+	// it for this agent alone rather than loosening detection for the others.
+	MissingSession []string `json:"missingSession,omitempty"`
 	// Quota names the quota source for the agent.
 	Quota Quota `json:"quota,omitempty"`
 	// Skills names the skills.sh target the agent's copy of the gh-fix and
@@ -89,9 +94,39 @@ type Session struct {
 
 // Output names the decoder applied to the agent's stdout.
 type Output struct {
-	// Format is "text" for output shown as it is written, or "stream-json"
-	// for Claude's streaming event envelope.
+	// Format selects the decoder: "text" (alias "plain") shows output as it
+	// is written, "stream-json" (alias "claude-stream-json") decodes Claude's
+	// streaming event envelope, and "jsonl" decodes a line-delimited JSON
+	// event stream described by the JSONL block below.
 	Format string `json:"format"`
+	// JSONL configures the generic decoder, and is only meaningful when
+	// Format selects it. Most agents with a --json or streaming mode are read
+	// by naming their field paths here rather than by new Go code.
+	JSONL *JSONL `json:"jsonl,omitempty"`
+}
+
+// JSONL says where in one event of a line-delimited JSON stream the decoder
+// finds what it renders. Every field is a path of dot-separated object keys,
+// where a key suffixed with [] steps into an array and continues into each of
+// its elements: "message.content[].text" reads the text of every content
+// block. A path naming nothing in an event contributes nothing, so an event
+// shape the definition does not describe is passed over rather than failing
+// the stream.
+type JSONL struct {
+	// Type is the path to the event's type, used only to skip the types in
+	// Ignore. An empty path ignores nothing.
+	Type string `json:"type,omitempty"`
+	// Text is the path to the human-readable text an event carries.
+	Text string `json:"text,omitempty"`
+	// ToolName and ToolInput are the paths to a tool call's name and to its
+	// input object, rendered as the "Running: ..." progress lines glorp shows
+	// for Claude. Paths that share a prefix are paired element by element, so
+	// a name and its own input come from the same block.
+	ToolName  string `json:"toolName,omitempty"`
+	ToolInput string `json:"toolInput,omitempty"`
+	// Ignore lists the event types dropped before anything is read out of
+	// them, for the bookkeeping events a stream repeats on every turn.
+	Ignore []string `json:"ignore,omitempty"`
 }
 
 // Skills names where an agent reads glorp's skills from.
@@ -247,11 +282,50 @@ const (
 	AssignNone    = "none"
 )
 
-// Output formats.
+// Output formats. Each canonical value has an alias spelled the way the agent
+// documentation spells it, so a definition may say either.
 const (
 	FormatText       = "text"
 	FormatStreamJSON = "stream-json"
+	FormatJSONL      = "jsonl"
+
+	formatPlainAlias      = "plain"
+	formatClaudeJSONAlias = "claude-stream-json"
 )
+
+// outputFormats maps every accepted spelling to its canonical format.
+var outputFormats = map[string]string{
+	FormatText:            FormatText,
+	formatPlainAlias:      FormatText,
+	FormatStreamJSON:      FormatStreamJSON,
+	formatClaudeJSONAlias: FormatStreamJSON,
+	FormatJSONL:           FormatJSONL,
+}
+
+// outputFormatNames lists the accepted spellings for an error message.
+func outputFormatNames() []string {
+	names := make([]string, 0, len(outputFormats))
+	for name := range outputFormats {
+		names = append(names, name)
+	}
+	return sorted(names)
+}
+
+// DefaultMissingSessionPatterns are the messages agents print when asked to
+// resume a session they no longer have on disk (sessions expire, and a glorp
+// work state file routinely outlives the agent's local conversation history).
+// A definition that names none is detected by these.
+var DefaultMissingSessionPatterns = []string{
+	"no conversation found",
+	"no session found",
+	"session not found",
+	"could not find session",
+	"unable to find session",
+}
+
+// jsonlPathPattern is the shape a JSONL field path may take: dot-separated
+// object keys, each optionally stepping into an array with a [] suffix.
+var jsonlPathPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\[\])?(\.[A-Za-z_][A-Za-z0-9_-]*(\[\])?)*$`)
 
 // Placeholder names accepted inside a fragment's arguments.
 const (
@@ -333,10 +407,13 @@ func (d Definition) Validate() error {
 	default:
 		return fmt.Errorf(`field "session.assign": %q must be %q, %q, or %q`, d.Session.Assign, AssignGlorp, AssignCapture, AssignNone)
 	}
-	switch d.Output.Format {
-	case FormatText, FormatStreamJSON:
-	default:
-		return fmt.Errorf(`field "output.format": %q must be %q or %q`, d.Output.Format, FormatText, FormatStreamJSON)
+	if err := d.Output.validate(); err != nil {
+		return err
+	}
+	for _, pattern := range d.MissingSession {
+		if strings.TrimSpace(pattern) == "" {
+			return fmt.Errorf(`field "missingSession" cannot contain an empty value`)
+		}
 	}
 	for _, level := range d.Levels {
 		if strings.TrimSpace(level) == "" {

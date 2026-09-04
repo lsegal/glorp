@@ -1,0 +1,196 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/lsegal/glorp/agents"
+)
+
+// museJSONL describes an event stream shaped unlike Claude's, so the generic
+// decoder is proved on paths it does not share with the decoder it replaces.
+var museJSONL = agents.JSONL{
+	Type: "event", Text: "delta.text",
+	ToolName: "delta.tool.name", ToolInput: "delta.tool.arguments",
+	Ignore: []string{"heartbeat", "usage"},
+}
+
+func TestJSONLOutputWriterDecodesConfiguredStream(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, museJSONL)
+	lines := []string{
+		`{"event":"message","delta":{"text":"reading the issue"}}`,
+		`{"event":"heartbeat","delta":{"text":"ignored entirely"}}`,
+		`{"event":"usage","delta":{"text":"also ignored"}}`,
+		`{"event":"message","delta":{"tool":{"name":"Read","arguments":{"file_path":"main.go"}}}}`,
+		`{"event":"message","delta":{"tool":{"name":"Bash","arguments":{"command":"go test ./..."}}}}`,
+		`{"event":"telemetry","payload":{"tokens":12}}`,
+		`{"event":"message","delta":{"text":"done"}}`,
+	}
+	if _, err := io.WriteString(w, strings.Join(lines, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	want := "reading the issue\nRunning: Read main.go\nRunning: go test ./...\ndone\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded stream = %q, want %q", got, want)
+	}
+}
+
+// A malformed line is the agent talking in some other voice -- a banner, a
+// warning, a stack trace -- and has to survive rather than be swallowed, with
+// the events on either side of it decoded as usual.
+func TestJSONLOutputWriterPassesMalformedLinesThrough(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, museJSONL)
+	lines := []string{
+		`{"event":"message","delta":{"text":"before"}}`,
+		`warning: config file not found`,
+		`{"event":"message",`,
+		`[]`,
+		`{"event":"message","delta":{"text":"after"}}`,
+	}
+	for _, line := range lines {
+		if _, err := io.WriteString(w, line+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	want := "before\nwarning: config file not found\n{\"event\":\"message\",\nafter\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded stream = %q, want %q", got, want)
+	}
+}
+
+// The decoder is written to in whatever chunks the pipe delivers, which do not
+// respect event boundaries, and the last event may arrive without a newline.
+func TestJSONLOutputWriterDecodesAcrossWritesAndFlushesTheTail(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, museJSONL)
+	for _, chunk := range []string{
+		`{"event":"message","delta":{"te`, `xt":"split across writes"}}` + "\n" +
+			`{"event":"message","delta":{"text":"no trailing newline"}}`,
+	} {
+		if _, err := io.WriteString(w, chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := output.String(); got != "split across writes\n" {
+		t.Fatalf("output before the flush = %q, want only the completed event", got)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "split across writes\nno trailing newline\n"; output.String() != want {
+		t.Fatalf("output after the flush = %q, want %q", output.String(), want)
+	}
+}
+
+// A tool call is rendered with its own arguments even when the blocks around
+// it carry none, which is what pairing by shared path prefix buys.
+func TestJSONLOutputWriterPairsToolCallsWithTheirOwnInput(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, agents.JSONL{
+		Type: "type", Text: "content[].text",
+		ToolName: "content[].tool_name", ToolInput: "content[].tool_input",
+	})
+	line := `{"type":"turn","content":[` +
+		`{"text":"looking"},` +
+		`{"tool_name":"Grep","tool_input":{"pattern":"runOnce"}},` +
+		`{"tool_name":"Write"},` +
+		`{"tool_name":"Read","tool_input":{"file_path":"agents/output.go"}}]}`
+	if _, err := io.WriteString(w, line+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	want := "looking\nRunning: Grep runOnce\nRunning: Write\nRunning: Read agents/output.go\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded tool calls = %q, want %q", got, want)
+	}
+}
+
+// An event the definition describes nothing in renders nothing at all, rather
+// than a blank line or Go's rendering of a map.
+func TestJSONLOutputWriterSkipsEventsItDescribesNothingIn(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, museJSONL)
+	for _, line := range []string{
+		`{"event":"message"}`,
+		`{"event":"message","delta":{"text":"   "}}`,
+		`{"event":"message","delta":{"text":{"nested":"object"}}}`,
+		`{"event":"message","delta":null}`,
+		``,
+	} {
+		if _, err := io.WriteString(w, line+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := output.String(); got != "" {
+		t.Fatalf("decoded output = %q, want nothing", got)
+	}
+}
+
+func TestNewOutputDecoderSelectsByFormat(t *testing.T) {
+	for _, test := range []struct {
+		format string
+		want   string
+	}{
+		{format: "text"},
+		{format: "plain"},
+		{format: "stream-json", want: "*main.claudeJSONOutputWriter"},
+		{format: "claude-stream-json", want: "*main.claudeJSONOutputWriter"},
+		{format: "jsonl", want: "*main.jsonlOutputWriter"},
+	} {
+		t.Run(test.format, func(t *testing.T) {
+			output := agents.Output{Format: test.format}
+			if test.format == "jsonl" {
+				output.JSONL = &museJSONL
+			}
+			decoder := newOutputDecoder(output, io.Discard)
+			if test.want == "" {
+				if decoder != nil {
+					t.Fatalf("format %q selected %T, want the agent's output shown as written", test.format, decoder)
+				}
+				return
+			}
+			if got := fmt.Sprintf("%T", decoder); got != test.want {
+				t.Fatalf("format %q selected %s, want %s", test.format, got, test.want)
+			}
+		})
+	}
+}
+
+// A definition's own missing-session phrase is matched for its runs on top of
+// the shared defaults, which every agent keeps.
+func TestMissingSessionDetectorUsesTheDefinitionsOwnPatterns(t *testing.T) {
+	ownPatterns := func(phrases ...string) []string {
+		return agents.Definition{MissingSession: phrases}.MissingSessionPatterns()
+	}
+	for _, test := range []struct {
+		name     string
+		patterns []string
+		output   string
+		want     bool
+	}{
+		{name: "default list", output: "error: No conversation found", want: true},
+		{name: "own phrase", patterns: ownPatterns("Thread has expired"), output: "thread has expired\n", want: true},
+		{name: "shared defaults still apply", patterns: ownPatterns("Thread has expired"), output: "no conversation found", want: true},
+		{name: "unrelated failure", patterns: ownPatterns("Thread has expired"), output: "compilation failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detector := &missingSessionDetector{output: io.Discard, patterns: test.patterns}
+			if _, err := io.WriteString(detector, test.output); err != nil {
+				t.Fatal(err)
+			}
+			if got := detector.sessionMissing(); got != test.want {
+				t.Fatalf("sessionMissing() = %v for %q with patterns %v, want %v", got, test.output, test.patterns, test.want)
+			}
+		})
+	}
+}

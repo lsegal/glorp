@@ -38,6 +38,7 @@ const (
 	fakeAgentCheckoutEnv = "GLORP_FAKE_AGENT_CHECKOUT"
 	fakeAgentWatchEnv    = "GLORP_FAKE_AGENT_ENV"
 	fakeAgentMissingEnv  = "GLORP_FAKE_AGENT_MISSING"
+	fakeAgentMissingText = "GLORP_FAKE_AGENT_MISSING_TEXT"
 	fakeAgentFailEnv     = "GLORP_FAKE_AGENT_FAIL"
 )
 
@@ -97,6 +98,9 @@ type fakeAgentRun struct {
 	// MissingOn and FailOn name the 0-based invocation that reports a missing
 	// session or exits non-zero. A nil value never does.
 	MissingOn, FailOn *int
+	// MissingText overrides what a missing session is reported as, for a
+	// definition naming its own phrase.
+	MissingText string
 }
 
 // install points a definition at the fake agent and configures its behaviour
@@ -115,6 +119,7 @@ func (f fakeAgentRun) install(t *testing.T, definition agents.Definition) (agent
 	t.Setenv(fakeAgentCheckoutEnv, f.Checkout)
 	t.Setenv(fakeAgentWatchEnv, strings.Join(f.WatchEnv, ","))
 	t.Setenv(fakeAgentMissingEnv, invocationValue(f.MissingOn))
+	t.Setenv(fakeAgentMissingText, f.MissingText)
 	t.Setenv(fakeAgentFailEnv, invocationValue(f.FailOn))
 	definition.Binary = binary
 	return definition, record
@@ -173,6 +178,9 @@ type agentContract struct {
 	// WantOutput is what the decoded output has to contain, which for an agent
 	// whose output is a JSON stream is not what it printed.
 	WantOutput string
+	// MissingText is what the agent prints when it no longer holds the session
+	// being resumed, empty for the shared default wording.
+	MissingText string
 }
 
 // freshPrompt and resumePrompt are the prompts glorp sends, exposed so a
@@ -285,7 +293,7 @@ func (c agentContract) checkResume(t *testing.T) {
 // to start over rather than being reported as a failure, and an agent that
 // assigns its own session IDs has to be started without the dead one.
 func (c agentContract) checkResumeRestart(t *testing.T) {
-	runner, record := c.runner(t, fakeAgentRun{Stdout: c.Stdout, MissingOn: invocation(0)})
+	runner, record := c.runner(t, fakeAgentRun{Stdout: c.Stdout, MissingOn: invocation(0), MissingText: c.MissingText})
 	session := AgentSession{ID: c.SessionID, Agent: c.Definition.Name, Resume: true}
 	if err := runner.RunSession(context.Background(), c.issue(), session, func(AgentSession) {}); err != nil {
 		t.Fatalf("a resumed session the agent no longer holds should restart the work, got %v", err)
@@ -534,7 +542,13 @@ func TestGeminiResumeFailureMessagesRestartTheWork(t *testing.T) {
 			`"3f2504e0-4f89-11d3-9a0c-0305e82c3301".` +
 			"\n  Searched for sessions in /tmp/chats.\n  Use --list-sessions to see available sessions,",
 	} {
-		detector := &missingSessionDetector{output: io.Discard}
+		// The wordings are gemini's own, so the detector is given the same
+		// patterns a gemini run gives it: the shared defaults plus the ones
+		// its definition names.
+		detector := &missingSessionDetector{
+			output:   io.Discard,
+			patterns: builtinDefinition(t, "gemini").MissingSessionPatterns(),
+		}
 		if _, err := detector.Write([]byte(message)); err != nil {
 			t.Fatal(err)
 		}
@@ -650,5 +664,70 @@ func TestUnknownAgentIsReportedRatherThanRun(t *testing.T) {
 		if !strings.Contains(err.Error(), name) {
 			t.Fatalf("error = %v, want it to list the known agent %q", err, name)
 		}
+	}
+}
+
+// TestJSONLAgentDefinitionContract proves an agent whose output is neither
+// plain text nor Claude's envelope: its event stream is decoded by the paths
+// its own definition names, its session ID is read back with its own regular
+// expression, and the phrase it prints for a session it no longer holds is its
+// own rather than one of the shared defaults. Nothing about it exists in Go.
+func TestJSONLAgentDefinitionContract(t *testing.T) {
+	definition := agents.Definition{
+		Name: "streamer", Binary: "streamer",
+		Session: agents.Session{
+			Assign: agents.AssignCapture, Capture: `session id: ([0-9a-z-]+)`,
+			ClearOnResumeFailure: true,
+		},
+		MissingSession: []string{"thread has expired"},
+		Output: agents.Output{Format: "jsonl", JSONL: &agents.JSONL{
+			Type: "event", Text: "delta.text",
+			ToolName: "delta.tool.name", ToolInput: "delta.tool.arguments",
+			Ignore: []string{"usage"},
+		}},
+		Args: agents.Args{
+			Run:    []agents.Fragment{{Args: []string{"start", "--json", "{prompt}"}}},
+			Resume: []agents.Fragment{{Args: []string{"continue", "--json", "{session}", "{prompt}"}}},
+		},
+	}
+	agentContract{
+		Definition: definition,
+		Repo:       "o/r",
+		Number:     7,
+		SessionID:  "9f31b0c2-thread",
+		Stdout: `{"event":"usage","delta":{"text":"dropped"}}\n` +
+			`{"event":"message","delta":{"text":"reading the issue"}}\n` +
+			`{"event":"message","delta":{"tool":{"name":"Read","arguments":{"file_path":"main.go"}}}}`,
+		WantRun:     []string{"start", "--json", freshPrompt("o/r", 7)},
+		WantResume:  []string{"continue", "--json", "9f31b0c2-thread", resumePrompt()},
+		WantOutput:  "reading the issue\nRunning: Read main.go",
+		MissingText: "streamer: thread has expired, start a new one",
+	}.check(t)
+}
+
+// TestJSONLAgentDoesNotRestartOnAnOrdinaryFailure proves the other half of the
+// detector: output that names no missing-session phrase at all is reported as
+// the agent failure it is rather than restarting the work.
+func TestJSONLAgentDoesNotRestartOnAnOrdinaryFailure(t *testing.T) {
+	definition := agents.Definition{
+		Name: "streamer", Binary: "streamer",
+		Session:        agents.Session{Assign: agents.AssignNone},
+		MissingSession: []string{"thread has expired"},
+		Output:         agents.Output{Format: "plain"},
+		Args: agents.Args{
+			Run:    []agents.Fragment{{Args: []string{"start", "{prompt}"}}},
+			Resume: []agents.Fragment{{Args: []string{"continue", "{prompt}"}}},
+		},
+	}
+	contract := agentContract{Definition: definition, Repo: "o/r", Number: 7}
+	runner, record := contract.runner(t, fakeAgentRun{
+		MissingOn: invocation(0), MissingText: "error: model overloaded, try again",
+	})
+	session := AgentSession{Agent: definition.Name, Resume: true}
+	if err := runner.RunSession(context.Background(), contract.issue(), session, func(AgentSession) {}); err == nil {
+		t.Fatal("an ordinary agent failure was treated as a missing session")
+	}
+	if got := fakeAgentInvocationRecords(t, record); len(got) != 1 {
+		t.Fatalf("agent invocations = %d, want no restart", len(got))
 	}
 }

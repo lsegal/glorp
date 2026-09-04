@@ -4,6 +4,7 @@
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},
   "output": {"format": "text"},
+  "missingSession": ["no previous sessions found", "invalid session identifier"],
   "skills": {"target": "gemini-cli"},
   "args": {
     "run": [

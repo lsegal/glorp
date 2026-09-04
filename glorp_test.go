@@ -1757,7 +1757,11 @@ func TestSessionMetadataCaptureWriterPreservesOutputAndCapturesCodexSessionAndCh
 	var updates []AgentSession
 	w := &sessionMetadataCaptureWriter{
 		output: &output, captureSession: true,
-		onUpdate: func(update AgentSession) { updates = append(updates, update) },
+		// The shape of a Codex session ID lives in the codex definition, not
+		// in the capture writer, so the writer is given the pattern the same
+		// way a run gives it one.
+		sessionPattern: builtinDefinition(t, "codex").SessionPattern(),
+		onUpdate:       func(update AgentSession) { updates = append(updates, update) },
 	}
 	chunks := []string{
 		"OpenAI Codex\nsession ",
