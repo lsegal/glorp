@@ -429,6 +429,18 @@ describe("modelOptionsFrom", () => {
 });
 
 describe("modelGroupsFrom", () => {
+	it("puts signed-in agents before signed-out agents without reordering peers", () => {
+		const groups = modelGroupsFrom({ agents: ["claude", "codex", "gemini"] }, [
+			{ name: "claude", auth: "signed out" },
+			{ name: "codex", auth: "signed in" },
+			{ name: "gemini", auth: "signed in" },
+		]);
+		expect(groups.map((group) => group.agent)).toEqual([
+			"codex",
+			"gemini",
+			"claude",
+		]);
+	});
 	it("groups model choices by agent and retains an empty agent group", () => {
 		expect(
 			modelGroupsFrom({ agents: ["codex", "claude"] }, [

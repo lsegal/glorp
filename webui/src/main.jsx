@@ -225,7 +225,7 @@ function ModelChip({ option, checked, onToggle, status }) {
 	return (
 		<button
 			type="button"
-			className={`model-chip${checked ? " active" : ""}`}
+			className={`model-chip${checked ? " active" : ""}${status?.auth === "signed out" ? " signed-out" : ""}`}
 			aria-pressed={checked}
 			title={title}
 			onClick={() => onToggle(option.value, !checked)}
@@ -412,7 +412,7 @@ function SettingsModal({ onClose }) {
 									{modelGroups.map((group) => (
 										<details
 											key={group.agent}
-											className="agent-model-group"
+											className={`agent-model-group${group.status?.auth === "signed out" ? " signed-out" : ""}`}
 											open
 										>
 											<summary>
