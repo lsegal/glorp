@@ -4,6 +4,7 @@
   "levels": ["none", "low", "medium", "high", "xhigh"],
   "session": {"assign": "none"},
   "output": {"format": "text"},
+  "skills": {"target": "cline"},
   "args": {
     "run": [
       {"args": ["--auto-approve", "true"]},

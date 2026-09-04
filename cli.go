@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+
+	"github.com/lsegal/glorp/agents"
 )
 
 // command is one top-level `glorp <name>` subcommand.
@@ -77,6 +80,21 @@ Chrome allows one process per profile directory, so stop a running
 
 Flags:`,
 			run: runAuthCommand,
+		},
+		{
+			name:    "agents",
+			summary: "List the agents glorp can dispatch to",
+			usage: `Usage: glorp agents [flags]
+
+List the agents in the registry -- the definitions glorp ships plus any the
+config file adds or overrides -- one name per line.
+
+With -skills, print the skills.sh target ids those agents install glorp's
+gh-fix and gh-discuss skills for instead, deduplicated, which is how the
+installers derive their "skills add --agent" list.
+
+Flags:`,
+			run: runAgentsCommand,
 		},
 		{
 			name:    "version",
@@ -182,6 +200,44 @@ func runHelp(args []string) int {
 	if flags := commandFlags(cmd.name); flags != nil {
 		flags.SetOutput(os.Stdout)
 		flags.PrintDefaults()
+	}
+	return 0
+}
+
+// agentsOptions are the flags `glorp agents` takes.
+type agentsOptions struct {
+	config string
+	skills bool
+}
+
+func agentsFlagSet(opts *agentsOptions) *flag.FlagSet {
+	flags := flag.NewFlagSet("agents", flag.ExitOnError)
+	flags.StringVar(&opts.config, "config", agents.DefaultConfigPath, "agent definition file read alongside the built-in agents")
+	flags.BoolVar(&opts.skills, "skills", false, "print skills.sh target ids instead of agent names")
+	return flags
+}
+
+func runAgentsCommand(args []string) int {
+	var opts agentsOptions
+	flags := agentsFlagSet(&opts)
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 0 {
+		fmt.Fprintln(os.Stderr, "usage: glorp agents [flags]")
+		return 2
+	}
+	registry, err := agents.Load(opts.config)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	values := registry.Names()
+	if opts.skills {
+		values = registry.SkillsTargets()
+	}
+	for _, value := range values {
+		fmt.Println(value)
 	}
 	return 0
 }
