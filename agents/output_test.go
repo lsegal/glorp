@@ -51,6 +51,7 @@ func TestOutputValidationRejectsWhatCannotBeDecoded(t *testing.T) {
 		{"input without a name", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "text", ToolInput: "input"}}, `"output.jsonl.toolInput"`},
 		{"ignore without a type", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "text", Ignore: []string{"usage"}}}, `"output.jsonl.ignore" needs`},
 		{"empty ignore", Output{Format: FormatJSONL, JSONL: &JSONL{Type: "event", Text: "text", Ignore: []string{" "}}}, `cannot contain an empty value`},
+		{"deltas without text", Output{Format: FormatJSONL, JSONL: &JSONL{ToolName: "tool.name", TextDelta: true}}, `"output.jsonl.textDelta" needs`},
 		{"malformed path", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "delta..text"}}, `"output.jsonl.text"`},
 		{"path with an index", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "content[0].text"}}, `"output.jsonl.text"`},
 	} {
@@ -63,6 +64,30 @@ func TestOutputValidationRejectsWhatCannotBeDecoded(t *testing.T) {
 				t.Fatalf("error = %v, want it to name %s", err, test.want)
 			}
 		})
+	}
+}
+
+// TestMuseDeclaresItsTextEventsAreDeltas pins why muse is the one built-in
+// that sets textDelta: its only incremental text event streams token-sized
+// fragments, so without it a sentence is decoded as a line per token. The
+// other JSONL agents carry a whole message per text event and must not set it.
+func TestMuseDeclaresItsTextEventsAreDeltas(t *testing.T) {
+	registry := MustBuiltin()
+	muse, ok := registry.Lookup("muse")
+	if !ok {
+		t.Fatal("no built-in definition for muse")
+	}
+	if muse.Output.JSONL == nil || !muse.Output.JSONL.TextDelta {
+		t.Fatal("muse decodes run.output.delta as whole lines, which breaks a sentence across a line per token")
+	}
+	for _, other := range []string{"cline", "opencode"} {
+		definition, ok := registry.Lookup(other)
+		if !ok {
+			t.Fatalf("no built-in definition for %q", other)
+		}
+		if definition.Output.JSONL.TextDelta {
+			t.Fatalf("%s declares text deltas, but its text events carry whole messages", other)
+		}
 	}
 }
 
@@ -104,8 +129,8 @@ func TestMissingSessionPatternsDefaultToTheSharedList(t *testing.T) {
 func TestBuiltinOutputDecoders(t *testing.T) {
 	registry := MustBuiltin()
 	for name, want := range map[string]string{
-		"claude": FormatStreamJSON, "codex": FormatText, "muse": FormatText,
-		"cline": FormatJSONL, "opencode": FormatJSONL,
+		"claude": FormatStreamJSON, "codex": FormatText,
+		"cline": FormatJSONL, "opencode": FormatJSONL, "muse": FormatJSONL,
 	} {
 		definition, ok := registry.Lookup(name)
 		if !ok {

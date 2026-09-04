@@ -110,7 +110,13 @@ func (w *jsonlOutputWriter) writeLine(line []byte) error {
 		// A line that is not an event at all is still the agent talking:
 		// banners, warnings, and stack traces all arrive this way, and a
 		// dropped line is exactly the output someone debugging a failed run
-		// came looking for.
+		// came looking for. A message being streamed as deltas ends first, so
+		// the banner does not land in the middle of the sentence.
+		if w.config.TextDelta {
+			if err := w.flushPending(nil); err != nil {
+				return err
+			}
+		}
 		_, err = fmt.Fprintln(w.output, string(line))
 		return err
 	}

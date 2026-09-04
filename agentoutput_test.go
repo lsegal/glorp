@@ -194,3 +194,96 @@ func TestMissingSessionDetectorUsesTheDefinitionsOwnPatterns(t *testing.T) {
 		})
 	}
 }
+
+// deltaJSONL describes the same stream as museJSONL, except that its text
+// events carry a fragment of a message rather than a whole one.
+var deltaJSONL = agents.JSONL{
+	Type: "event", Text: "delta.text", TextDelta: true,
+	ToolName: "delta.tool.name", ToolInput: "delta.tool.arguments",
+	Ignore: []string{"heartbeat", "usage"},
+}
+
+// TestJSONLOutputWriterJoinsTextDeltasIntoWholeLines proves the capability
+// #545 added: a stream whose text arrives token by token is shown as the
+// sentences it spells rather than one line per token. The message ends on the
+// first event that carries no text -- a tool call, a bookkeeping event of a
+// shape the definition describes nothing in, or the end of the stream.
+func TestJSONLOutputWriterJoinsTextDeltasIntoWholeLines(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, deltaJSONL)
+	lines := []string{
+		`{"event":"message","delta":{"text":"a.txt "}}`,
+		`{"event":"message","delta":{"text":"contains "}}`,
+		`{"event":"message","delta":{"text":"hi"}}`,
+		`{"event":"telemetry","payload":{"tokens":12}}`,
+		`{"event":"message","delta":{"text":"now "}}`,
+		`{"event":"message","delta":{"text":"reading it"}}`,
+		`{"event":"message","delta":{"tool":{"name":"Read","arguments":{"file_path":"a.txt"}}}}`,
+		`{"event":"message","delta":{"text":"all "}}`,
+		`{"event":"usage","delta":{"text":"dropped before anything is read"}}`,
+		`{"event":"message","delta":{"text":"done"}}`,
+	}
+	if _, err := io.WriteString(w, strings.Join(lines, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// "all done" survives the ignored event between its two halves: an
+	// ignored type is dropped before the decoder reads anything out of it, so
+	// it never ends the message the way an unrecognised event does.
+	want := "a.txt contains hi\nnow reading it\nRunning: Read a.txt\nall done\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded stream = %q, want %q", got, want)
+	}
+}
+
+// TestJSONLOutputWriterKeepsDeltasWholeAcrossWritesAndBanners proves the two
+// edges of the buffer: a partial line held over from one write still joins the
+// message, and a line that is not an event at all ends the message first
+// rather than landing in the middle of it.
+func TestJSONLOutputWriterKeepsDeltasWholeAcrossWritesAndBanners(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, deltaJSONL)
+	for _, chunk := range []string{
+		`{"event":"message","delta":{"text":"split "}}` + "\n" + `{"event":"message","delta":{"te`,
+		`xt":"across writes"}}` + "\n" + "warning: config file not found\n",
+		`{"event":"message","delta":{"text":"no trailing newline"}}`,
+	} {
+		if _, err := io.WriteString(w, chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := output.String(); got != "split across writes\nwarning: config file not found\n" {
+		t.Fatalf("output before the flush = %q, want the joined message and the banner", got)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	want := "split across writes\nwarning: config file not found\nno trailing newline\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded stream = %q, want %q", got, want)
+	}
+}
+
+// TestJSONLOutputWriterWithoutTextDeltaIsUnchanged pins the other half of the
+// field: the same stream read by a definition that does not declare deltas
+// decodes exactly as it did before #545, one line per event.
+func TestJSONLOutputWriterWithoutTextDeltaIsUnchanged(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, museJSONL)
+	lines := []string{
+		`{"event":"message","delta":{"text":"a.txt "}}`,
+		`{"event":"message","delta":{"text":"contains "}}`,
+		`{"event":"message","delta":{"text":"hi"}}`,
+	}
+	if _, err := io.WriteString(w, strings.Join(lines, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "a.txt\ncontains\nhi\n" {
+		t.Fatalf("decoded stream = %q, want a line per event", got)
+	}
+}
