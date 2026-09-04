@@ -377,21 +377,30 @@ func TestClaudeDefinitionContract(t *testing.T) {
 // resume is rendered as a plain `opencode run` carrying the recovery prompt.
 // The gh-fix workflow is re-entrant and adopts the draft pull request already
 // open, so restarting is the intended behaviour rather than a lost job.
+//
+// The stdout below is a captured `opencode run --format json` stream. Every
+// event is one part of the running session, so the type is the top-level type
+// and the text and the tool call both hang off part: a finished tool call
+// carries its own name and the input it was called with, which is what lets
+// the progress line read the same as Claude's.
 func TestOpencodeDefinitionContract(t *testing.T) {
 	agentContract{
 		Definition: builtinDefinition(t, "opencode"),
 		Repo:       "o/r",
 		Number:     7,
-		Stdout:     "working on it",
+		Stdout: `{"type":"step_start","timestamp":1788483088781,"sessionID":"ses_1","part":{"id":"prt_1","messageID":"msg_1","type":"step-start"}}\n` +
+			`{"type":"text","timestamp":1788483088959,"sessionID":"ses_1","part":{"id":"prt_2","messageID":"msg_1","type":"text","text":"reading the file"}}\n` +
+			`{"type":"tool_use","timestamp":1788483102248,"sessionID":"ses_1","part":{"type":"tool","tool":"read","callID":"call_1","state":{"status":"completed","input":{"filePath":"/tmp/a.txt"},"output":"1: hi"}}}\n` +
+			`{"type":"step_finish","timestamp":1788483089046,"sessionID":"ses_1","part":{"id":"prt_3","reason":"stop","type":"step-finish","tokens":{"total":6238}}}`,
 		// --auto is unconditional rather than gated on the run's --yolo:
 		// `opencode run` cannot prompt, so anything it would have asked about
 		// -- reaching the isolated clone outside the working directory, above
 		// all -- is auto-rejected without it, and the job dies on a permission
 		// nobody can grant. This is the same reason claude gets
 		// --permission-mode auto when the run is not in yolo mode.
-		WantRun:    []string{"run", "--auto", freshPrompt("o/r", 7)},
-		WantResume: []string{"run", "--auto", resumePrompt()},
-		WantOutput: "working on it",
+		WantRun:    []string{"run", "--auto", "--format", "json", freshPrompt("o/r", 7)},
+		WantResume: []string{"run", "--auto", "--format", "json", resumePrompt()},
+		WantOutput: "reading the file\nRunning: read /tmp/a.txt",
 	}.check(t)
 }
 
@@ -411,30 +420,32 @@ func TestOpencodeDefinitionRendersModelLevelAndVision(t *testing.T) {
 		{
 			name: "run with model and level", mode: agents.ModeRun,
 			values: agents.Values{Prompt: prompt, Model: "anthropic/claude-opus-5", Level: "high"},
-			want:   []string{"run", "--auto", "--model", "anthropic/claude-opus-5", "--variant", "high", prompt},
+			want:   []string{"run", "--auto", "--model", "anthropic/claude-opus-5", "--variant", "high", "--format", "json", prompt},
 		},
 		{
 			// The run's own --yolo adds nothing: --auto is already the only
 			// permission mode a non-interactive opencode can work in.
 			name: "run in yolo mode", mode: agents.ModeRun,
 			values: agents.Values{Prompt: prompt, Yolo: true},
-			want:   []string{"run", "--auto", prompt},
+			want:   []string{"run", "--auto", "--format", "json", prompt},
 		},
 		{
 			// opencode reads no remote-control settings, so the run's flag
 			// reaches its argv not at all.
 			name: "run ignores remote control", mode: agents.ModeRun,
 			values: agents.Values{Prompt: prompt, RemoteControl: true, Settings: `{"remoteControlAtStartup":true}`, SessionName: "glorp o/r#7"},
-			want:   []string{"run", "--auto", prompt},
+			want:   []string{"run", "--auto", "--format", "json", prompt},
 		},
 		{
 			// A session ID glorp happens to be holding is never rendered: the
 			// definition assigns none, so there is nothing to resume by.
 			name: "resume carries no session", mode: agents.ModeResume,
 			values: agents.Values{Prompt: prompt, Session: "ses_1a2b3c"},
-			want:   []string{"run", "--auto", prompt},
+			want:   []string{"run", "--auto", "--format", "json", prompt},
 		},
 		{
+			// The one-shot board read stays on opencode's default format:
+			// its answer is parsed as prose rather than shown as progress.
 			name: "vision", mode: agents.ModeVision,
 			values: agents.Values{Prompt: prompt, Image: "/tmp/shot.png", Model: "anthropic/claude-opus-5"},
 			want:   []string{"run", "--auto", "--file", "/tmp/shot.png", "--model", "anthropic/claude-opus-5", prompt},

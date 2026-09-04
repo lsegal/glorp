@@ -17,16 +17,51 @@ import (
 // this contract checks: the run and the resume render the same argv apart from
 // the prompt, and a resume the agent cannot honour still restarts instead of
 // failing the job.
+//
+// The stdout below is a captured `cline --json` run, trimmed of its usage and
+// token-level events. Cline wraps every event in its own envelope, so the type
+// is at event.type and the text at event.text, and a finished tool call is a
+// content_end whose contentType is "tool": glorp reads the name out of it and
+// renders the same "Running: ..." line Claude's decoder does.
 func TestClineDefinitionContract(t *testing.T) {
 	agentContract{
 		Definition: builtinDefinition(t, "cline"),
 		Repo:       "o/r",
 		Number:     7,
-		Stdout:     "working on it",
-		WantRun:    []string{"--auto-approve", "true", freshPrompt("o/r", 7)},
-		WantResume: []string{"--auto-approve", "true", resumePrompt()},
-		WantOutput: "working on it",
+		Stdout: `{"ts":"2026-09-04T00:52:26.301Z","type":"agent_event","event":{"type":"content_start","contentType":"text","text":"reading"}}\n` +
+			`{"ts":"2026-09-04T00:52:26.297Z","type":"agent_event","event":{"type":"usage","inputTokens":3818,"outputTokens":91}}\n` +
+			`{"ts":"2026-09-04T00:52:26.301Z","type":"agent_event","event":{"type":"content_end","contentType":"text","text":"reading the file"}}\n` +
+			`{"ts":"2026-09-04T00:52:26.304Z","type":"hook_event","hookEventName":"tool_call","agentId":"agent_1","taskId":"conv_1"}\n` +
+			`{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolCallId":"call_1","toolName":"read_files","output":[{"query":"a.txt","result":"1 | hi","success":true}]}}\n` +
+			`{"ts":"2026-09-04T00:52:27.743Z","type":"agent_event","event":{"type":"done","reason":"completed","text":"reading the file","iterations":2}}`,
+		WantRun:    []string{"--auto-approve", "true", "--json", freshPrompt("o/r", 7)},
+		WantResume: []string{"--auto-approve", "true", "--json", resumePrompt()},
+		WantOutput: "reading the file\nRunning: read_files",
 	}.check(t)
+}
+
+// TestClineDefinitionDropsTheStreamsDuplicateText records why the ignore list
+// is as long as it is. Cline prints every assistant message three times over:
+// once token by token as content_start, once whole as content_end, and once
+// more in the done event that ends the turn. Only content_end is read, so the
+// dashboard shows the message once rather than once per token plus twice more.
+func TestClineDefinitionDropsTheStreamsDuplicateText(t *testing.T) {
+	jsonl := builtinDefinition(t, "cline").Output.JSONL
+	if jsonl == nil {
+		t.Fatal("cline no longer describes its JSONL envelope")
+	}
+	ignored := map[string]bool{}
+	for _, event := range jsonl.Ignore {
+		ignored[event] = true
+	}
+	for _, event := range []string{"content_start", "done"} {
+		if !ignored[event] {
+			t.Fatalf("event %q is decoded, but it repeats text content_end already carried", event)
+		}
+	}
+	if jsonl.ToolInput != "" {
+		t.Fatalf("output.jsonl.toolInput = %q, but cline reports no tool arguments", jsonl.ToolInput)
+	}
 }
 
 // TestClineDefinitionDeclaresNoSession records the finding the contract above
@@ -53,14 +88,22 @@ func TestClineDefinitionDeclaresNoSession(t *testing.T) {
 // cline falls back to the provider default rather than to a value of its own.
 func TestClineDefinitionRendersModelAndLevel(t *testing.T) {
 	definition := builtinDefinition(t, "cline")
-	for _, mode := range []agents.Mode{agents.ModeRun, agents.ModeResume, agents.ModeVision} {
+	// The one-shot vision read stays on plain text, exactly as Claude's does:
+	// its answer is parsed as prose rather than shown as progress, so wrapping
+	// it in cline's event envelope would buy nothing.
+	for mode, stream := range map[agents.Mode][]string{
+		agents.ModeRun:    {"--json"},
+		agents.ModeResume: {"--json"},
+		agents.ModeVision: nil,
+	} {
 		got := definition.Render(mode, agents.Values{Prompt: "do it", Model: "anthropic/claude-fable-5.1", Level: "high"})
-		want := []string{"--auto-approve", "true", "--model", "anthropic/claude-fable-5.1", "--thinking", "high", "do it"}
-		if !reflect.DeepEqual(got, want) {
+		want := append([]string{"--auto-approve", "true", "--model", "anthropic/claude-fable-5.1", "--thinking", "high"}, stream...)
+		if want = append(want, "do it"); !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s argv = %#v, want %#v", mode, got, want)
 		}
 		bare := definition.Render(mode, agents.Values{Prompt: "do it"})
-		if want := []string{"--auto-approve", "true", "do it"}; !reflect.DeepEqual(bare, want) {
+		want = append(append([]string{"--auto-approve", "true"}, stream...), "do it")
+		if !reflect.DeepEqual(bare, want) {
 			t.Fatalf("%s argv without a model or level = %#v, want %#v", mode, bare, want)
 		}
 	}
