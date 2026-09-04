@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
 	agentStatusFor,
+	agentSummaries,
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchAgentStatuses,
@@ -242,6 +243,32 @@ function ModelChip({ option, checked, onToggle, status }) {
 	);
 }
 
+// AgentStatusList renders one always-visible auth/quota line per agent behind
+// the models tab's chips (issue #585), since #583 left that reading
+// reachable only by hovering a chip's title.
+function AgentStatusList({ summaries }) {
+	if (!summaries.length) return null;
+	return (
+		<ul className="agent-status-list">
+			{summaries.map(({ agent, status }) => (
+				<li key={agent} className="agent-status-row">
+					<span className="agent-status-name">{agent}</span>
+					<span className="agent-status-meta">
+						{status ? (
+							<>
+								auth: {status.auth} · quota: {status.quota}
+								{!status.installed && " · not installed"}
+							</>
+						) : (
+							"probing..."
+						)}
+					</span>
+				</li>
+			))}
+		</ul>
+	);
+}
+
 function SettingsModal({ onClose }) {
 	const [tab, setTab] = useState("general");
 	const [form, setForm] = useState(null);
@@ -397,6 +424,9 @@ function SettingsModal({ onClose }) {
 										/>
 									))}
 								</div>
+								<AgentStatusList
+									summaries={agentSummaries(modelOptions, agentStatuses)}
+								/>
 							</fieldset>
 						)}
 						{error && <p className="modal-error">{error}</p>}

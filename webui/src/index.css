@@ -523,6 +523,24 @@ h1 .version {
 .model-chip-agent {
 	font-weight: 600;
 }
+.agent-status-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 10px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.agent-status-row {
+	display: flex;
+	gap: 8px;
+	font-size: 12px;
+	color: #a1a1aa;
+}
+.agent-status-name {
+	font-weight: 600;
+	color: #e4e4e7;
+}
 .modal-error {
 	color: #f87171;
 	font-size: 12px;
