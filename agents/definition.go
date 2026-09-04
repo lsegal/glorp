@@ -435,29 +435,46 @@ type Doctor struct {
 	// says nothing. It needs Auth.
 	SignedIn string `json:"signedIn,omitempty"`
 	// Models is the argv that lists the models the agent accepts, one per
-	// line on its stdout. It is what makes a provider-agnostic CLI usable
-	// from --agent: the report renders each line as the fully qualified
-	// agent/model name rather than leaving the caller to guess it.
+	// line on its stdout, or in JSON when ModelsJSON says where. It is what
+	// makes a provider-agnostic CLI usable from --agent: the report renders
+	// each name as the fully qualified agent/model name rather than leaving
+	// the caller to guess it.
 	Models []string `json:"models,omitempty"`
+	// ModelsStdin is what the probe writes to that command's stdin, one line
+	// each, for a CLI whose model list is only reachable over a stdio
+	// protocol: several of them answer a JSON-RPC handshake rather than a
+	// listing subcommand, and a probe that cannot talk back cannot ask. The
+	// probe holds the pipe open and stops reading the moment the output
+	// yields a list, so an agent that would otherwise sit waiting for a
+	// client is answered and then shut down. It needs Models.
+	ModelsStdin []string `json:"modelsStdin,omitempty"`
+	// ModelsJSON is where the model ids are in that command's output, as a
+	// dotted path whose `[]` walks an array and whose `[key=value]` walks
+	// only the elements a field marks -- "models[visibility=list].slug",
+	// "result.models.availableModels[].modelId". The whole output is read as
+	// one document first and then line by line, so it fits both a catalog
+	// command and an agent that prints a JSON-RPC response per line. It needs
+	// Models, and it replaces the line reading ModelPattern does.
+	ModelsJSON string `json:"modelsJSON,omitempty"`
 	// ModelPattern narrows what counts as a model in that output, for a
 	// command that decorates its list. Only a line the expression matches is
 	// a model, and its first capture group, when it has one, is the model id.
 	// It needs Models.
 	ModelPattern string `json:"modelPattern,omitempty"`
-	// KnownModels are the models the definition itself knows the CLI accepts,
-	// for the CLIs that have no listing command to ask. It is what the report
-	// falls back to instead of saying only that any model is accepted, which
-	// is true and useless: a caller reading the report is there to find a
-	// name to put after --agent. It is deliberately not an allow-list -- a
-	// model released this morning still runs -- so the report labels it as
-	// what glorp knows rather than as what the CLI takes.
+	// KnownModels are model names the definition itself carries, for a CLI
+	// with no way at all to be asked. No built-in declares any: a list
+	// written into glorp is stale the morning after a vendor ships, which is
+	// what issue #566 was, so a definition that can reach its CLI declares
+	// Models instead. It survives for a config file describing a CLI glorp
+	// has never seen, and it is deliberately not an allow-list -- nothing
+	// validates against it -- so the report labels it as what glorp was told
+	// rather than as what the CLI takes.
 	KnownModels []string `json:"knownModels,omitempty"`
-	// ModelsNote replaces the label the report puts on that known list, for
-	// an agent where "known to glorp; the CLI may accept others" is not the
-	// whole caveat. A CLI that routes to a provider has no one catalog: the
-	// same list is right for the provider it was written against and wrong
-	// for the next one, and the report has to be able to say so. It needs
-	// KnownModels.
+	// ModelsNote replaces the label the report puts on the models field. It
+	// is what a definition says instead of a list: the caveat on a known list
+	// that belongs to one provider out of many, or, for a CLI that neither
+	// lists its models nor has a list worth freezing, what to write after
+	// --agent and why the report cannot enumerate it.
 	ModelsNote string `json:"modelsNote,omitempty"`
 	// Timeout bounds one probe, as a Go duration string. The report is a
 	// diagnostic, so a CLI that hangs is abandoned and reported as unknown
@@ -474,6 +491,12 @@ func (d Doctor) AuthArgv(binary string) []string { return substituteBinary(d.Aut
 
 // ModelsArgv renders the model-listing probe.
 func (d Doctor) ModelsArgv(binary string) []string { return substituteBinary(d.Models, binary) }
+
+// ModelsStdinLines is what that probe writes to the command's stdin, with
+// {binary} substituted as everywhere else.
+func (d Doctor) ModelsStdinLines(binary string) []string {
+	return substituteBinary(d.ModelsStdin, binary)
+}
 
 // TimeoutDuration bounds one probe. Validate has already rejected an
 // unparseable value, so a bad one here falls back rather than reporting twice.
@@ -516,8 +539,8 @@ func (d Doctor) ModelsFrom(output string) []string {
 	}
 	seen := make(map[string]bool)
 	models := make([]string, 0, 16)
-	for _, line := range strings.Split(output, "\n") {
-		model := strings.TrimSpace(line)
+	for _, candidate := range d.modelCandidates(output) {
+		model := strings.TrimSpace(candidate)
 		if expr != nil {
 			match := expr.FindStringSubmatch(model)
 			if match == nil {
@@ -536,6 +559,16 @@ func (d Doctor) ModelsFrom(output string) []string {
 		models = append(models, model)
 	}
 	return models
+}
+
+// modelCandidates is what the probe's output offers before any pattern
+// narrows it: the ids ModelsJSON points at when the definition named a path,
+// and every line otherwise.
+func (d Doctor) modelCandidates(output string) []string {
+	if path := strings.TrimSpace(d.ModelsJSON); path != "" {
+		return modelsFromJSON(path, output)
+	}
+	return strings.Split(output, "\n")
 }
 
 // validate reports the first thing wrong with the doctor block. A field that
@@ -558,11 +591,24 @@ func (d Doctor) validate() error {
 	if len(d.Auth) == 0 && strings.TrimSpace(d.SignedIn) != "" {
 		return fmt.Errorf(`field "doctor.signedIn" is only meaningful alongside "doctor.auth"`)
 	}
-	if len(d.Models) == 0 && strings.TrimSpace(d.ModelPattern) != "" {
-		return fmt.Errorf(`field "doctor.modelPattern" is only meaningful alongside "doctor.models"`)
+	for field, declared := range map[string]bool{
+		"doctor.modelPattern": strings.TrimSpace(d.ModelPattern) != "",
+		"doctor.modelsJSON":   strings.TrimSpace(d.ModelsJSON) != "",
+		"doctor.modelsStdin":  len(d.ModelsStdin) > 0,
+	} {
+		if declared && len(d.Models) == 0 {
+			return fmt.Errorf(`field %q is only meaningful alongside "doctor.models"`, field)
+		}
 	}
-	if len(d.KnownModels) == 0 && strings.TrimSpace(d.ModelsNote) != "" {
-		return fmt.Errorf(`field "doctor.modelsNote" is only meaningful alongside "doctor.knownModels"`)
+	for _, line := range d.ModelsStdin {
+		if strings.TrimSpace(line) == "" {
+			return fmt.Errorf(`field "doctor.modelsStdin" cannot contain an empty line`)
+		}
+	}
+	if path := strings.TrimSpace(d.ModelsJSON); path != "" {
+		if _, err := parseModelPath(path); err != nil {
+			return fmt.Errorf(`field "doctor.modelsJSON": %w`, err)
+		}
 	}
 	for field, pattern := range map[string]string{"doctor.signedIn": d.SignedIn, "doctor.modelPattern": d.ModelPattern} {
 		if strings.TrimSpace(pattern) == "" {
