@@ -287,3 +287,96 @@ func TestJSONLOutputWriterWithoutTextDeltaIsUnchanged(t *testing.T) {
 		t.Fatalf("decoded stream = %q, want a line per event", got)
 	}
 }
+
+// perEventJSONL describes a stream that spreads one logical tool call over two
+// typed events, which is what a single set of paths cannot say: `proposed`
+// keeps the call's name in a `kind` field it shares with model turns, and
+// `invoked` keeps the name and its arguments somewhere else entirely.
+var perEventJSONL = agents.JSONL{
+	Type: "event", Text: "delta.text",
+	Events: map[string]agents.JSONLEvent{
+		"proposed": {ToolName: "task.kind", ToolNamePrefix: "tool."},
+		"invoked":  {ToolName: "call.name", ToolInput: "call.arguments"},
+		"note":     {Text: "note.body"},
+	},
+}
+
+// TestJSONLOutputWriterReadsPathsPerEventType proves the capability #547 added:
+// each event type is read by the paths its own shape needs, the shared paths
+// still cover every type that names no override, and a name that does not
+// carry the override's prefix is another kind of turn rather than a call.
+func TestJSONLOutputWriterReadsPathsPerEventType(t *testing.T) {
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, perEventJSONL)
+	lines := []string{
+		`{"event":"message","delta":{"text":"reading it"}}`,
+		`{"event":"proposed","task":{"kind":"model.meta.response"}}`,
+		`{"event":"proposed","task":{"kind":"tool.read_file"}}`,
+		`{"event":"invoked","call":{"name":"Read","arguments":{"file_path":"a.txt"}}}`,
+		`{"event":"note","note":{"body":"a note"},"delta":{"text":"not this one"}}`,
+		`{"event":"message","delta":{"text":"done"}}`,
+	}
+	if _, err := io.WriteString(w, strings.Join(lines, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	want := "reading it\nRunning: read_file\nRunning: Read a.txt\na note\ndone\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded stream = %q, want %q", got, want)
+	}
+}
+
+// TestJSONLOutputWriterWithoutEventOverridesIsUnchanged pins the other half of
+// the field: a definition that names no overrides reads every event through
+// the shared paths exactly as it did before #547.
+func TestJSONLOutputWriterWithoutEventOverridesIsUnchanged(t *testing.T) {
+	shared := perEventJSONL
+	shared.Events = nil
+	shared.ToolName, shared.ToolInput = "call.name", "call.arguments"
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, shared)
+	lines := []string{
+		`{"event":"proposed","task":{"kind":"tool.read_file"}}`,
+		`{"event":"invoked","call":{"name":"Read","arguments":{"file_path":"a.txt"}}}`,
+	}
+	if _, err := io.WriteString(w, strings.Join(lines, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// The proposed event keeps its name where the shared path does not look,
+	// so it renders nothing at all -- the gap the overrides close.
+	want := "Running: Read a.txt\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded stream = %q, want %q", got, want)
+	}
+}
+
+// TestJSONLOutputWriterOverridesTextDeltaStreams proves an override applies to
+// a delta stream too: the tool call read out of one event type ends the
+// message the deltas were spelling instead of landing inside it.
+func TestJSONLOutputWriterOverridesTextDeltaStreams(t *testing.T) {
+	delta := perEventJSONL
+	delta.TextDelta = true
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, delta)
+	lines := []string{
+		`{"event":"message","delta":{"text":"a.txt "}}`,
+		`{"event":"message","delta":{"text":"contains "}}`,
+		`{"event":"message","delta":{"text":"hi"}}`,
+		`{"event":"proposed","task":{"kind":"tool.read_file"}}`,
+	}
+	if _, err := io.WriteString(w, strings.Join(lines, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	want := "a.txt contains hi\nRunning: read_file\n"
+	if got := output.String(); got != want {
+		t.Fatalf("decoded stream = %q, want %q", got, want)
+	}
+}

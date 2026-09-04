@@ -213,6 +213,12 @@ type JSONL struct {
 	// a name and its own input come from the same block.
 	ToolName  string `json:"toolName,omitempty"`
 	ToolInput string `json:"toolInput,omitempty"`
+	// ToolNamePrefix narrows what counts as a tool call: only a name
+	// starting with it is one, and the prefix is trimmed off what is
+	// rendered. A stream whose name field doubles as a kind shared with
+	// non-tool turns ("tool.read_file" beside "model.meta.response") is read
+	// by naming the prefix that tells them apart. It needs ToolName.
+	ToolNamePrefix string `json:"toolNamePrefix,omitempty"`
 	// Ignore lists the event types dropped before anything is read out of
 	// them, for the bookkeeping events a stream repeats on every turn.
 	Ignore []string `json:"ignore,omitempty"`
@@ -222,6 +228,31 @@ type JSONL struct {
 	// line on the next event carrying no text or at the end of the stream,
 	// instead of terminating a line per event. It needs Text.
 	TextDelta bool `json:"textDelta,omitempty"`
+	// Events overrides the paths above for one event type, keyed by the
+	// value Type names. An envelope that spreads one logical event over
+	// several typed events cannot be described by a single set of paths: a
+	// path pointed at where one type keeps its tool name reads something
+	// else entirely, or nothing, on every other type. Naming the type the
+	// paths belong to is what lets the decoder read each shape as itself. It
+	// needs Type.
+	Events map[string]JSONLEvent `json:"events,omitempty"`
+}
+
+// JSONLEvent are the paths the decoder reads out of one event type, replacing
+// the ones the JSONL block names for every other type. A field left empty
+// keeps what the block already says, so an override names only what differs.
+// Text is overridden on its own, while ToolName carries ToolInput and
+// ToolNamePrefix with it: a call's name, its input, and what marks it as a
+// call are one description, and pairing a name from one event type with an
+// input path meant for another renders another call's arguments.
+type JSONLEvent struct {
+	// Text is the path to the human-readable text this event type carries.
+	Text string `json:"text,omitempty"`
+	// ToolName, ToolInput, and ToolNamePrefix describe this event type's
+	// tool call exactly as the JSONL block's own fields of those names do.
+	ToolName       string `json:"toolName,omitempty"`
+	ToolInput      string `json:"toolInput,omitempty"`
+	ToolNamePrefix string `json:"toolNamePrefix,omitempty"`
 }
 
 // Skills names where an agent reads glorp's skills from.

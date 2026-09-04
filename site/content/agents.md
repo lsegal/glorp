@@ -193,8 +193,18 @@ A **path** is dot-separated object keys, each optionally suffixed with `[]` to s
 | `output.jsonl.toolInput` | path | no | The tool call's input object. Needs `toolName`. Paths that share a prefix are paired element by element, so a name and its own input come from the same block. |
 | `output.jsonl.ignore` | array of string | no | Event types dropped before anything is read out of them, for the bookkeeping events a stream repeats every turn. Needs `type`. |
 | `output.jsonl.textDelta` | bool | no | The text an event carries is a fragment of a message rather than a whole one. Needs `text`. Defaults to `false`. |
+| `output.jsonl.toolNamePrefix` | string | no | Only a tool name starting with this is a call, and the prefix is trimmed off what is rendered. Needs `toolName`. |
+| `output.jsonl.events` | object | no | Per-event-type overrides of the paths above, keyed by the value `type` names. Needs `type`. |
+| `output.jsonl.events.<type>.text` | path | one of `text` or `toolName` | The text this event type carries, replacing `output.jsonl.text` for it. |
+| `output.jsonl.events.<type>.toolName` | path | one of `text` or `toolName` | This event type's tool-call name, replacing `output.jsonl.toolName` for it. |
+| `output.jsonl.events.<type>.toolInput` | path | no | This event type's tool input. Needs the override's own `toolName`. |
+| `output.jsonl.events.<type>.toolNamePrefix` | string | no | This event type's tool-name prefix. Needs the override's own `toolName`. |
 
-A decoder that reads neither `text` nor `toolName` renders nothing, so at least one is required.
+A decoder that reads neither `text` nor `toolName` renders nothing, so at least one is required, either on the block itself or on one of its `events` overrides.
+
+`events` is for an envelope that spreads one logical event over several typed events, where a single set of paths cannot describe all of them: a path pointed at where one type keeps its tool name reads something else, or nothing, on every other type. An override names only what differs for its type. `text` is overridden on its own; `toolName` carries `toolInput` and `toolNamePrefix` with it, since pairing one type's name with another type's input path renders another call's arguments. An event type in `ignore` is dropped before any override applies, so listing the same type in both is rejected.
+
+`toolNamePrefix` is for a stream whose name field doubles as a kind covering more than tool calls. Muse's `task.lifecycle.proposed` carries `tool.read_file` in the same field a model turn fills with `model.meta.response`, so `"toolNamePrefix": "tool."` renders `Running: read_file` for the first and nothing for the second.
 
 `textDelta` is for a CLI whose JSON mode streams token-sized fragments. `muse exec --json` emits its message a delta at a time -- `"a.txt "`, `"contains "`, `"hi"` -- and the default decoder writes a line per event, so the sentence is broken across three lines. With `"textDelta": true` the decoder joins the fragments instead and ends the line on the first event carrying no text: a tool call, an event of a shape the definition describes nothing in, a line that is not JSON, or the end of the stream. An event type listed in `ignore` is dropped before any of that, so a bookkeeping event repeated mid-message does not split it. A definition that leaves `textDelta` out decodes exactly as it did before the field existed, one line per event, which is right for an envelope whose text events carry whole messages.
 
@@ -377,7 +387,10 @@ These are the shipped documents, verbatim, and they are the best worked examples
       "type": "payload_type",
       "text": "payload.text",
       "textDelta": true,
-      "ignore": ["run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled", "tool.result"]
+      "ignore": ["run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled", "tool.result"],
+      "events": {
+        "task.lifecycle.proposed": {"toolName": "payload.task.kind", "toolNamePrefix": "tool."}
+      }
     }
   },
   "skills": {"target": "universal"},

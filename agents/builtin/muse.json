@@ -9,7 +9,10 @@
       "type": "payload_type",
       "text": "payload.text",
       "textDelta": true,
-      "ignore": ["run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled", "tool.result"]
+      "ignore": ["run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled", "tool.result"],
+      "events": {
+        "task.lifecycle.proposed": {"toolName": "payload.task.kind", "toolNamePrefix": "tool."}
+      }
     }
   },
   "skills": {"target": "universal"},

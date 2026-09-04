@@ -54,6 +54,14 @@ func TestOutputValidationRejectsWhatCannotBeDecoded(t *testing.T) {
 		{"deltas without text", Output{Format: FormatJSONL, JSONL: &JSONL{ToolName: "tool.name", TextDelta: true}}, `"output.jsonl.textDelta" needs`},
 		{"malformed path", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "delta..text"}}, `"output.jsonl.text"`},
 		{"path with an index", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "content[0].text"}}, `"output.jsonl.text"`},
+		{"prefix without a name", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "text", ToolNamePrefix: "tool."}}, `"output.jsonl.toolNamePrefix" needs`},
+		{"events without a type", Output{Format: FormatJSONL, JSONL: &JSONL{Text: "text", Events: map[string]JSONLEvent{"call": {ToolName: "name"}}}}, `"output.jsonl.events" needs`},
+		{"empty event type", Output{Format: FormatJSONL, JSONL: &JSONL{Type: "kind", Text: "text", Events: map[string]JSONLEvent{" ": {ToolName: "name"}}}}, `cannot contain an empty event type`},
+		{"override of an ignored type", Output{Format: FormatJSONL, JSONL: &JSONL{Type: "kind", Text: "text", Ignore: []string{"usage"}, Events: map[string]JSONLEvent{"usage": {ToolName: "name"}}}}, `also in "output.jsonl.ignore"`},
+		{"override reading nothing", Output{Format: FormatJSONL, JSONL: &JSONL{Type: "kind", Text: "text", Events: map[string]JSONLEvent{"call": {ToolInput: "input"}}}}, `"output.jsonl.events.call.toolInput" needs`},
+		{"override with no paths", Output{Format: FormatJSONL, JSONL: &JSONL{Type: "kind", Text: "text", Events: map[string]JSONLEvent{"call": {}}}}, `"output.jsonl.events.call" needs at least one`},
+		{"override prefix without a name", Output{Format: FormatJSONL, JSONL: &JSONL{Type: "kind", Text: "text", Events: map[string]JSONLEvent{"call": {Text: "t", ToolNamePrefix: "tool."}}}}, `"output.jsonl.events.call.toolNamePrefix" needs`},
+		{"malformed override path", Output{Format: FormatJSONL, JSONL: &JSONL{Type: "kind", Text: "text", Events: map[string]JSONLEvent{"call": {ToolName: "call..name"}}}}, `"output.jsonl.events.call.toolName"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := definitionWithOutput(test.output).Validate()
@@ -87,6 +95,49 @@ func TestMuseDeclaresItsTextEventsAreDeltas(t *testing.T) {
 		}
 		if definition.Output.JSONL.TextDelta {
 			t.Fatalf("%s declares text deltas, but its text events carry whole messages", other)
+		}
+	}
+}
+
+// TestJSONLEventsCanCarryTheOnlyPathsRead proves a definition may leave the
+// shared paths empty and describe each of its event types on its own, which is
+// the point of the override block: an envelope whose types share no field
+// layout has nothing to put in a shared path.
+func TestJSONLEventsCanCarryTheOnlyPathsRead(t *testing.T) {
+	output := Output{Format: FormatJSONL, JSONL: &JSONL{
+		Type: "kind",
+		Events: map[string]JSONLEvent{
+			"chunk": {Text: "delta.text"},
+			"call":  {ToolName: "tool.name", ToolInput: "tool.arguments", ToolNamePrefix: "fn."},
+		},
+	}}
+	if err := output.validate(); err != nil {
+		t.Fatalf("a per-event-type JSONL configuration was rejected: %v", err)
+	}
+}
+
+// TestMuseReadsToolNamesPerEventType pins the definition that drove the
+// override block: only task.lifecycle.proposed carries a Muse tool name, so
+// reading it from a shared path would name a model turn on every other event.
+func TestMuseReadsToolNamesPerEventType(t *testing.T) {
+	registry := MustBuiltin()
+	muse, ok := registry.Lookup("muse")
+	if !ok || muse.Output.JSONL == nil {
+		t.Fatal("the built-in muse definition has no JSONL block")
+	}
+	if muse.Output.JSONL.ToolName != "" {
+		t.Fatal("muse names a shared tool-call path, but its tool names live on one event type")
+	}
+	if _, ok := muse.Output.JSONL.Events["task.lifecycle.proposed"]; !ok {
+		t.Fatal("muse names no per-event-type override for task.lifecycle.proposed")
+	}
+	for _, name := range []string{"cline", "opencode"} {
+		definition, ok := registry.Lookup(name)
+		if !ok || definition.Output.JSONL == nil {
+			t.Fatalf("the built-in %s definition has no JSONL block", name)
+		}
+		if len(definition.Output.JSONL.Events) > 0 {
+			t.Errorf("%s names per-event-type overrides, but one set of paths describes its whole stream", name)
 		}
 	}
 }
