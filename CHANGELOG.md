@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop the web UI Settings Models tab from showing a bare `codex` default as if it were a Codex model after the model probe finishes. Choosing a concrete Codex model now replaces that default instead of dispatching both selections (issue #609).
 - Offer Claude's `opus`, `sonnet`, and `haiku` aliases in the WebUI Models tab, even though Claude Code has no command for listing its models (issue #608). The aliases are maintained suggestions rather than a restriction, so a full Claude model id remains selectable and dispatchable.
 - Make browser polling the default delivery mode and replace the competing `--browser` and `--poll` transport choices with `--pollmode=browser|webhook|poll`; the older switches remain as deprecated aliases for existing scripts.
 
