@@ -507,6 +507,9 @@ h1 .version {
 	border-radius: 6px;
 	background: #09090b80;
 }
+.agent-model-group.signed-out {
+	opacity: 0.55;
+}
 .agent-model-group summary {
 	display: flex;
 	align-items: baseline;
@@ -551,6 +554,9 @@ h1 .version {
 	background: #3f3f46;
 	border-color: #a1a1aa;
 	color: #fafafa;
+}
+.model-chip.signed-out {
+	color: var(--muted);
 }
 .model-chip-agent {
 	font-weight: 600;

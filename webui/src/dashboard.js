@@ -298,7 +298,13 @@ export function modelGroupsFrom(snapshot, statuses, selected) {
 		add(option.agent);
 		groups.get(option.agent).options.push(option);
 	}
-	return Array.from(groups.values());
+	// Keep the configured order within each auth state, but put choices that
+	// can be used now ahead of agents the probe says are signed out (issue #597).
+	return Array.from(groups.values()).sort(
+		(a, b) =>
+			Number(b.status?.auth === "signed in") -
+			Number(a.status?.auth === "signed in"),
+	);
 }
 
 // agentStatusFor finds the probe result for the agent behind a model option's
