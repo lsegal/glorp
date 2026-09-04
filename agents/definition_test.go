@@ -558,3 +558,21 @@ func TestResumingAgentsKeepTheirOwnTemplate(t *testing.T) {
 		}
 	}
 }
+
+// TestDoctorRejectsAModelsNoteWithNoKnownModels checks the note is held to the
+// same rule as every other dependent field: a caveat on a list that does not
+// exist is never printed, and a field that silently does nothing looks exactly
+// like a working one.
+func TestDoctorRejectsAModelsNoteWithNoKnownModels(t *testing.T) {
+	definition := Definition{
+		Name: "noted", Binary: "noted",
+		Session: Session{Assign: AssignNone},
+		Output:  Output{Format: FormatText},
+		Args:    Args{Run: []Fragment{{Args: []string{"{prompt}"}}}},
+		Doctor:  Doctor{ModelsNote: "known for the default provider"},
+	}
+	err := definition.Validate()
+	if err == nil || !strings.Contains(err.Error(), "doctor.modelsNote") {
+		t.Errorf("Validate() error = %v, want it to reject the orphaned note", err)
+	}
+}
