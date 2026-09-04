@@ -5,7 +5,7 @@ description: "Every coding agent glorp dispatches to is a JSON document: the ref
 
 # Agent definitions
 
-glorp does not know how to talk to any agent in Go. Every CLI it dispatches to — the executable, the argv for a fresh run, a resume, and a vision call, the environment its child process gets, how its session ID comes to exist, how its output is decoded, where its quota is read, and which skills.sh target its skills install for — is described by a JSON **definition**. glorp ships definitions for six agents and reads more from a config file, so supporting another CLI is a JSON document rather than a new glorp release.
+glorp does not know how to talk to any agent in Go. Every CLI it dispatches to — the executable, the argv for a fresh run, a resume, and a vision call, the environment its child process gets, how its session ID comes to exist, how its output is decoded, where its quota is read, and which skills.sh target its skills install for — is described by a JSON **definition**. glorp ships definitions for seven agents and reads more from a config file, so supporting another CLI is a JSON document rather than a new glorp release.
 
 This page is the reference for that file and that schema.
 
@@ -21,10 +21,11 @@ This page is the reference for that file and that schema.
 | `muse` | [Meta Muse Code](https://dev.meta.ai/docs/muse-code) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | yes — glorp assigns the ID | none | `universal` |
 | `opencode` | [opencode](https://opencode.ai) | `low`, `medium`, `high` | no — recovery restarts the work | none | `opencode` |
 | `cline` | [Cline](https://cline.bot) | `none`, `low`, `medium`, `high`, `xhigh` | no — recovery restarts the work | none | `cline` |
+| `agy` | [Antigravity CLI](https://antigravity.google/docs/cli/overview) | `low`, `medium`, `high` | no — recovery restarts the work | none | `antigravity-cli` |
 
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
-None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL` names is passed straight through to the CLI, because these CLIs take a live catalog and a list that validated it would reject a model released this morning. `glorp agents` enumerates them all the same, and it enumerates them by asking each CLI rather than by carrying a list of its own, which would be stale the morning after a vendor ships. `opencode` lists its own with `opencode models` and `codex` prints its catalog with `codex debug models`; `cline` and `gemini` have no listing subcommand but answer over their agent-client protocol, so the probe runs `--acp` and reads the models the new session reports; `muse` answers `model/list` over `muse serve`. `claude` is the one built-in that cannot be asked at all -- its CLI has no listing command and no protocol that carries one -- so it declares `doctor.modelsNote` and the report says so instead of naming models it cannot check. An agent whose CLI is signed out of its provider lists nothing, and the report says which command could not list it.
+None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL` names is passed straight through to the CLI, because these CLIs take a live catalog and a list that validated it would reject a model released this morning. `glorp agents` enumerates them all the same, and it enumerates them by asking each CLI rather than by carrying a list of its own, which would be stale the morning after a vendor ships. `opencode` and `agy` list their own with `opencode models` and `agy models`, filtering each line through `doctor.modelPattern`, and `codex` prints its catalog with `codex debug models`; `cline` and `gemini` have no listing subcommand but answer over their agent-client protocol, so the probe runs `--acp` and reads the models the new session reports; `muse` answers `model/list` over `muse serve`. `claude` is the one built-in that cannot be asked at all -- its CLI has no listing command and no protocol that carries one -- so it declares `doctor.modelsNote` and the report says so instead of naming models it cannot check. An agent whose CLI is signed out of its provider lists nothing, and the report says which command could not list it.
 
 `gemini` is the built-in that declares `"levels": []`. That is not the same as naming no list at all: an empty list accepts nothing, so `--agent gemini:high` stops the run naming the agent instead of accepting a level the definition has no `{level}` fragment to pass on. See [allow-lists](#allow-lists) below.
 
@@ -565,6 +566,40 @@ These are the shipped documents, verbatim, and they are the best worked examples
   }
 }
 ```
+
+### `agy`
+
+```json
+{
+  "name": "agy",
+  "binary": "agy",
+  "levels": ["low", "medium", "high"],
+  "session": {"assign": "none"},
+  "output": {"format": "text"},
+  "skills": {"target": "antigravity-cli"},
+  "doctor": {
+    "models": ["{binary}", "models"],
+    "modelPattern": "^[A-Za-z0-9][A-Za-z0-9 ._/:()-]*$"
+  },
+  "args": {
+    "run": [
+      {"when": "yolo", "args": ["--dangerously-skip-permissions"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--effort", "{level}"]},
+      {"args": ["--output-format", "text"]},
+      {"args": ["--print", "{prompt}"]}
+    ],
+    "vision": [
+      {"when": "yolo", "args": ["--dangerously-skip-permissions"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--effort", "{level}"]},
+      {"args": ["--print", "{prompt}"]}
+    ]
+  }
+}
+```
+
+`agy` has no documented way for a headless caller to capture or set a resumable conversation id (see [google-antigravity/antigravity-cli#7](https://github.com/google-antigravity/antigravity-cli/issues/7)), so it declares `"session": {"assign": "none"}` like `opencode` and `cline`, and its `run` fragments render again on a recovery.
 
 ## Tutorial: registering a CLI glorp has never heard of
 

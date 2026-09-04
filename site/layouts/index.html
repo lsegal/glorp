@@ -148,7 +148,7 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
             <p class="eyebrow">The dashboard</p>
             <h2>Watch it work, or don&rsquo;t</h2>
             <p>A localhost-only browser dashboard shows every agent card, its output viewport, job counts, quota, delivery mode and target status. <code>glorp ui</code> finds a running instance and opens it without you hunting for the port.</p>
-            <p class="muted">Prefer the terminal? <code>--ui tui</code> gives the same view in your shell, and <code>--ui none</code> just writes timestamped lines to stdout.</p>
+            <p class="muted">The terminal dashboard shows the same view in your shell alongside the browser one whenever stdout is a terminal. Turn either off with <code>--no-tui</code> or <code>--no-webui</code>, or both to just write timestamped lines to stdout.</p>
           </div>
         </div>
       </section>
@@ -181,7 +181,7 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
               <li><strong>Node.js and npx</strong><span>The installer uses <code>npx</code> to install the bundled gh-fix and gh-discuss skills through skills.sh.</span></li>
               <li><strong>ngrok</strong><span>For the default webhook mode; installing it is optional, since glorp falls back to <code>npx ngrok</code>. Configure its auth before starting. Not required with <code>--poll</code>.</span></li>
               <li><strong>Chrome, Chromium or Edge</strong><span>Only for <code>--browser</code> mode, which needs no ngrok tunnel and no extra token. Safari has no DevTools Protocol and cannot be used.</span></li>
-              <li><strong>A coding agent</strong><span>At least one of <a href="https://developers.openai.com/codex/cli/">Codex CLI</a> (<code>codex</code>), <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> (<code>claude</code>), <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> (<code>gemini</code>), <a href="https://dev.meta.ai/docs/muse-code">Meta Muse Code</a> (<code>muse</code>), <a href="https://opencode.ai">opencode</a> (<code>opencode</code>), or <a href="https://cline.bot">Cline</a> (<code>cline</code>) on your PATH. Any other CLI can be added with an <a href="{{ "agents/" | relURL }}">agent definition</a>.</span></li>
+              <li><strong>A coding agent</strong><span>At least one of <a href="https://developers.openai.com/codex/cli/">Codex CLI</a> (<code>codex</code>), <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> (<code>claude</code>), <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> (<code>gemini</code>), <a href="https://dev.meta.ai/docs/muse-code">Meta Muse Code</a> (<code>muse</code>), <a href="https://opencode.ai">opencode</a> (<code>opencode</code>), <a href="https://cline.bot">Cline</a> (<code>cline</code>), or <a href="https://antigravity.google/docs/cli/overview">Antigravity CLI</a> (<code>agy</code>) on your PATH. Any other CLI can be added with an <a href="{{ "agents/" | relURL }}">agent definition</a>.</span></li>
             </ul>
             <p class="alert alert-important"><strong class="alert-title">Note.</strong> glorp launches agents non-interactively. Agent sandbox and permission controls remain enabled by default. <code>--yolo</code> disables those protections; use it only with repositories and issues whose contents you trust.</p>
           </div>

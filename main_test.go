@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -18,8 +19,50 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lsegal/glorp/core"
+	"github.com/lsegal/glorp/webui"
 	"github.com/mattn/go-isatty"
 )
+
+// TestStartWebUIWiresHandlersBeforeServing guards against the web UI server
+// accepting requests before its settings/job-action handlers are wired
+// (issue #571): a request that landed in that gap saw the handler as unset
+// and got a spurious "unavailable" response the settings modal never
+// recovered from.
+func TestStartWebUIWiresHandlersBeforeServing(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	freePort := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	listener, port, err := webui.Listen(freePort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui, err := webui.New("v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: ui}
+	defer server.Close()
+	startWebUI(ui, server, listener, port, io.Discard,
+		func(context.Context, core.JobAction) error { return nil },
+		func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error) {
+			return core.SettingsSnapshot{Concurrency: 3}, nil
+		},
+		func(context.Context) ([]core.AgentStatus, error) { return nil, nil })
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/settings", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /api/settings = %d, want %d (settings handler must be wired before the server starts serving): %s", resp.StatusCode, http.StatusOK, body)
+	}
+}
 
 func TestListenForWebhooksAssignsRandomPort(t *testing.T) {
 	listener, err := listenForWebhooks("127.0.0.1:0")
@@ -171,35 +214,12 @@ func TestVersionDefaultsToDevelopment(t *testing.T) {
 	}
 }
 
-func TestSelectedUIMode(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		mode  string
-		noUI  bool
-		want  string
-		valid bool
-	}{
-		{name: "web", mode: "web", want: "web", valid: true},
-		{name: "tui", mode: "tui", want: "tui", valid: true},
-		{name: "none", mode: "none", want: "none", valid: true},
-		{name: "no ui alias", mode: "web", noUI: true, want: "none", valid: true},
-		{name: "invalid", mode: "desktop"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := selectedUIMode(test.mode, test.noUI)
-			if (err == nil) != test.valid || got != test.want {
-				t.Fatalf("selectedUIMode(%q, %t) = (%q, %v), want (%q, valid=%t)", test.mode, test.noUI, got, err, test.want, test.valid)
-			}
-		})
-	}
-}
-
 func TestShouldUseTerminalUI(t *testing.T) {
-	if shouldUseTerminalUI("web", os.Stdout) || shouldUseTerminalUI("none", os.Stdout) {
-		t.Fatal("non-terminal UI modes selected the terminal UI")
+	if shouldUseTerminalUI(true, os.Stdout) {
+		t.Fatal("--no-tui selected the terminal UI")
 	}
-	if got, want := shouldUseTerminalUI("tui", os.Stdout), isTerminal(os.Stdout); got != want {
-		t.Fatalf("shouldUseTerminalUI(tui) = %t, want %t", got, want)
+	if got, want := shouldUseTerminalUI(false, os.Stdout), isTerminal(os.Stdout); got != want {
+		t.Fatalf("shouldUseTerminalUI(false) = %t, want %t", got, want)
 	}
 }
 
