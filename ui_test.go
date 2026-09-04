@@ -35,6 +35,18 @@ func TestDashboardShowsStatusAndTargets(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsWebDashboardLinkWhenEnabled(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if view := updated.(dashboard).View(); strings.Contains(view, "web dashboard:") {
+		t.Fatalf("dashboard showed a web dashboard link while disabled: %s", view)
+	}
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{WebUIURL: "http://localhost:8765"}))
+	if view := updated.(dashboard).View(); !strings.Contains(view, "web dashboard: http://localhost:8765") {
+		t.Fatalf("dashboard missing web dashboard link: %s", view)
+	}
+}
+
 func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
