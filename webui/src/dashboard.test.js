@@ -6,6 +6,7 @@ import {
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchAgentStatuses,
+	fetchAgentStatusesWithRetry,
 	fetchSettings,
 	fetchSettingsWithRetry,
 	formatInterval,
@@ -463,6 +464,29 @@ describe("fetchAgentStatuses", () => {
 		});
 		vi.stubGlobal("fetch", fetch);
 		await expect(fetchAgentStatuses()).rejects.toThrow("agents unavailable");
+	});
+});
+
+describe("fetchAgentStatusesWithRetry", () => {
+	it("retries while the server warms its agent report", async () => {
+		const statuses = [{ name: "codex" }];
+		const fetch = vi
+			.fn()
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 503,
+				text: () => Promise.resolve("agents are still being probed"),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				json: () => Promise.resolve(statuses),
+			});
+		const wait = vi.fn().mockResolvedValue();
+		vi.stubGlobal("fetch", fetch);
+		await expect(fetchAgentStatusesWithRetry(undefined, wait)).resolves.toEqual(
+			statuses,
+		);
+		expect(wait).toHaveBeenCalledOnce();
 	});
 });
 

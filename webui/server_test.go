@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lsegal/glorp/core"
 )
@@ -164,8 +165,16 @@ func TestServerHandlesAgents(t *testing.T) {
 	}
 	ui.SetAgentsHandler(func(context.Context) ([]core.AgentStatus, error) { return statuses, nil })
 	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
-	response := httptest.NewRecorder()
-	ui.ServeHTTP(response, request)
+	deadline := time.Now().Add(time.Second)
+	var response *httptest.ResponseRecorder
+	for {
+		response = httptest.NewRecorder()
+		ui.ServeHTTP(response, request)
+		if response.Code == http.StatusOK || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET agents = %d, body = %q", response.Code, response.Body.String())
 	}
@@ -175,6 +184,41 @@ func TestServerHandlesAgents(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Name != "codex" || got[1].Status != "missing" {
 		t.Fatalf("agents = %#v", got)
+	}
+}
+
+func TestServerWarmsAndCachesAgents(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ui.SetAgentsHandler(func(context.Context) ([]core.AgentStatus, error) {
+		close(started)
+		<-release
+		return []core.AgentStatus{{Name: "codex"}}, nil
+	})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background agent probe did not start")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("warming GET agents = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for response.Code != http.StatusOK && time.Now().Before(deadline) {
+		response = httptest.NewRecorder()
+		ui.ServeHTTP(response, request)
+		time.Sleep(time.Millisecond)
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("cached GET agents = %d, want %d", response.Code, http.StatusOK)
 	}
 }
 
