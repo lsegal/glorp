@@ -80,7 +80,7 @@ npx --yes skills add lsegal/glorp@gh-fix --global --agent ID -y
 npx --yes skills add lsegal/glorp@gh-discuss --global --agent ID -y
 ```
 
-`glorp agents` lists the agents in force, and `glorp agents -skills` lists the target ids they install skills for. The [agent definitions reference](https://lsegal.github.io/glorp/agents/) documents the whole definition schema, field by field, with a tutorial for registering a CLI glorp does not ship.
+`glorp agents` reports on the agents in force -- installed CLI and version, sign-in state, quota, and the `agent/model` names `--agent` accepts -- while `glorp agents -names` lists just the names and `glorp agents -skills` lists the target ids they install skills for. The [agent definitions reference](https://lsegal.github.io/glorp/agents/) documents the whole definition schema, field by field, with a tutorial for registering a CLI glorp does not ship.
 
 ### Upgrading
 
@@ -97,7 +97,7 @@ Every glorp invocation starts with a subcommand:
 | Command | Description |
 | --- | --- |
 | `glorp watch [flags] [TARGET ...]` | Watch GitHub targets and dispatch agents for ready issues. |
-| `glorp agents [flags]` | List the agents glorp can dispatch to, or with `-skills` the skills.sh target ids they install skills for. |
+| `glorp agents [flags]` | Report on the agents glorp can dispatch to: whether each CLI is installed, signed in, its quota, and the models it accepts. With `-names`, one agent name per line; with `-skills`, the skills.sh target ids they install skills for. |
 | `glorp ui [flags]` | Open a running glorp dashboard in a browser. |
 | `glorp version` | Print the glorp version. |
 | `glorp upgrade` | Upgrade glorp to the latest release. |

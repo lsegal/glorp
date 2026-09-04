@@ -83,15 +83,22 @@ Flags:`,
 		},
 		{
 			name:    "agents",
-			summary: "List the agents glorp can dispatch to",
+			summary: "Report on the agents glorp can dispatch to",
 			usage: `Usage: glorp agents [flags]
 
-List the agents in the registry -- the definitions glorp ships plus any the
-config file adds or overrides -- one name per line.
+Report on the agents in the registry -- the definitions glorp ships plus any
+the config file adds or overrides. For each one glorp prints whether its CLI is
+installed and which version, whether it is signed in, how much quota is left,
+and the models it accepts, written as the fully qualified agent/model names
+"glorp watch -agent" takes.
 
-With -skills, print the skills.sh target ids those agents install glorp's
-gh-fix and gh-discuss skills for instead, deduplicated, which is how the
-installers derive their "skills add --agent" list.
+Reporting runs each agent's own read-only probes, so an agent whose definition
+declares none is still listed, with what it could not answer shown as unknown.
+
+With -names, print one agent name per line and run nothing, which is the
+listing scripts parse. With -skills, print the skills.sh target ids those
+agents install glorp's gh-fix and gh-discuss skills for instead, deduplicated,
+which is how the installers derive their "skills add --agent" list.
 
 Flags:`,
 			run: runAgentsCommand,
@@ -208,12 +215,14 @@ func runHelp(args []string) int {
 type agentsOptions struct {
 	config string
 	skills bool
+	names  bool
 }
 
 func agentsFlagSet(opts *agentsOptions) *flag.FlagSet {
 	flags := flag.NewFlagSet("agents", flag.ExitOnError)
 	flags.StringVar(&opts.config, "config", agents.DefaultConfigPath, "agent definition file read alongside the built-in agents")
-	flags.BoolVar(&opts.skills, "skills", false, "print skills.sh target ids instead of agent names")
+	flags.BoolVar(&opts.skills, "skills", false, "print skills.sh target ids instead of the report")
+	flags.BoolVar(&opts.names, "names", false, "print one agent name per line instead of the report")
 	return flags
 }
 
@@ -232,13 +241,22 @@ func runAgentsCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	values := registry.Names()
-	if opts.skills {
-		values = registry.SkillsTargets()
+	// The plain listings are what scripts parse and what the installers build
+	// their "skills add" flags from, so they stay exactly as they were and
+	// run no probe: neither caller has a terminal to read a report on.
+	if opts.skills || opts.names {
+		values := registry.Names()
+		if opts.skills {
+			values = registry.SkillsTargets()
+		}
+		for _, value := range values {
+			fmt.Println(value)
+		}
+		return 0
 	}
-	for _, value := range values {
-		fmt.Println(value)
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	writeAgentReports(os.Stdout, newAgentDoctor(registry).Report(ctx))
 	return 0
 }
 
