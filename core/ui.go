@@ -66,6 +66,17 @@ type SettingsUpdate struct {
 	Agent             *string   `json:"agent,omitempty"`
 }
 
+// AgentOption describes one agent the registry knows, so the dashboard's
+// agent selector can offer it -- and the models and levels it accepts -- from
+// what the run actually registered rather than from a hardcoded pair.
+type AgentOption struct {
+	Name string `json:"name"`
+	// Models and Levels are the agent's allow-lists. Empty means the agent
+	// accepts any value, so the UI offers no closed list for it.
+	Models []string `json:"models,omitempty"`
+	Levels []string `json:"levels,omitempty"`
+}
+
 // SettingsSnapshot reports the settings a running glorp instance can change
 // on the fly, and their current values.
 type SettingsSnapshot struct {
@@ -74,5 +85,13 @@ type SettingsSnapshot struct {
 	ReadyStateDefault string   `json:"readyStateDefault"`
 	AllowedCommenters []string `json:"allowedCommenters"`
 	Agent             string   `json:"agent"`
-	Agents            []string `json:"agents"`
+	// Agents lists every agent the run's registry defines, built-in and
+	// config-defined alike, which is the set Agent may be set to.
+	Agents []string `json:"agents"`
+	// AgentOptions carries the same agents with their model and level
+	// allow-lists, for a selector that offers more than a bare name.
+	AgentOptions []AgentOption `json:"agentOptions,omitempty"`
+	// ConfiguredAgents lists the agent specs this run dispatches with, which
+	// is a subset of Agents chosen by --agent.
+	ConfiguredAgents []string `json:"configuredAgents"`
 }

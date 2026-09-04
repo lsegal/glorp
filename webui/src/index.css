@@ -449,6 +449,10 @@ h1 .version {
 	padding: 7px 9px;
 	color: #fafafa;
 }
+.settings-hint {
+	font-size: 11px;
+	color: var(--muted);
+}
 .modal-error {
 	color: #f87171;
 	font-size: 12px;

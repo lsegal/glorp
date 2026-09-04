@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/lsegal/glorp/agents"
 	"github.com/lsegal/glorp/core"
 )
 
@@ -128,7 +129,7 @@ func (w *Glorp) CurrentSettings(ctx context.Context) (SettingsSnapshot, error) {
 // validateSettingsUpdate checks update in isolation, before it reaches the
 // Run loop, so malformed requests fail fast with a useful message instead of
 // silently corrupting state owned by that loop.
-func validateSettingsUpdate(update SettingsUpdate) error {
+func validateSettingsUpdate(registry *agents.Registry, update SettingsUpdate) error {
 	if update.Concurrency != nil && (*update.Concurrency < 1 || *update.Concurrency > maxConcurrencyPermits) {
 		return fmt.Errorf("concurrency must be between 1 and %d", maxConcurrencyPermits)
 	}
@@ -136,7 +137,10 @@ func validateSettingsUpdate(update SettingsUpdate) error {
 		if strings.TrimSpace(*update.Agent) == "" {
 			return fmt.Errorf("agent must not be empty")
 		}
-		if _, err := parseAgentSpec(*update.Agent); err != nil {
+		// The registry answers an unknown agent with the agents that do
+		// exist, so the dashboard and the settings API reject a typo with the
+		// same list the CLI prints.
+		if _, err := parseAgentSpecIn(registry, *update.Agent); err != nil {
 			return err
 		}
 	}
@@ -147,7 +151,7 @@ func validateSettingsUpdate(update SettingsUpdate) error {
 // the resulting snapshot. It must only be called from the Run loop's
 // goroutine, the same rule handleJobAction's callers already follow.
 func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySemaphore) settingsResult {
-	if err := validateSettingsUpdate(update); err != nil {
+	if err := validateSettingsUpdate(w.registry(), update); err != nil {
 		return settingsResult{err: err}
 	}
 	if update.Concurrency != nil {
@@ -167,13 +171,44 @@ func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySema
 	return settingsResult{snapshot: w.settingsSnapshot()}
 }
 
+// registry returns the agent registry this run was configured with, falling
+// back to the run's own when the instance carries none. Every settings
+// surface reads the agent list from here rather than from the two names glorp
+// used to ship, so a .glorp.config.json agent is selectable without a code
+// change (issue #489).
+func (w *Glorp) registry() *agents.Registry {
+	if w.Registry != nil {
+		return w.Registry
+	}
+	return agentRegistry()
+}
+
+// agentOptions lists the registered agents with the models and levels each
+// accepts, for the dashboard's agent selector.
+func (w *Glorp) agentOptions() []core.AgentOption {
+	registry := w.registry()
+	names := registry.Names()
+	options := make([]core.AgentOption, 0, len(names))
+	for _, name := range names {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			continue
+		}
+		options = append(options, core.AgentOption{
+			Name:   name,
+			Models: append([]string(nil), definition.Models...),
+			Levels: append([]string(nil), definition.Levels...),
+		})
+	}
+	return options
+}
+
 // settingsSnapshot reads the fields applySettingsRequest owns. Like that
 // function, it must only be called from the Run loop's goroutine.
 func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 	var agent string
-	var agents []string
 	if runner, ok := w.Runner.(CommandRunner); ok {
-		agent, agents = runner.Agent, append([]string(nil), runner.Agents...)
+		agent = runner.Agent
 	}
 	if override := w.agentOverride.Load(); override != nil && *override != "" {
 		agent = *override
@@ -187,7 +222,9 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		ReadyStateDefault: projectReadyState(w.ReadyState, ""),
 		AllowedCommenters: append([]string(nil), w.AllowedCommenters...),
 		Agent:             agent,
-		Agents:            agents,
+		Agents:            w.registry().Names(),
+		AgentOptions:      w.agentOptions(),
+		ConfiguredAgents:  w.configuredAgents(),
 	}
 }
 

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	agentOptionHint,
+	agentOptionsFrom,
+	agentSpecOptions,
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchSettings,
@@ -246,5 +249,51 @@ describe("deliveryLabel interval spelling", () => {
 		expect(deliveryLabel({ Interval: 3600 * 1_000_000_000 })).toBe(
 			"polling every 1h",
 		);
+	});
+});
+
+describe("agent options", () => {
+	const options = [
+		{ name: "codex", levels: ["low", "high"] },
+		{ name: "muse", models: ["muse-1", "muse-2"] },
+		{ name: "plain" },
+	];
+
+	it("prefers the registry's agent options over the bare name list", () => {
+		expect(
+			agentOptionsFrom({ agentOptions: options, agents: ["codex"] }),
+		).toEqual(options);
+	});
+
+	it("falls back to the bare agent names", () => {
+		expect(agentOptionsFrom({ agents: ["codex", "muse"] })).toEqual([
+			{ name: "codex" },
+			{ name: "muse" },
+		]);
+		expect(agentOptionsFrom({})).toEqual([]);
+	});
+
+	it("offers each agent with the models and levels it declares", () => {
+		expect(agentSpecOptions(options)).toEqual([
+			"codex",
+			"codex:low",
+			"codex:high",
+			"muse",
+			"muse/muse-1",
+			"muse/muse-2",
+			"plain",
+		]);
+		expect(agentSpecOptions(undefined)).toEqual([]);
+	});
+
+	it("describes what the agent currently typed accepts", () => {
+		expect(agentOptionHint(options, "codex")).toBe("levels: low, high");
+		expect(agentOptionHint(options, "muse/muse-1")).toBe(
+			"models: muse-1, muse-2",
+		);
+		expect(agentOptionHint(options, " codex:high ")).toBe("levels: low, high");
+		expect(agentOptionHint(options, "plain")).toBe("");
+		expect(agentOptionHint(options, "bogus")).toBe("");
+		expect(agentOptionHint(options, "")).toBe("");
 	});
 });
