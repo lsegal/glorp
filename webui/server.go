@@ -42,6 +42,12 @@ type Server struct {
 	action   func(context.Context, core.JobAction) error
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 	agents   func(context.Context) ([]core.AgentStatus, error)
+	// agentStatuses is the most recent completed probe. Probing starts as soon
+	// as the handler is wired, rather than making the first settings modal wait
+	// for every installed CLI to answer (issue #595).
+	agentStatuses    []core.AgentStatus
+	agentsProbed     bool
+	agentsRefreshing bool
 }
 
 // New builds a dashboard server that reports version.
@@ -72,6 +78,31 @@ func (ui *Server) SetAgentsHandler(handler func(context.Context) ([]core.AgentSt
 	ui.mu.Lock()
 	ui.agents = handler
 	ui.mu.Unlock()
+	ui.refreshAgentStatuses()
+}
+
+// refreshAgentStatuses starts one background refresh when one is not already
+// running. A completed result is retained so later settings-modal opens do
+// not repeat the slow CLI probes.
+func (ui *Server) refreshAgentStatuses() {
+	ui.mu.Lock()
+	if ui.agents == nil || ui.agentsRefreshing {
+		ui.mu.Unlock()
+		return
+	}
+	handler := ui.agents
+	ui.agentsRefreshing = true
+	ui.mu.Unlock()
+	go func() {
+		statuses, err := handler(context.Background())
+		ui.mu.Lock()
+		defer ui.mu.Unlock()
+		ui.agentsRefreshing = false
+		if err == nil {
+			ui.agentStatuses = statuses
+			ui.agentsProbed = true
+		}
+	}()
 }
 
 func (ui *Server) Snapshot(snapshot core.Snapshot) {
@@ -197,9 +228,13 @@ func (ui *Server) serveAgents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agents unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	statuses, err := handler(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+	ui.mu.RLock()
+	statuses := append([]core.AgentStatus(nil), ui.agentStatuses...)
+	probed := ui.agentsProbed
+	ui.mu.RUnlock()
+	if !probed {
+		ui.refreshAgentStatuses()
+		http.Error(w, "agents are still being probed", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

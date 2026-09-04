@@ -19,7 +19,7 @@ import { createRoot } from "react-dom/client";
 import {
 	buildSettingsUpdate,
 	deliveryLabel,
-	fetchAgentStatuses,
+	fetchAgentStatusesWithRetry,
 	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
@@ -274,7 +274,7 @@ function SettingsModal({ onClose }) {
 				});
 			})
 			.catch((err) => err.name !== "AbortError" && setError(err.message));
-		fetchAgentStatuses()
+		fetchAgentStatusesWithRetry(controller.signal)
 			.then(
 				(statuses) => !controller.signal.aborted && setAgentStatuses(statuses),
 			)

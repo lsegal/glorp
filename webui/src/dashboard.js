@@ -162,9 +162,27 @@ function defaultWait(delayMs, signal) {
 export async function fetchAgentStatuses() {
 	const response = await fetch("/api/agents", { cache: "no-store" });
 	if (!response.ok) {
-		throw new Error((await response.text()) || `HTTP ${response.status}`);
+		await throwForResponse(response);
 	}
 	return response.json();
+}
+
+// fetchAgentStatusesWithRetry waits for the server's background model probe
+// when the settings modal opens before it completes (issue #595).
+export async function fetchAgentStatusesWithRetry(signal, wait = defaultWait) {
+	for (let attempt = 0; ; attempt++) {
+		if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+		try {
+			return await fetchAgentStatuses();
+		} catch (err) {
+			if (err.status !== 503) throw err;
+			const delay =
+				settingsRetryDelaysMs[
+					Math.min(attempt, settingsRetryDelaysMs.length - 1)
+				];
+			await wait(delay, signal);
+		}
+	}
 }
 
 export async function submitSettings(update) {
