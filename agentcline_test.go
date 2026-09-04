@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/lsegal/glorp/agents"
@@ -22,7 +25,10 @@ import (
 // token-level events. Cline wraps every event in its own envelope, so the type
 // is at event.type and the text at event.text, and a finished tool call is a
 // content_end whose contentType is "tool": glorp reads the name out of it and
-// renders the same "Running: ..." line Claude's decoder does.
+// renders the same "Running: ..." line Claude's decoder does. The content_update
+// events below are the same call still streaming, and they carry the same
+// toolName, so a decoder that read them would render one "Running: read_files"
+// line per chunk of the command's stdout rather than one per call.
 func TestClineDefinitionContract(t *testing.T) {
 	agentContract{
 		Definition: builtinDefinition(t, "cline"),
@@ -32,6 +38,8 @@ func TestClineDefinitionContract(t *testing.T) {
 			`{"ts":"2026-09-04T00:52:26.297Z","type":"agent_event","event":{"type":"usage","inputTokens":3818,"outputTokens":91}}\n` +
 			`{"ts":"2026-09-04T00:52:26.301Z","type":"agent_event","event":{"type":"content_end","contentType":"text","text":"reading the file"}}\n` +
 			`{"ts":"2026-09-04T00:52:26.304Z","type":"hook_event","hookEventName":"tool_call","agentId":"agent_1","taskId":"conv_1"}\n` +
+			`{"ts":"2026-09-04T00:52:26.305Z","type":"agent_event","event":{"type":"content_update","contentType":"tool","toolCallId":"call_1","toolName":"read_files","text":""}}\n` +
+			`{"ts":"2026-09-04T00:52:26.308Z","type":"agent_event","event":{"type":"content_update","contentType":"tool","toolCallId":"call_1","toolName":"read_files","text":"1 | hi"}}\n` +
 			`{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolCallId":"call_1","toolName":"read_files","output":[{"query":"a.txt","result":"1 | hi","success":true}]}}\n` +
 			`{"ts":"2026-09-04T00:52:27.743Z","type":"agent_event","event":{"type":"done","reason":"completed","text":"reading the file","iterations":2}}`,
 		WantRun:    []string{"--auto-approve", "true", "--json", freshPrompt("o/r", 7)},
@@ -45,6 +53,10 @@ func TestClineDefinitionContract(t *testing.T) {
 // once token by token as content_start, once whole as content_end, and once
 // more in the done event that ends the turn. Only content_end is read, so the
 // dashboard shows the message once rather than once per token plus twice more.
+// content_update is the tool half of the same repetition: a running tool emits
+// one for every streamed chunk of its output, each carrying the toolName the
+// finished content_end carries, so reading them would repeat a single call's
+// progress line once per chunk.
 func TestClineDefinitionDropsTheStreamsDuplicateText(t *testing.T) {
 	jsonl := builtinDefinition(t, "cline").Output.JSONL
 	if jsonl == nil {
@@ -54,13 +66,49 @@ func TestClineDefinitionDropsTheStreamsDuplicateText(t *testing.T) {
 	for _, event := range jsonl.Ignore {
 		ignored[event] = true
 	}
-	for _, event := range []string{"content_start", "done"} {
+	for _, event := range []string{"content_start", "content_update", "done"} {
 		if !ignored[event] {
 			t.Fatalf("event %q is decoded, but it repeats text content_end already carried", event)
 		}
 	}
 	if jsonl.ToolInput != "" {
 		t.Fatalf("output.jsonl.toolInput = %q, but cline reports no tool arguments", jsonl.ToolInput)
+	}
+}
+
+// TestClineDefinitionRendersOneProgressLinePerToolCall decodes the stream a
+// real authenticated dispatch produces, where the tool actually streams. Cline
+// emits a content_update for every chunk a running tool writes, and each one
+// repeats the call's toolName, so before content_update was ignored a single
+// `run_commands` rendered a "Running: run_commands" line per chunk: a build or
+// a test run streaming hundreds of lines of stdout buried everything else the
+// dashboard's progress pane had to show. The call is announced once, from the
+// content_end that finishes it, which is how the other JSONL agents read.
+func TestClineDefinitionRendersOneProgressLinePerToolCall(t *testing.T) {
+	jsonl := builtinDefinition(t, "cline").Output.JSONL
+	if jsonl == nil {
+		t.Fatal("cline no longer describes its JSONL envelope")
+	}
+	var output bytes.Buffer
+	w := newJSONLOutputWriter(&output, *jsonl)
+	lines := []string{
+		`{"type":"agent_event","event":{"type":"content_end","contentType":"text","text":"running the build"}}`,
+		`{"type":"agent_event","event":{"type":"content_update","contentType":"tool","toolCallId":"call_1","toolName":"run_commands","text":""}}`,
+		`{"type":"agent_event","event":{"type":"content_update","contentType":"tool","toolCallId":"call_1","toolName":"run_commands","text":""}}`,
+		`{"type":"agent_event","event":{"type":"content_update","contentType":"tool","toolCallId":"call_1","toolName":"run_commands","text":"ok  github.com/lsegal/glorp"}}`,
+		`{"type":"agent_event","event":{"type":"content_end","contentType":"tool","toolCallId":"call_1","toolName":"run_commands","output":[{"result":"ok","success":true}]}}`,
+	}
+	if _, err := io.WriteString(w, strings.Join(lines, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "running the build\nRunning: run_commands\n"; output.String() != want {
+		t.Fatalf("decoded stream = %q, want %q", output.String(), want)
+	}
+	if got := strings.Count(output.String(), "Running: run_commands"); got != 1 {
+		t.Fatalf("one tool call rendered %d progress lines, want 1", got)
 	}
 }
 
