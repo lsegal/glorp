@@ -196,8 +196,8 @@ func (w *Glorp) agentOptions() []core.AgentOption {
 		}
 		options = append(options, core.AgentOption{
 			Name:   name,
-			Models: append([]string(nil), definition.Models...),
-			Levels: append([]string(nil), definition.Levels...),
+			Models: definition.Models.Values(),
+			Levels: definition.Levels.Values(),
 		})
 	}
 	return options

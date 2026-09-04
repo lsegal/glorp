@@ -17,7 +17,7 @@ This page is the reference for that file and that schema.
 | --- | --- | --- | --- | --- | --- |
 | `codex` | [Codex CLI](https://developers.openai.com/codex/cli/) | `low`, `medium`, `high` | yes — Codex prints the ID, glorp reads it back | `codex` | `codex` |
 | `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `low`, `medium`, `high` | yes — glorp assigns the ID | `claude` | `claude-code` |
-| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | any | yes — glorp assigns the ID | none | `gemini-cli` |
+| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | none — the CLI has no reasoning-effort flag | yes — glorp assigns the ID | none | `gemini-cli` |
 | `muse` | Meta Muse Code | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | yes — glorp assigns the ID | none | `universal` |
 | `opencode` | [opencode](https://opencode.ai) | `low`, `medium`, `high` | no — recovery restarts the work | none | `opencode` |
 | `cline` | [Cline](https://cline.bot) | `none`, `low`, `medium`, `high`, `xhigh` | no — recovery restarts the work | none | `cline` |
@@ -25,6 +25,8 @@ This page is the reference for that file and that schema.
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
 Models are not listed because most of these CLIs take a live catalog. A definition may name a `models` allow-list, and none of the built-ins do: whatever `--agent NAME/MODEL` names is passed straight through to the CLI.
+
+`gemini` is the built-in that declares `"levels": []`. That is not the same as naming no list at all: an empty list accepts nothing, so `--agent gemini:high` stops the run naming the agent instead of accepting a level the definition has no `{level}` fragment to pass on. See [allow-lists](#allow-lists) below.
 
 ## `.glorp.config.json`
 
@@ -82,12 +84,26 @@ Anything wrong with the file stops the run, naming the file, the agent, and the 
 | `args` | object | yes | — | The argv templates. See [`args`](#args). |
 | `env` | object of string→string | no | none | Extra environment for the child process, layered on top of glorp's own environment. |
 | `session` | object | yes | — | How the session ID is established. See [`session`](#session). |
-| `levels` | array of string | no | any | Allow-list for the `:level` part of `--agent`. An empty list accepts anything; a value outside the list is rejected by glorp with the list, instead of by the CLI one dispatch later. |
-| `models` | array of string | no | any | Allow-list for the `/model` part of `--agent`, with the same behaviour. |
+| `levels` | array of string | no | any | Allow-list for the `:level` part of `--agent`. See [allow-lists](#allow-lists). |
+| `models` | array of string | no | any | Allow-list for the `/model` part of `--agent`. See [allow-lists](#allow-lists). |
 | `output` | object | yes | — | How stdout is decoded. See [`output`](#output). |
 | `missingSession` | array of string | no | none | Extra phrases that mean "the session you asked me to resume is gone". See [`missingSession`](#missingsession). |
 | `quota` | object | no | `{"reader": "none"}` | Where the status bar's quota reading comes from. See [`quota`](#quota). |
 | `skills` | object | no | none | The skills.sh target the agent's skills install for. See [`skills`](#skills). |
+
+### Allow-lists
+
+`levels` and `models` validate the two optional halves of `--agent name/model:level`, and each has **three** distinct states, because "this definition names no list" and "this CLI has no such flag at all" are different claims:
+
+| JSON | Meaning |
+| --- | --- |
+| field absent, or `null` | Accepts any value. |
+| `["low", "medium", "high"]` | Accepts exactly those, and rejects anything else at the `--agent` prompt, with the list. |
+| `[]` | Accepts nothing: the CLI has no such flag, so naming one is an error rather than a value silently dropped. |
+
+The empty list is what keeps a level from being parsed and then quietly discarded for want of a `{level}` fragment to render it into — indistinguishable, from the outside, from a level that was honoured. `gemini` declares `"levels": []` for exactly that reason.
+
+Overriding an allow-list with `null` restores accepting *anything*, not accepting nothing; write `[]` when you mean the latter.
 
 ### `args`
 
@@ -290,6 +306,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
 {
   "name": "gemini",
   "binary": "gemini",
+  "levels": [],
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},
   "output": {"format": "text"},
