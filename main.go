@@ -50,8 +50,8 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.String("webhook-secret", "", "optional GitHub webhook secret")
 	flags.String("ngrok-binary", ngrok.DefaultBinary, "ngrok executable; fetched through npx when not installed")
 	flags.String("ngrok-api", "http://127.0.0.1:4040", "deprecated and ignored: the tunnel URL is read from ngrok's own log")
-	flags.String("ui", "web", "user interface: web, tui, or none")
-	flags.Bool("no-ui", false, "disable all UI (equivalent to --ui none)")
+	flags.Bool("no-tui", false, "disable the interactive terminal UI")
+	flags.Bool("no-webui", false, "disable the browser dashboard")
 	flags.Int("web-ui-port", webui.DefaultPort, "starting port for the browser UI")
 	flags.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	flags.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
@@ -119,8 +119,8 @@ func runWatch(args []string) int {
 	webhookPath := flagValue[string](flags, "webhook-path")
 	webhookSecret := flagValue[string](flags, "webhook-secret")
 	ngrokBinary := flagValue[string](flags, "ngrok-binary")
-	uiMode := flagValue[string](flags, "ui")
-	noUI := flagValue[bool](flags, "no-ui")
+	noTui := flagValue[bool](flags, "no-tui")
+	noWebUI := flagValue[bool](flags, "no-webui")
 	webUIPort := flagValue[int](flags, "web-ui-port")
 	yolo := flagValue[bool](flags, "yolo")
 	concurrency := flagValue[int](flags, "concurrency")
@@ -162,12 +162,7 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, "interval must be positive and concurrency cannot be negative")
 		return 2
 	}
-	mode, err := selectedUIMode(uiMode, noUI)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	if mode == "web" && (webUIPort < 1 || webUIPort > 65535) {
+	if !noWebUI && (webUIPort < 1 || webUIPort > 65535) {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
 		return 2
 	}
@@ -213,14 +208,14 @@ func runWatch(args []string) int {
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
-	if shouldUseTerminalUI(mode, os.Stdout) {
+	if shouldUseTerminalUI(noTui, os.Stdout) {
 		ui = NewTerminalUI()
 		output = ui.Writer()
 		go func() { _ = ui.Run(ctx) }()
 	}
 	var webUI *webui.Server
 	var webServer *http.Server
-	if mode == "web" {
+	if !noWebUI {
 		var err error
 		webUI, err = webui.New(version)
 		if err != nil {
@@ -255,7 +250,8 @@ func runWatch(args []string) int {
 		webURL := fmt.Sprintf("http://localhost:%d", port)
 		fmt.Fprintf(output, "web UI listening on %s\n", webURL)
 		webUI.Log("web UI listening on " + webURL)
-	} else if mode == "none" {
+	}
+	if ui == nil && webUI == nil {
 		fmt.Fprintln(output, "UI disabled")
 	}
 	// --remote-control reads as one switch for both agents, but there is nothing
@@ -432,20 +428,8 @@ func isTerminal(file *os.File) bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
-func selectedUIMode(mode string, noUI bool) (string, error) {
-	if noUI {
-		return "none", nil
-	}
-	switch mode {
-	case "web", "tui", "none":
-		return mode, nil
-	default:
-		return "", fmt.Errorf("ui must be web, tui, or none")
-	}
-}
-
-func shouldUseTerminalUI(mode string, output *os.File) bool {
-	return mode == "tui" && shouldUseUI(false, output)
+func shouldUseTerminalUI(noTui bool, output *os.File) bool {
+	return !noTui && shouldUseUI(false, output)
 }
 
 func shouldUseUI(disabled bool, output *os.File) bool {
