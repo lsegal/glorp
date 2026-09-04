@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	agentOptionHint,
 	agentOptionsFrom,
-	agentSpecOptions,
+	agentStatusFor,
 	buildSettingsUpdate,
 	deliveryLabel,
+	fetchAgentStatuses,
 	fetchSettings,
 	formatInterval,
 	jobActionAvailability,
@@ -13,6 +14,7 @@ import {
 	parseAllowedCommenters,
 	submitJobAction,
 	submitSettings,
+	toggleActiveAgent,
 } from "./dashboard";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -147,29 +149,29 @@ describe("parseAllowedCommenters", () => {
 });
 
 describe("buildSettingsUpdate", () => {
-	it("builds a full update including a trimmed agent", () => {
+	it("builds a full update including the checked active agents", () => {
 		expect(
 			buildSettingsUpdate({
 				concurrency: "3",
 				readyState: "Agent Ready",
 				allowedCommenters: "alice, bob",
-				agent: " codex ",
+				activeAgents: ["codex", "muse"],
 			}),
 		).toEqual({
 			concurrency: 3,
 			readyState: "Agent Ready",
 			allowedCommenters: ["alice", "bob"],
-			agent: "codex",
+			activeAgents: ["codex", "muse"],
 		});
 	});
 
-	it("omits the agent field when blank", () => {
+	it("omits activeAgents when nothing is checked", () => {
 		expect(
 			buildSettingsUpdate({
 				concurrency: "1",
 				readyState: "",
 				allowedCommenters: "",
-				agent: "   ",
+				activeAgents: [],
 			}),
 		).toEqual({
 			concurrency: 1,
@@ -273,19 +275,6 @@ describe("agent options", () => {
 		expect(agentOptionsFrom({})).toEqual([]);
 	});
 
-	it("offers each agent with the models and levels it declares", () => {
-		expect(agentSpecOptions(options)).toEqual([
-			"codex",
-			"codex:low",
-			"codex:high",
-			"muse",
-			"muse/muse-1",
-			"muse/muse-2",
-			"plain",
-		]);
-		expect(agentSpecOptions(undefined)).toEqual([]);
-	});
-
 	it("describes what the agent currently typed accepts", () => {
 		expect(agentOptionHint(options, "codex")).toBe("levels: low, high");
 		expect(agentOptionHint(options, "muse/muse-1")).toBe(
@@ -295,5 +284,65 @@ describe("agent options", () => {
 		expect(agentOptionHint(options, "plain")).toBe("");
 		expect(agentOptionHint(options, "bogus")).toBe("");
 		expect(agentOptionHint(options, "")).toBe("");
+	});
+});
+
+describe("fetchAgentStatuses", () => {
+	it("returns the parsed agent status list", async () => {
+		const statuses = [{ name: "codex", auth: "signed in", quota: "80% left" }];
+		const fetch = vi
+			.fn()
+			.mockResolvedValue({ ok: true, json: () => Promise.resolve(statuses) });
+		vi.stubGlobal("fetch", fetch);
+		await expect(fetchAgentStatuses()).resolves.toEqual(statuses);
+		expect(fetch).toHaveBeenCalledWith("/api/agents", { cache: "no-store" });
+	});
+
+	it("throws with the response body on failure", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 503,
+			text: () => Promise.resolve("agents unavailable"),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(fetchAgentStatuses()).rejects.toThrow("agents unavailable");
+	});
+});
+
+describe("agentStatusFor", () => {
+	const statuses = [
+		{ name: "codex", auth: "signed in" },
+		{ name: "muse", auth: "unknown" },
+	];
+
+	it("finds the status matching an agent name", () => {
+		expect(agentStatusFor(statuses, "muse")).toEqual({
+			name: "muse",
+			auth: "unknown",
+		});
+	});
+
+	it("returns undefined for an agent with no probe result yet", () => {
+		expect(agentStatusFor(statuses, "claude")).toBeUndefined();
+		expect(agentStatusFor(undefined, "codex")).toBeUndefined();
+	});
+});
+
+describe("toggleActiveAgent", () => {
+	it("adds a name when checked", () => {
+		expect(toggleActiveAgent(["codex"], "muse", true)).toEqual([
+			"codex",
+			"muse",
+		]);
+	});
+
+	it("removes a name when unchecked", () => {
+		expect(toggleActiveAgent(["codex", "muse"], "codex", false)).toEqual([
+			"muse",
+		]);
+	});
+
+	it("does not duplicate a name already checked", () => {
+		expect(toggleActiveAgent(["codex"], "codex", true)).toEqual(["codex"]);
 	});
 });

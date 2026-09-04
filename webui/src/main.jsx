@@ -19,14 +19,16 @@ import { createRoot } from "react-dom/client";
 import {
 	agentOptionHint,
 	agentOptionsFrom,
-	agentSpecOptions,
+	agentStatusFor,
 	buildSettingsUpdate,
 	deliveryLabel,
+	fetchAgentStatuses,
 	fetchSettings,
 	jobActionAvailability,
 	jobAgentSummary,
 	submitJobAction,
 	submitSettings,
+	toggleActiveAgent,
 } from "./dashboard";
 import "./index.css";
 
@@ -213,9 +215,42 @@ function StatusBar({ snapshot, connected }) {
 	);
 }
 
+// AgentStatusRow renders one agent's checkbox alongside the auth and quota
+// state /api/agents reports for it (issue #572), so toggling which agents are
+// active reads the same information `glorp agents` prints to the terminal.
+function AgentStatusRow({ option, checked, onToggle, status }) {
+	const hint = agentOptionHint([option], option.name);
+	return (
+		<label className="agent-row" htmlFor={`settings-agent-${option.name}`}>
+			<input
+				id={`settings-agent-${option.name}`}
+				type="checkbox"
+				checked={checked}
+				onChange={(event) => onToggle(option.name, event.target.checked)}
+			/>
+			<span className="agent-row-body">
+				<span className="agent-row-name">{option.name}</span>
+				<span className="agent-row-meta">
+					{status ? (
+						<>
+							auth: {status.auth} · quota: {status.quota}
+							{!status.installed && " · not installed"}
+						</>
+					) : (
+						"probing..."
+					)}
+				</span>
+				{hint && <small className="settings-hint">{hint}</small>}
+			</span>
+		</label>
+	);
+}
+
 function SettingsModal({ onClose }) {
+	const [tab, setTab] = useState("general");
 	const [form, setForm] = useState(null);
 	const [agentOptions, setAgentOptions] = useState([]);
+	const [agentStatuses, setAgentStatuses] = useState([]);
 	const [readyStateDefault, setReadyStateDefault] = useState("");
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -230,16 +265,28 @@ function SettingsModal({ onClose }) {
 					concurrency: String(snapshot.concurrency ?? ""),
 					readyState: snapshot.readyState ?? "",
 					allowedCommenters: (snapshot.allowedCommenters || []).join(", "),
-					agent: snapshot.agent ?? "",
+					activeAgents: snapshot.configuredAgents ?? [],
 				});
 			})
 			.catch((err) => !cancelled && setError(err.message));
+		fetchAgentStatuses()
+			.then((statuses) => !cancelled && setAgentStatuses(statuses))
+			.catch(() => {
+				// The agents tab's status column is a diagnostic on top of the
+				// settings it lets you edit; a probe failure leaves it showing
+				// "probing..." rather than blocking the form.
+			});
 		return () => {
 			cancelled = true;
 		};
 	}, []);
 	const update = (field) => (event) =>
 		setForm({ ...form, [field]: event.target.value });
+	const toggleAgent = (name, checked) =>
+		setForm({
+			...form,
+			activeAgents: toggleActiveAgent(form.activeAgents, name, checked),
+		});
 	const submit = async (event) => {
 		event.preventDefault();
 		setSaving(true);
@@ -276,61 +323,77 @@ function SettingsModal({ onClose }) {
 					<p className="modal-loading">{error || "loading settings..."}</p>
 				) : (
 					<form onSubmit={submit} className="modal-body">
-						<label htmlFor="settings-concurrency">
-							Concurrency
-							<input
-								id="settings-concurrency"
-								type="number"
-								min="1"
-								max="256"
-								value={form.concurrency}
-								onChange={update("concurrency")}
-							/>
-						</label>
-						<label htmlFor="settings-agent">
-							Agent
-							<input
-								id="settings-agent"
-								type="text"
-								value={form.agent}
-								onChange={update("agent")}
-								list={
-									agentOptions.length > 0 ? "settings-agent-options" : undefined
-								}
-								placeholder="codex, claude, claude/opus:high, ..."
-							/>
-							{agentOptions.length > 0 && (
-								<datalist id="settings-agent-options">
-									{agentSpecOptions(agentOptions).map((spec) => (
-										<option key={spec} value={spec} />
-									))}
-								</datalist>
-							)}
-							{agentOptionHint(agentOptions, form.agent) && (
-								<small className="settings-hint">
-									{agentOptionHint(agentOptions, form.agent)}
-								</small>
-							)}
-						</label>
-						<label htmlFor="settings-ready-state">
-							Ready state label
-							<input
-								id="settings-ready-state"
-								type="text"
-								value={form.readyState}
-								onChange={update("readyState")}
-								placeholder={readyStateDefault || undefined}
-							/>
-						</label>
-						<label htmlFor="settings-allowed-commenters">
-							Allowed commenters (comma separated)
-							<input
-								id="settings-allowed-commenters"
-								type="text"
-								value={form.allowedCommenters}
-								onChange={update("allowedCommenters")}
-							/>
-						</label>
+						<div className="modal-tabs" role="tablist">
+							<button
+								type="button"
+								role="tab"
+								aria-selected={tab === "general"}
+								className={tab === "general" ? "active" : ""}
+								onClick={() => setTab("general")}
+							>
+								General
+							</button>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={tab === "agents"}
+								className={tab === "agents" ? "active" : ""}
+								onClick={() => setTab("agents")}
+							>
+								Agents
+							</button>
+						</div>
+						{tab === "general" && (
+							<>
+								<label htmlFor="settings-concurrency">
+									Concurrency
+									<input
+										id="settings-concurrency"
+										type="number"
+										min="1"
+										max="256"
+										value={form.concurrency}
+										onChange={update("concurrency")}
+									/>
+								</label>
+								<label htmlFor="settings-ready-state">
+									Ready state label
+									<input
+										id="settings-ready-state"
+										type="text"
+										value={form.readyState}
+										onChange={update("readyState")}
+										placeholder={readyStateDefault || undefined}
+									/>
+								</label>
+								<label htmlFor="settings-allowed-commenters">
+									Allowed commenters (comma separated)
+									<input
+										id="settings-allowed-commenters"
+										type="text"
+										value={form.allowedCommenters}
+										onChange={update("allowedCommenters")}
+									/>
+								</label>
+							</>
+						)}
+						{tab === "agents" && (
+							<fieldset className="agent-list">
+								<legend className="sr-only">Active agents</legend>
+								{agentOptions.length === 0 && (
+									<p className="modal-loading">no agents registered</p>
+								)}
+								{agentOptions.map((option) => (
+									<AgentStatusRow
+										key={option.name}
+										option={option}
+										checked={form.activeAgents.includes(option.name)}
+										onToggle={toggleAgent}
+										status={agentStatusFor(agentStatuses, option.name)}
+									/>
+								))}
+							</fieldset>
+						)}
 						{error && <p className="modal-error">{error}</p>}
 						<div className="modal-actions">
 							<button type="button" onClick={onClose} disabled={saving}>
