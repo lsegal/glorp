@@ -23,6 +23,34 @@ const jobGridColumns = 2
 const jobCardHeight = 13
 const dashboardGap = 1
 
+// jobStatusRank orders jobs so the "last 6" viewports (issue #587) show the
+// jobs an operator most needs to see rather than whichever six happened to
+// start most recently: running work first, then errored, then anything else
+// still in flight, with completed work pushed to the bottom.
+func jobStatusRank(status string) int {
+	switch status {
+	case "active":
+		return 0
+	case "failed":
+		return 1
+	case "complete":
+		return 3
+	default:
+		return 2
+	}
+}
+
+// sortJobSnapshots orders jobs by jobStatusRank, breaking ties within a rank
+// by most recently started first.
+func sortJobSnapshots(jobs []JobSnapshot) {
+	slices.SortFunc(jobs, func(a, b JobSnapshot) int {
+		if rankDiff := jobStatusRank(a.Status) - jobStatusRank(b.Status); rankDiff != 0 {
+			return rankDiff
+		}
+		return b.Started.Compare(a.Started)
+	})
+}
+
 // JobSnapshot and GlorpSnapshot live in package core so the browser dashboard
 // in package webui can render the same published state as this one.
 type JobSnapshot = core.JobSnapshot
@@ -115,7 +143,7 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case snapshotMsg:
 		m.snapshot = GlorpSnapshot(msg)
-		slices.SortFunc(m.snapshot.Jobs, func(a, b JobSnapshot) int { return b.Started.Compare(a.Started) })
+		sortJobSnapshots(m.snapshot.Jobs)
 		if len(m.snapshot.Jobs) > maxVisibleJobs {
 			m.snapshot.Jobs = m.snapshot.Jobs[:maxVisibleJobs]
 		}

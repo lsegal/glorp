@@ -1496,7 +1496,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		polled := lastPoll
 		jobMu.Unlock()
-		slices.SortFunc(list, func(a, b JobSnapshot) int { return b.Started.Compare(a.Started) })
+		sortJobSnapshots(list)
 		if len(list) > maxVisibleJobs {
 			list = list[:maxVisibleJobs]
 		}
