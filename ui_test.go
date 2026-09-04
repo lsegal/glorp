@@ -455,6 +455,34 @@ func TestFormatClaudeQuotaMissingSessionReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestClaudeUsageTextIgnoresTrailingDiagnostics(t *testing.T) {
+	out := `{"result":"Current session: 35% used\nCurrent week (all models): 25% used","type":"result"}` + "\n" +
+		"Client.listTools() called but server does not advertise tools capability - returning empty list\n"
+	if got := formatClaudeQuota(claudeUsageText([]byte(out))); got != "session 65% left, week 75% left" {
+		t.Fatalf("quota = %q", got)
+	}
+}
+
+func TestClaudeUsageTextIgnoresLeadingDiagnostics(t *testing.T) {
+	out := "warming up an MCP server\n" +
+		`{"result":"Current session: 40% used","type":"result"}` + "\n"
+	if got := formatClaudeQuota(claudeUsageText([]byte(out))); got != "session 60% left" {
+		t.Fatalf("quota = %q", got)
+	}
+}
+
+func TestClaudeUsageTextReadsPlainOutput(t *testing.T) {
+	if got := formatClaudeQuota(claudeUsageText([]byte("Current session: 20% used"))); got != "session 80% left" {
+		t.Fatalf("quota = %q", got)
+	}
+}
+
+func TestClaudeUsageTextWithoutUsageStaysUnreadable(t *testing.T) {
+	if got := formatClaudeQuota(claudeUsageText([]byte(`{"result":"","type":"result"}`))); got != "" {
+		t.Fatalf("quota = %q, want empty", got)
+	}
+}
+
 func TestClaudeQuotaRequestIsFreeSlashCommand(t *testing.T) {
 	if got := claudeQuotaRequest(); got != "/usage" {
 		t.Fatalf("claude quota request = %q, want the local /usage slash command", got)
