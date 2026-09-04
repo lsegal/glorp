@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Page the terminal dashboard's agent viewports instead of letting them run off the top of the screen (issue #617). The job grid always rendered up to three rows of cards regardless of terminal height, so on a shorter terminal the first two viewports were pushed off screen and could be neither read nor scrolled. The grid now shows only the rows that fit above the log panel and pages through the rest with the left and right arrow keys (or `h`/`l`), with a `page 1/3  ←/→ (or h/l) for more agents` line under the status bar so the extra agents are discoverable.
 - Stop the web UI Settings Models tab from showing a bare `codex` default as if it were a Codex model after the model probe finishes. Choosing a concrete Codex model now replaces that default instead of dispatching both selections (issue #609).
 - Offer Claude's `opus`, `sonnet`, and `haiku` aliases in the WebUI Models tab, even though Claude Code has no command for listing its models (issue #608). The aliases are maintained suggestions rather than a restriction, so a full Claude model id remains selectable and dispatchable.
 - Make browser polling the default delivery mode and replace the competing `--browser` and `--poll` transport choices with `--pollmode=browser|webhook|poll`; the older switches remain as deprecated aliases for existing scripts.
