@@ -51,6 +51,46 @@ func (f *fakeSource) ListIssues(_ context.Context, _ string) ([]Issue, error) {
 	return f.batches[n], nil
 }
 
+// webhookDispatchWait is how long the webhook tests allow the run loop to act
+// on a delivery. These tests assert ordering, not latency: the work itself
+// takes microseconds, but a loaded CI runner can stall a goroutine for far
+// longer than that, and a one-second deadline turned that stall into a
+// spurious failure (issue #558). The deadline only has to be short enough to
+// fail before the package timeout.
+const webhookDispatchWait = 30 * time.Second
+
+// sendWebhookEvent delivers event to a run loop over an unbuffered channel, so
+// the send returns only once the loop has actually received it. That is the
+// readiness signal these tests need; waiting for the source's poll count to
+// reach one only proved the initial poll had started, not that the loop had
+// reached the select that reads deliveries.
+func sendWebhookEvent(t *testing.T, events chan WebhookEvent, event WebhookEvent) {
+	t.Helper()
+	select {
+	case events <- event:
+	case <-time.After(webhookDispatchWait):
+		t.Fatalf("run loop did not receive webhook event %+v within %s", event, webhookDispatchWait)
+	}
+}
+
+// waitForListCalls blocks until the source has listed issues at least want
+// times, for the tests that need a poll to have happened rather than a
+// delivery to have been received.
+func waitForListCalls(t *testing.T, src *fakeSource, want int) {
+	t.Helper()
+	deadline := time.Now().Add(webhookDispatchWait)
+	for time.Now().Before(deadline) {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("source listed issues fewer than %d time(s) within %s", want, webhookDispatchWait)
+}
+
 type fakeDiscussionSource struct {
 	mu      sync.Mutex
 	calls   int
@@ -263,7 +303,9 @@ func TestGlorpRetriesWebhookRefreshUntilIssueIsIndexed(t *testing.T) {
 		{{Number: 7}}, // delayed GitHub issue index
 	}}
 	runner := &fakeRunner{release: make(chan struct{})}
-	events := make(chan WebhookEvent, 1)
+	// Unbuffered: the send in sendWebhookEvent is the readiness signal, so it
+	// must block until the run loop actually receives the delivery.
+	events := make(chan WebhookEvent)
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
 		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
@@ -274,19 +316,9 @@ func TestGlorpRetriesWebhookRefreshUntilIssueIsIndexed(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		src.mu.Lock()
-		calls := src.calls
-		src.mu.Unlock()
-		if calls >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	events <- WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 7}
+	sendWebhookEvent(t, events, WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 7})
 
-	deadline = time.Now().Add(time.Second)
+	deadline := time.Now().Add(webhookDispatchWait)
 	for time.Now().Before(deadline) {
 		runner.mu.Lock()
 		got := append([]int(nil), runner.got...)
@@ -2196,7 +2228,9 @@ func TestGlorpResumesFailedReferencedWorkWhenPullRequestCloses(t *testing.T) {
 		{{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: "closed"}}}},
 	}}
 	runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 1)}
-	events := make(chan WebhookEvent, 1)
+	// Unbuffered: the send in sendWebhookEvent is the readiness signal, so it
+	// must block until the run loop actually receives the delivery.
+	events := make(chan WebhookEvent)
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
 		Issues: src, Runner: runner, UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
@@ -2207,23 +2241,14 @@ func TestGlorpResumesFailedReferencedWorkWhenPullRequestCloses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	for {
-		src.mu.Lock()
-		calls := src.calls
-		src.mu.Unlock()
-		if calls >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	events <- WebhookEvent{Kind: "pull_request", Action: "closed", Repository: "o/r", MentionedIssues: []int{7}}
+	sendWebhookEvent(t, events, WebhookEvent{Kind: "pull_request", Action: "closed", Repository: "o/r", MentionedIssues: []int{7}})
 
 	select {
 	case got := <-runner.sessions:
 		if !got.Resume || got.ID != want.SessionID || got.Agent != want.Agent || got.CheckoutDirectory != want.CheckoutDirectory {
 			t.Fatalf("resumed session = %#v, want persisted %#v", got, want)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(webhookDispatchWait):
 		t.Fatal("closed pull request did not immediately resume referenced work")
 	}
 	cancel()
@@ -2244,7 +2269,9 @@ func TestGlorpNegotiatesReferencedWorkWhenPullRequestCloses(t *testing.T) {
 	}
 	comments := newFakeCommentClient()
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
-	events := make(chan WebhookEvent, 1)
+	// Unbuffered: the send in sendWebhookEvent is the readiness signal, so it
+	// must block until the run loop actually receives the delivery.
+	events := make(chan WebhookEvent)
 	w := &Glorp{
 		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
 		Issues: source, Runner: runner, UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
@@ -2256,23 +2283,14 @@ func TestGlorpNegotiatesReferencedWorkWhenPullRequestCloses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	for {
-		source.fakeSource.mu.Lock()
-		calls := source.fakeSource.calls
-		source.fakeSource.mu.Unlock()
-		if calls >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	events <- WebhookEvent{Kind: "pull_request", Action: "closed", Repository: "o/r", MentionedIssues: []int{7}}
+	sendWebhookEvent(t, events, WebhookEvent{Kind: "pull_request", Action: "closed", Repository: "o/r", MentionedIssues: []int{7}})
 
 	select {
 	case got := <-runner.dispatched:
 		if got != 7 {
 			t.Fatalf("dispatched issue #%d, want #7", got)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(webhookDispatchWait):
 		t.Fatal("closed pull request did not dispatch referenced work after handoff")
 	}
 	posted, err := comments.ListComments(context.Background(), "o/r", 8)
@@ -2300,7 +2318,9 @@ func TestGlorpStopsWebhookFollowUpOnceIssueIsObserved(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{}, {{Number: 1, Repository: "o/r"}}}}
 	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 1)}
-	events := make(chan WebhookEvent, 1)
+	// Unbuffered: the send in sendWebhookEvent is the readiness signal, so it
+	// must block until the run loop actually receives the delivery.
+	events := make(chan WebhookEvent)
 	w := &Glorp{
 		Repo: "o/r", Interval: 20 * time.Millisecond, Concurrency: 1,
 		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
@@ -2312,24 +2332,14 @@ func TestGlorpStopsWebhookFollowUpOnceIssueIsObserved(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		src.mu.Lock()
-		calls := src.calls
-		src.mu.Unlock()
-		if calls >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	events <- WebhookEvent{Kind: "issues", Action: "opened", Repository: "o/r", IssueNumber: 1}
+	sendWebhookEvent(t, events, WebhookEvent{Kind: "issues", Action: "opened", Repository: "o/r", IssueNumber: 1})
 
 	select {
 	case n := <-r.dispatched:
 		if n != 1 {
 			t.Fatalf("dispatched issue #%d, want #1", n)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(webhookDispatchWait):
 		t.Fatal("issue #1 was not dispatched")
 	}
 
@@ -2358,7 +2368,9 @@ func TestGlorpKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 		{{Number: 1}, {Number: 2}}, // preserved follow-up observes the latest issue
 	}}
 	r := &fakeRunner{release: make(chan struct{})}
-	events := make(chan WebhookEvent, 2)
+	// Unbuffered: the send in sendWebhookEvent is the readiness signal, so it
+	// must block until the run loop actually receives the delivery.
+	events := make(chan WebhookEvent)
 	w := &Glorp{
 		Repo: "o/r", Interval: 40 * time.Millisecond, Concurrency: 2,
 		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r,
@@ -2370,21 +2382,11 @@ func TestGlorpKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		src.mu.Lock()
-		calls := src.calls
-		src.mu.Unlock()
-		if calls >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	events <- WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 1}
+	sendWebhookEvent(t, events, WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 1})
 	time.Sleep(10 * time.Millisecond)
-	events <- WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 2}
+	sendWebhookEvent(t, events, WebhookEvent{Kind: "issues", Action: "opened", IssueNumber: 2})
 
-	deadline = time.Now().Add(time.Second)
+	deadline := time.Now().Add(webhookDispatchWait)
 	for time.Now().Before(deadline) {
 		r.mu.Lock()
 		got := append([]int(nil), r.got...)
@@ -2419,23 +2421,14 @@ func TestGlorpReloadsChangedStateAfterDebounce(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		src.mu.Lock()
-		calls := src.calls
-		src.mu.Unlock()
-		if calls >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitForListCalls(t, src, 1)
 	// Let the initial poll finish persisting its baseline before editing it.
 	time.Sleep(200 * time.Millisecond)
 	if err := saveWorkState(statePath, map[int]workState{}); err != nil {
 		t.Fatal(err)
 	}
 	released := false
-	deadline = time.Now().Add(stateReloadDebounce + 2*time.Second)
+	deadline := time.Now().Add(stateReloadDebounce + webhookDispatchWait)
 	for time.Now().Before(deadline) {
 		r.mu.Lock()
 		got := append([]int(nil), r.got...)
