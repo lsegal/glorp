@@ -7,6 +7,7 @@ import {
 	deliveryLabel,
 	fetchAgentStatuses,
 	fetchSettings,
+	fetchSettingsWithRetry,
 	formatInterval,
 	jobActionAvailability,
 	jobAgentSummary,
@@ -201,6 +202,68 @@ describe("fetchSettings", () => {
 		});
 		vi.stubGlobal("fetch", fetch);
 		await expect(fetchSettings()).rejects.toThrow("settings unavailable");
+	});
+});
+
+describe("fetchSettingsWithRetry", () => {
+	it("retries on a 503 until the run reports ready", async () => {
+		const snapshot = { concurrency: 2, readyState: "Ready" };
+		const fetch = vi
+			.fn()
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 503,
+				text: () => Promise.resolve("settings unavailable"),
+			})
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 503,
+				text: () => Promise.resolve("settings unavailable"),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				json: () => Promise.resolve(snapshot),
+			});
+		vi.stubGlobal("fetch", fetch);
+		const wait = vi.fn().mockResolvedValue(undefined);
+		await expect(fetchSettingsWithRetry(undefined, wait)).resolves.toEqual(
+			snapshot,
+		);
+		expect(fetch).toHaveBeenCalledTimes(3);
+		expect(wait).toHaveBeenCalledTimes(2);
+	});
+
+	it("propagates a non-503 failure immediately without retrying", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 400,
+			text: () => Promise.resolve("invalid settings update"),
+		});
+		vi.stubGlobal("fetch", fetch);
+		const wait = vi.fn().mockResolvedValue(undefined);
+		await expect(fetchSettingsWithRetry(undefined, wait)).rejects.toThrow(
+			"invalid settings update",
+		);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(wait).not.toHaveBeenCalled();
+	});
+
+	it("stops retrying once the signal aborts", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 503,
+			text: () => Promise.resolve("settings unavailable"),
+		});
+		vi.stubGlobal("fetch", fetch);
+		const controller = new AbortController();
+		const wait = vi.fn().mockImplementation(() => {
+			controller.abort();
+			return Promise.resolve(undefined);
+		});
+		await expect(
+			fetchSettingsWithRetry(controller.signal, wait),
+		).rejects.toThrow();
+		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 });
 

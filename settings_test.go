@@ -2,11 +2,13 @@ package main
 
 import (
 	"github.com/lsegal/glorp/agents"
+	"github.com/lsegal/glorp/core"
 	"github.com/lsegal/glorp/webui"
 
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -189,6 +191,60 @@ func TestGlorpApplySettingsReadyStateDefaultReflectsUnsetFallback(t *testing.T) 
 	}
 	if snapshot.ReadyStateDefault != "Agent Ready" {
 		t.Fatalf("readyStateDefault after configuring = %q, want %q", snapshot.ReadyStateDefault, "Agent Ready")
+	}
+
+	cancel()
+	<-done
+}
+
+// TestGlorpApplySettingsFailsFastBeforeRunIsReady checks that a settings
+// request made before Run starts fails with core.ErrNotReady, bounded by
+// notReadyWait, instead of blocking forever on a channel Run isn't reading
+// yet -- the hang reported in issue #579.
+func TestGlorpApplySettingsFailsFastBeforeRunIsReady(t *testing.T) {
+	w := &Glorp{notReadyWait: 20 * time.Millisecond}
+	start := time.Now()
+	_, err := w.ApplySettings(context.Background(), SettingsUpdate{})
+	if !errors.Is(err, core.ErrNotReady) {
+		t.Fatalf("ApplySettings error = %v, want core.ErrNotReady", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("ApplySettings took %s, want it bounded by notReadyWait", elapsed)
+	}
+}
+
+// TestGlorpHandleJobActionFailsFastBeforeRunIsReady mirrors
+// TestGlorpApplySettingsFailsFastBeforeRunIsReady for the job-action path
+// (issue #579).
+func TestGlorpHandleJobActionFailsFastBeforeRunIsReady(t *testing.T) {
+	w := &Glorp{notReadyWait: 20 * time.Millisecond}
+	start := time.Now()
+	err := w.handleJobAction(context.Background(), core.JobAction{Action: "retry", Target: "o/r", Number: 1})
+	if !errors.Is(err, core.ErrNotReady) {
+		t.Fatalf("handleJobAction error = %v, want core.ErrNotReady", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("handleJobAction took %s, want it bounded by notReadyWait", elapsed)
+	}
+}
+
+// TestGlorpApplySettingsSucceedsOnceRunBecomesReady checks a settings
+// request that arrives just before Run reaches readiness still succeeds once
+// it gets there, rather than failing merely because it arrived first (issue
+// #579).
+func TestGlorpApplySettingsSucceedsOnceRunBecomesReady(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	r := &fakeRunner{release: make(chan struct{})}
+	defer close(r.release)
+	logs := &syncBuffer{}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: r, Out: logs, notReadyWait: 5 * time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	if _, err := w.ApplySettings(ctx, SettingsUpdate{}); err != nil {
+		t.Fatalf("ApplySettings = %v, want success once Run becomes ready", err)
 	}
 
 	cancel()

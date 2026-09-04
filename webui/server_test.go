@@ -112,6 +112,45 @@ func TestServerRejectsUnavailableJobActions(t *testing.T) {
 	}
 }
 
+// TestServerReportsNotReadyJobActionsAsUnavailable checks that a handler
+// reporting core.ErrNotReady -- the run loop not having reached its
+// dispatch select statement yet -- gets the same fast 503 a nil handler
+// gets, rather than the generic 409 other handler errors get (issue #579).
+func TestServerReportsNotReadyJobActionsAsUnavailable(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.SetJobActionHandler(func(_ context.Context, _ core.JobAction) error {
+		return core.ErrNotReady
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/jobs/action", bytes.NewBufferString(`{"action":"retry","target":"o/r","number":7}`))
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST action = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// TestServerReportsNotReadySettingsAsUnavailable mirrors
+// TestServerReportsNotReadyJobActionsAsUnavailable for the settings
+// endpoint (issue #579).
+func TestServerReportsNotReadySettingsAsUnavailable(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.SetSettingsHandler(func(_ context.Context, _ core.SettingsUpdate) (core.SettingsSnapshot, error) {
+		return core.SettingsSnapshot{}, core.ErrNotReady
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET settings = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
 // TestServerHandlesAgents checks the settings modal's agents tab (issue
 // #572) reads back exactly what the run's agent probe reports.
 func TestServerHandlesAgents(t *testing.T) {

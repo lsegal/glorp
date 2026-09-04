@@ -8,6 +8,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -133,6 +134,10 @@ func (ui *Server) serveJobAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := handler(r.Context(), action); err != nil {
+		if errors.Is(err, core.ErrNotReady) {
+			http.Error(w, "job actions unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -165,6 +170,10 @@ func (ui *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, err := handler(r.Context(), update)
 	if err != nil {
+		if errors.Is(err, core.ErrNotReady) {
+			http.Error(w, "settings unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
