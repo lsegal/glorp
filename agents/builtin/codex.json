@@ -9,6 +9,7 @@
   },
   "output": {"format": "text"},
   "quota": {"reader": "codex"},
+  "skills": {"target": "codex"},
   "args": {
     "run": [
       {"args": ["exec"]},

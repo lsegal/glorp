@@ -6,6 +6,7 @@
   "session": {"assign": "glorp"},
   "output": {"format": "stream-json"},
   "quota": {"reader": "claude"},
+  "skills": {"target": "claude-code"},
   "args": {
     "run": [
       {"args": ["-p"]},

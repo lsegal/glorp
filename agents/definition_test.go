@@ -257,3 +257,30 @@ func TestSessionAccessors(t *testing.T) {
 		t.Fatal("codex should drop a session ID it can no longer resume")
 	}
 }
+
+// TestSkillsTargetShapeIsValidated checks a malformed skills.sh target id is
+// rejected while an id glorp has never heard of is accepted: the set of ids
+// skills.sh knows grows without glorp, so only the shape is glorp's business.
+func TestSkillsTargetShapeIsValidated(t *testing.T) {
+	definition := Definition{
+		Name: "muse", Binary: "muse",
+		Session: Session{Assign: AssignNone}, Output: Output{Format: FormatText},
+		Args: Args{Run: []Fragment{{Args: []string{"{prompt}"}}}, Resume: []Fragment{{Args: []string{"{prompt}"}}}},
+	}
+	definition.Skills = Skills{Target: "some-new-cli"}
+	if err := definition.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want an unknown-but-well-formed id accepted", err)
+	}
+	if got := definition.SkillsTarget(); got != "some-new-cli" {
+		t.Fatalf("SkillsTarget() = %q, want the declared id", got)
+	}
+	definition.Skills = Skills{Target: "Claude Code"}
+	err := definition.Validate()
+	if err == nil || !strings.Contains(err.Error(), `"skills.target"`) {
+		t.Fatalf("Validate() error = %v, want it to name skills.target", err)
+	}
+	definition.Skills = Skills{}
+	if err := definition.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want an absent target accepted", err)
+	}
+}

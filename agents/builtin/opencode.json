@@ -4,6 +4,7 @@
   "levels": ["low", "medium", "high"],
   "session": {"assign": "none"},
   "output": {"format": "text"},
+  "skills": {"target": "opencode"},
   "args": {
     "run": [
       {"args": ["run", "--auto"]},
