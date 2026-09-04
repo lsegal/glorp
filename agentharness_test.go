@@ -557,12 +557,12 @@ func TestAgentDefinitionCapturesCheckoutDirectory(t *testing.T) {
 // agent the registry no longer defines fails with a message listing what it
 // does define, instead of spawning whatever the binary flags happen to hold.
 func TestUnknownAgentIsReportedRatherThanRun(t *testing.T) {
-	runner := CommandRunner{Agent: "gemini", Definitions: agents.MustBuiltin(), Repo: "o/r"}
+	runner := CommandRunner{Agent: "nosuchagent", Definitions: agents.MustBuiltin(), Repo: "o/r"}
 	err := runner.Run(context.Background(), Issue{Number: 7, Target: "o/r"})
-	if err == nil || !strings.Contains(err.Error(), `unknown agent "gemini"`) {
+	if err == nil || !strings.Contains(err.Error(), `unknown agent "nosuchagent"`) {
 		t.Fatalf("error = %v, want it to name the unknown agent", err)
 	}
-	if !strings.Contains(err.Error(), "claude, codex") {
+	if !strings.Contains(err.Error(), "claude, codex, gemini") {
 		t.Fatalf("error = %v, want it to list the known agents", err)
 	}
 }

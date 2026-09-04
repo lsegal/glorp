@@ -69,11 +69,11 @@ func TestWorkStateFileWithAgentDefinitionsIsRejected(t *testing.T) {
 // TestUnknownAgentSpecListsTheKnownAgents checks the error --agent gives is
 // built from the registry rather than from a hardcoded pair of names.
 func TestUnknownAgentSpecListsTheKnownAgents(t *testing.T) {
-	_, err := parseAgentSpec("gemini")
+	_, err := parseAgentSpec("nosuchagent")
 	if err == nil {
 		t.Fatal("an unknown agent was accepted")
 	}
-	for _, want := range []string{`unknown agent "gemini"`, "claude, codex"} {
+	for _, want := range []string{`unknown agent "nosuchagent"`, "claude, codex, gemini"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want it to mention %s", err, want)
 		}
