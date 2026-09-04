@@ -4,6 +4,7 @@
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},
   "output": {"format": "text"},
+  "skills": {"target": "gemini-cli"},
   "args": {
     "run": [
       {"when": "session", "args": ["--session-id", "{session}"]},

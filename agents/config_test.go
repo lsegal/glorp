@@ -24,9 +24,7 @@ func TestLoadWithoutAConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("agents = %v, want the built-ins %v", got, want)
-	}
+	requireRegistered(t, registry, "claude", "codex")
 }
 
 // TestConfigOverridesABuiltinFieldByField checks a definition that names a
@@ -55,9 +53,7 @@ func TestConfigOverridesABuiltinFieldByField(t *testing.T) {
 	if got := claude.Render(ModeRun, Values{Prompt: "go"}); !reflect.DeepEqual(got, []string{"-p", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", "go"}) {
 		t.Fatalf("argv = %#v, want the built-in template", got)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("agents = %v, want %v", got, want)
-	}
+	requireRegistered(t, registry, "claude", "codex")
 }
 
 // TestConfigNullClearsAnInheritedField checks the documented way to remove
@@ -93,9 +89,7 @@ func TestConfigRegistersANewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex", "gemini", "muse"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("agents = %v, want %v", got, want)
-	}
+	requireRegistered(t, registry, "claude", "codex", "muse")
 	muse, _ := registry.Lookup("muse")
 	if got := muse.Render(ModeRun, Values{Prompt: "go"}); !reflect.DeepEqual(got, []string{"run", "go"}) {
 		t.Fatalf("argv = %#v, want the configured template", got)

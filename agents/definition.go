@@ -44,6 +44,10 @@ type Definition struct {
 	// reading is issue #489; the field is named here so that issue does not
 	// have to change the schema.
 	Quota Quota `json:"quota,omitempty"`
+	// Skills names the skills.sh target the agent's copy of the gh-fix and
+	// gh-discuss skills is installed for, so the installers derive their
+	// --agent list from the registry instead of a hand-edited one.
+	Skills Skills `json:"skills,omitempty"`
 }
 
 // Args are the argv templates for the three shapes of invocation glorp makes:
@@ -91,6 +95,14 @@ type Output struct {
 	Format string `json:"format"`
 }
 
+// Skills names where an agent reads glorp's skills from.
+type Skills struct {
+	// Target is the skills.sh target id `skills add --agent` takes: a
+	// dedicated one such as "codex" or "claude-code", or "universal" for a
+	// CLI skills.sh has no dedicated id for.
+	Target string `json:"target,omitempty"`
+}
+
 // Quota names the quota source for the agent.
 type Quota struct {
 	// Reader is the name of the built-in quota reader, empty when the agent
@@ -135,6 +147,11 @@ var knownConditions = append([]string{"yolo", "remoteControl"}, knownPlaceholder
 
 // placeholderPattern finds {name} spans inside a template argument.
 var placeholderPattern = regexp.MustCompile(`\{([A-Za-z][A-Za-z0-9]*)\}`)
+
+// skillsTargetPattern is the shape a skills.sh target id may take. The set of
+// ids skills.sh knows grows without glorp, so the shape is checked and the
+// value is not: an id glorp has never heard of is the user's to pass on.
+var skillsTargetPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // namePattern is the shape an agent name may take. It has to survive being
 // written in --agent name/model:level, so it excludes the separators that
@@ -201,6 +218,9 @@ func (d Definition) Validate() error {
 			return fmt.Errorf(`field "models" cannot contain an empty value`)
 		}
 	}
+	if target := d.Skills.Target; target != "" && !skillsTargetPattern.MatchString(target) {
+		return fmt.Errorf(`field "skills.target": %q must be a skills.sh target id: lowercase letters, digits, and dashes`, target)
+	}
 	for key := range d.Env {
 		if strings.TrimSpace(key) == "" || strings.Contains(key, "=") {
 			return fmt.Errorf(`field "env": %q is not a usable variable name`, key)
@@ -227,6 +247,10 @@ func validateFragments(mode string, fragments []Fragment) error {
 	}
 	return nil
 }
+
+// SkillsTarget returns the skills.sh target id skills are installed for on
+// this agent's behalf, empty when the definition names none.
+func (d Definition) SkillsTarget() string { return d.Skills.Target }
 
 // AcceptsLevel and AcceptsModel report whether the definition's allow-lists
 // admit a value. An empty allow-list admits anything.

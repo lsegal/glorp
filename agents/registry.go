@@ -105,6 +105,28 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// SkillsTargets lists the skills.sh target ids of the registered agents,
+// deduplicated and sorted. It is what the installers install glorp's skills
+// for, so an agent added to the registry is covered without either installer
+// script being edited. Agents whose definition names no target are skipped.
+func (r *Registry) SkillsTargets() []string {
+	if r == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(r.definitions))
+	targets := make([]string, 0, len(r.definitions))
+	for _, definition := range r.definitions {
+		target := definition.SkillsTarget()
+		if target == "" || seen[target] {
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	return targets
+}
+
 // Raw returns the definition documents as they were loaded, keyed by name, so
 // a merge can be applied field by field rather than wholesale.
 type rawDefinition map[string]json.RawMessage
