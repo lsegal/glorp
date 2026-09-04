@@ -42,8 +42,8 @@ try {
     if (($userPath -split ';') -notcontains $installDir) {
         [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $installDir).Trim(';')), 'User')
     }
-    & npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code -y
-    & npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code -y
+    & npx --yes skills add "$repo@gh-fix" --global --agent codex --agent claude-code --agent opencode -y
+    & npx --yes skills add "$repo@gh-discuss" --global --agent codex --agent claude-code --agent opencode -y
     Write-Host "Installed glorp $tag to $installDir\glorp.exe and gh-fix/gh-discuss globally."
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
