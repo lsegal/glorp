@@ -225,11 +225,10 @@ func TestAgentDoctorListsKnownModels(t *testing.T) {
 	}
 }
 
-// TestBuiltinAgentsAskTheirCLIForModels holds every shipped agent to reading
-// its models off the CLI rather than carrying a list of its own, which is what
-// issue #566 asked for: a list written into glorp is stale the morning after a
-// vendor ships. A built-in that genuinely cannot be asked says so in a note
-// instead, which is an answer that cannot go out of date.
+// TestBuiltinAgentsAskTheirCLIForModels holds every shipped agent that exposes
+// a model catalog to reading it from the CLI, which avoids carrying stale
+// lists. Claude Code has no listing command, so its maintained aliases are the
+// exception and remain suggestions rather than an allow-list.
 func TestBuiltinAgentsAskTheirCLIForModels(t *testing.T) {
 	registry := agents.MustBuiltin()
 	for _, name := range registry.Names() {
@@ -238,7 +237,13 @@ func TestBuiltinAgentsAskTheirCLIForModels(t *testing.T) {
 			t.Fatalf("registry has no definition for %q", name)
 		}
 		if len(definition.Doctor.KnownModels) > 0 {
-			t.Errorf("built-in %q hardcodes doctor.knownModels: ask its CLI with doctor.models instead", name)
+			if name != "claude" || len(definition.Doctor.Models) > 0 {
+				t.Errorf("built-in %q hardcodes doctor.knownModels despite having a model probe", name)
+			}
+			if got := strings.Join(definition.Doctor.KnownModels, ","); got != "opus,sonnet,haiku" {
+				t.Errorf("Claude aliases = %q, want opus,sonnet,haiku", got)
+			}
+			continue
 		}
 		if len(definition.Doctor.Models) > 0 || definition.Models.Declared() {
 			continue

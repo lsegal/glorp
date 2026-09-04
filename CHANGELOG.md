@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Offer Claude's `opus`, `sonnet`, and `haiku` aliases in the WebUI Models tab, even though Claude Code has no command for listing its models (issue #608). The aliases are maintained suggestions rather than a restriction, so a full Claude model id remains selectable and dispatchable.
+
 - Expand the web UI settings modal from a narrow fixed dialog into a responsive desktop workspace, while keeping its contents scrollable within smaller viewports (issue #599).
 - Expand the WebUI settings modal to use substantially more desktop space while keeping it bounded and scrollable on smaller screens (issue #599).
 - Put signed-in agents ahead of signed-out agents in the WebUI settings Models tab and grey out their groups and choices, so models that are immediately usable are easiest to find (issue #597).
