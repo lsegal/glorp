@@ -121,7 +121,7 @@ func TestSkillsTargetsMergeConfigAndDeduplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.SkillsTargets(), []string{"claude-code", "codex", "universal"}; !reflect.DeepEqual(got, want) {
+	if got, want := registry.SkillsTargets(), []string{"claude-code", "codex", "opencode", "universal"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("targets = %v, want %v", got, want)
 	}
 }
