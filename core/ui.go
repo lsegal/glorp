@@ -48,11 +48,15 @@ type Snapshot struct {
 	UseWebhooks   bool
 	WebhookURL    string
 	WebhookOnline bool
-	TokensUsed    int
-	TokenLimit    int
-	Quota         string
-	Quotas        map[string]string
-	Jobs          []JobSnapshot
+	// WebUIURL is the local browser dashboard address when it is enabled.
+	// The terminal dashboard shows it as a persistent bottom line so operators
+	// can open the companion interface without searching the startup logs.
+	WebUIURL   string
+	TokensUsed int
+	TokenLimit int
+	Quota      string
+	Quotas     map[string]string
+	Jobs       []JobSnapshot
 }
 
 // UIReporter receives the published state of a run.

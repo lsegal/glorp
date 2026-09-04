@@ -348,6 +348,9 @@ func (m dashboard) View() string {
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
 	footer := renderStatusBar(m.width, []string{counts, tokens, push, targets})
 	sections := []string{logs, footer}
+	if m.snapshot.WebUIURL != "" {
+		sections = append(sections, muted.Render("web dashboard: "+m.snapshot.WebUIURL))
+	}
 	if grid != "" {
 		sections = append([]string{grid}, sections...)
 	}
