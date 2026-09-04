@@ -24,7 +24,7 @@ This page is the reference for that file and that schema.
 
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
-None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL` names is passed straight through to the CLI, because these CLIs take a live catalog and a list that validated it would reject a model released this morning. `glorp agents` enumerates them all the same -- `opencode` lists its own with `opencode models`, and the rest declare the names they are known to take in `doctor.knownModels`, which the report labels *known to glorp; the CLI may accept others* rather than presenting it as the catalog. `cline` replaces that label with its own `doctor.modelsNote`: its ids are provider-scoped, so the list is the default `cline` provider's catalog and `-P/--provider` changes both the catalog and the id format.
+None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL` names is passed straight through to the CLI, because these CLIs take a live catalog and a list that validated it would reject a model released this morning. `glorp agents` enumerates them all the same, and it enumerates them by asking each CLI rather than by carrying a list of its own, which would be stale the morning after a vendor ships. `opencode` lists its own with `opencode models` and `codex` prints its catalog with `codex debug models`; `cline` and `gemini` have no listing subcommand but answer over their agent-client protocol, so the probe runs `--acp` and reads the models the new session reports; `muse` answers `model/list` over `muse serve`. `claude` is the one built-in that cannot be asked at all -- its CLI has no listing command and no protocol that carries one -- so it declares `doctor.modelsNote` and the report says so instead of naming models it cannot check. An agent whose CLI is signed out of its provider lists nothing, and the report says which command could not list it.
 
 `gemini` is the built-in that declares `"levels": []`. That is not the same as naming no list at all: an empty list accepts nothing, so `--agent gemini:high` stops the run naming the agent instead of accepting a level the definition has no `{level}` fragment to pass on. See [allow-lists](#allow-lists) below.
 
@@ -256,17 +256,19 @@ The set of ids skills.sh knows grows without glorp, so the shape of the id is ch
 | --- | --- | --- | --- | --- |
 | `doctor.auth` | array of string | no | none | The argv whose exit status reports whether the CLI is signed in. `{binary}` substitutes the executable the agent was resolved to, so `--agent-binary` reaches the probe too. No argument may be empty. |
 | `doctor.signedIn` | regular expression | no | none | What the auth command's output has to match for the agent to count as signed in, for the CLIs that report a signed-out account on a zero exit status. Needs `doctor.auth`. |
-| `doctor.models` | array of string | no | none | The argv that lists the models the agent accepts, one per line on its stdout. `{binary}` substitutes as above. |
+| `doctor.models` | array of string | no | none | The argv that lists the models the agent accepts, one per line on its stdout, or in JSON when `doctor.modelsJSON` says where. `{binary}` substitutes as above. |
 | `doctor.modelPattern` | regular expression | no | none | Narrows what counts as a model in that output, for a command that decorates its list. Only a matching line is a model, and its first capture group, when it has one, is the model id. Needs `doctor.models`. |
-| `doctor.knownModels` | array of string | no | none | The models the definition itself knows the CLI accepts, for a CLI with no listing command to ask. Reported as `agent/model` names labelled *known to glorp; the CLI may accept others*, and never used to validate `--agent`, so a model released after the definition still runs. |
-| `doctor.modelsNote` | string | no | none | Replaces the label the report puts on `doctor.knownModels`, for a CLI that routes to a provider and therefore has no one catalog: the list is right for the provider it was written against and wrong for the next one. Needs `doctor.knownModels`. |
+| `doctor.modelsStdin` | array of string | no | none | What the probe writes to that command's stdin, one line each, for a CLI whose model list is only reachable over a stdio protocol — several answer a JSON-RPC handshake rather than a listing subcommand. The probe holds the pipe open and stops reading at the first reply that carries models, so a CLI that serves rather than exits is answered and then shut down. No line may be empty. Needs `doctor.models`. |
+| `doctor.modelsJSON` | path | no | none | Where the model ids are in that command's output: a dotted path whose `[]` walks an array and whose `[key=value]` walks only the elements a field marks, such as `models[visibility=list].slug` or `result.models.availableModels[].modelId`. The whole output is read as one document first and then line by line, so it fits both a catalog command and an agent that prints a JSON-RPC response per line. Replaces the line reading `doctor.modelPattern` does. Needs `doctor.models`. |
+| `doctor.knownModels` | array of string | no | none | Model names the definition itself carries, for a CLI with no way at all to be asked. No built-in declares any — a list written into glorp goes stale — and it is never used to validate `--agent`. Reported as `agent/model` names labelled *known to glorp; the CLI may accept others*. |
+| `doctor.modelsNote` | string | no | none | Replaces the label the report puts on the models field: the caveat on a known list that belongs to one provider out of many, or, for a CLI that neither lists its models nor has a list worth freezing, what to write after `--agent` and why the report cannot enumerate it. |
 | `doctor.timeout` | duration string | no | `20s` | Bounds one probe. The report is a diagnostic, so a CLI that hangs is reported as unknown rather than allowed to hold the listing up. Must be positive. |
 
-Both probes are optional, and neither is ever run by a dispatch — `glorp agents` is the only caller. An agent that declares nothing here still appears in the report: what it could not answer is shown as `unknown`, and its models come from its `models` allow-list, then from `doctor.knownModels`, and otherwise from a note saying the CLI accepts any model, or that it accepts none. A field belonging to a probe the definition does not declare is rejected rather than ignored, for the same reason the `quota` block rejects one.
+Both probes are optional, and neither is ever run by a dispatch — `glorp agents` is the only caller. An agent that declares nothing here still appears in the report: what it could not answer is shown as `unknown`, and its models come from its `models` allow-list, then from `doctor.knownModels`, then from `doctor.modelsNote`, and otherwise from a note saying the CLI accepts any model, or that it accepts none. A probe that ran and listed nothing is reported as one that could not be listed, naming the command, rather than as an agent that accepts anything: a CLI signed out of its provider answers the handshake and offers no catalog, and the reason is the useful half of that answer. A field belonging to a probe the definition does not declare is rejected rather than ignored, for the same reason the `quota` block rejects one.
 
 Sign-in has a fallback that costs nothing: an agent with no `doctor.auth` whose quota could be read is reported as signed in, because every quota reader asks the CLI something only a signed-in account can answer.
 
-A probe must be non-interactive and must not change anything. A CLI whose only sign-in check starts a device-code flow has no usable probe and is better left undeclared, so the report says the state is unknown — which is true — instead of logging somebody in for asking. That is why only `codex` and `opencode` ship one.
+A probe must be non-interactive and must not change anything a run depends on. A CLI whose only sign-in check starts a device-code flow has no usable probe and is better left undeclared, so the report says the state is unknown — which is true — instead of logging somebody in for asking. That is why only `codex` and `opencode` ship an auth probe. A model probe that opens a throwaway protocol session is held to the same bar: it asks for a catalog and nothing else, and the session it opened dies with the process the report shuts down.
 
 
 ## The built-in definitions
@@ -291,14 +293,8 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "doctor": {
     "auth": ["{binary}", "login", "status"],
     "signedIn": "(?im)^\\s*Logged in",
-    "knownModels": [
-      "gpt-6-astra",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.3-codex-spark",
-      "gpt-5.5"
-    ]
+    "models": ["{binary}", "debug", "models"],
+    "modelsJSON": "models[visibility=list].slug"
   },
   "args": {
     "run": [
@@ -337,16 +333,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "quota": {"reader": "claude"},
   "skills": {"target": "claude-code"},
   "doctor": {
-    "knownModels": [
-      "fable",
-      "opus",
-      "sonnet",
-      "haiku",
-      "claude-fable-5",
-      "claude-opus-5",
-      "claude-sonnet-5",
-      "claude-haiku-4-5"
-    ]
+    "modelsNote": "not listed by the claude CLI, which has no listing command: --model takes an alias or a full model id"
   },
   "args": {
     "run": [
@@ -394,15 +381,13 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "missingSession": ["no previous sessions found", "invalid session identifier"],
   "skills": {"target": "gemini-cli"},
   "doctor": {
-    "knownModels": [
-      "gemini-3.1-pro-preview",
-      "gemini-3.5-flash",
-      "gemini-3-flash-preview",
-      "gemini-3.1-flash-lite",
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite"
-    ]
+    "models": ["{binary}", "--acp"],
+    "modelsStdin": [
+      "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false}}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/new\",\"params\":{\"cwd\":\".\",\"mcpServers\":[]}}"
+    ],
+    "modelsJSON": "result.models.availableModels[].modelId",
+    "timeout": "45s"
   },
   "args": {
     "run": [
@@ -452,12 +437,14 @@ These are the shipped documents, verbatim, and they are the best worked examples
   },
   "skills": {"target": "universal"},
   "doctor": {
-    "knownModels": [
-      "muse-spark-1.3",
-      "muse-spark-1.3-contributor",
-      "muse-spark-1.2",
-      "muse-spark-1.2-contributor"
-    ]
+    "models": ["{binary}", "serve"],
+    "modelsStdin": [
+      "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"glorp\",\"version\":\"1\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/list\",\"params\":{}}"
+    ],
+    "modelsJSON": "result.models[].modelId",
+    "timeout": "45s"
   },
   "args": {
     "run": [
@@ -553,15 +540,13 @@ These are the shipped documents, verbatim, and they are the best worked examples
   },
   "skills": {"target": "cline"},
   "doctor": {
-    "knownModels": [
-      "anthropic/claude-fable-5.1",
-      "anthropic/claude-opus-5",
-      "anthropic/claude-sonnet-5",
-      "openai/gpt-5.6-sol",
-      "openai/gpt-5.6-terra",
-      "google/gemini-3.1-pro-preview"
+    "models": ["{binary}", "--acp"],
+    "modelsStdin": [
+      "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false}}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/new\",\"params\":{\"cwd\":\".\",\"mcpServers\":[]}}"
     ],
-    "modelsNote": "known to glorp for the default cline provider; -P/--provider changes the catalog and the id format"
+    "modelsJSON": "result.models.availableModels[].modelId",
+    "timeout": "45s"
   },
   "args": {
     "run": [
@@ -721,7 +706,7 @@ If `robo usage --json` prints `{"limits": {"used_pct": 41, "resets": "2026-09-04
 }
 ```
 
-`robo/gpt-5.6` and the rest of that list then appear in the report as names you can paste straight into `--agent`. Add `"signedIn"` if `whoami` exits zero while reporting a signed-out account, and `"modelPattern"` if the list comes with headers or decoration. Leave the block out if the CLI has no non-interactive way to answer: the report says `unknown`, which is better than a probe that opens a browser every time somebody runs `glorp agents`.
+`robo/gpt-5.6` and the rest of that list then appear in the report as names you can paste straight into `--agent`. Add `"signedIn"` if `whoami` exits zero while reporting a signed-out account, and `"modelPattern"` if the list comes with headers or decoration. If the CLI prints JSON instead, name the ids with `"modelsJSON": "models[].id"`, and if it only answers over a stdio protocol, write the handshake it expects into `"modelsStdin"` — the probe sends those lines and reads until the reply carries models. Leave the block out if the CLI has no non-interactive way to answer: the report says `unknown`, which is better than a probe that opens a browser every time somebody runs `glorp agents`.
 
 ### 8. Point the binary somewhere else, per run
 
