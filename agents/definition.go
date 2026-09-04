@@ -58,6 +58,11 @@ type Definition struct {
 	// gh-discuss skills is installed for, so the installers derive their
 	// --agent list from the registry instead of a hand-edited one.
 	Skills Skills `json:"skills,omitempty"`
+	// Doctor names the read-only probes `glorp agents` runs to report on the
+	// agent: whether its CLI is signed in, and which models it accepts. An
+	// agent that declares none is reported from what the definition already
+	// says, and runs no process of its own.
+	Doctor Doctor `json:"doctor,omitempty"`
 }
 
 // AllowList is the set of values one dimension of --agent -- a reasoning
@@ -341,12 +346,20 @@ func (q Quota) TimeoutDuration() time.Duration {
 
 // Argv renders the generic reader's command, substituting {binary} with the
 // executable the agent was resolved to.
-func (q Quota) Argv(binary string) []string {
-	argv := make([]string, 0, len(q.Command))
-	for _, arg := range q.Command {
-		argv = append(argv, strings.ReplaceAll(arg, "{binary}", binary))
+func (q Quota) Argv(binary string) []string { return substituteBinary(q.Command, binary) }
+
+// substituteBinary renders an argv template that names the agent's executable
+// as {binary}, so a --agent-binary override reaches every command a definition
+// declares rather than only the one it was written for.
+func substituteBinary(argv []string, binary string) []string {
+	if len(argv) == 0 {
+		return nil
 	}
-	return argv
+	rendered := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		rendered = append(rendered, strings.ReplaceAll(arg, "{binary}", binary))
+	}
+	return rendered
 }
 
 // validate reports the first thing wrong with the quota block. Fields that
@@ -396,6 +409,153 @@ func (q Quota) validate() error {
 		}
 		if timeout <= 0 {
 			return fmt.Errorf(`field "quota.timeout": %q must be positive`, q.Timeout)
+		}
+	}
+	return nil
+}
+
+// Doctor names the read-only commands `glorp agents` runs to report on one
+// agent. Both are optional and neither is ever run by a dispatch: the report
+// is the only caller, so a definition that declares nothing here still lists,
+// and an agent glorp has never heard of gains a sign-in check and a model list
+// by naming two commands in a config file rather than by a code change.
+//
+// A command must be non-interactive and must not change anything. A CLI whose
+// only sign-in check starts a device-code flow has no usable probe, and is
+// better left undeclared -- the report says the state is unknown, which is
+// true, instead of logging somebody in for asking.
+type Doctor struct {
+	// Auth is the argv whose exit status reports whether the CLI is signed
+	// in, with {binary} substituted as everywhere else. A command that exits
+	// zero is signed in unless SignedIn says otherwise.
+	Auth []string `json:"auth,omitempty"`
+	// SignedIn is a regular expression the auth command's output has to match
+	// for the agent to count as signed in. It is for the CLIs that report a
+	// signed-out account on a zero exit status, where the exit code alone
+	// says nothing. It needs Auth.
+	SignedIn string `json:"signedIn,omitempty"`
+	// Models is the argv that lists the models the agent accepts, one per
+	// line on its stdout. It is what makes a provider-agnostic CLI usable
+	// from --agent: the report renders each line as the fully qualified
+	// agent/model name rather than leaving the caller to guess it.
+	Models []string `json:"models,omitempty"`
+	// ModelPattern narrows what counts as a model in that output, for a
+	// command that decorates its list. Only a line the expression matches is
+	// a model, and its first capture group, when it has one, is the model id.
+	// It needs Models.
+	ModelPattern string `json:"modelPattern,omitempty"`
+	// Timeout bounds one probe, as a Go duration string. The report is a
+	// diagnostic, so a CLI that hangs is abandoned and reported as unknown
+	// rather than allowed to hold the whole listing up.
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// DefaultDoctorTimeout bounds one probe when the definition names none.
+const DefaultDoctorTimeout = 20 * time.Second
+
+// AuthArgv and ModelsArgv render the probes against the executable the agent
+// was resolved to.
+func (d Doctor) AuthArgv(binary string) []string { return substituteBinary(d.Auth, binary) }
+
+// ModelsArgv renders the model-listing probe.
+func (d Doctor) ModelsArgv(binary string) []string { return substituteBinary(d.Models, binary) }
+
+// TimeoutDuration bounds one probe. Validate has already rejected an
+// unparseable value, so a bad one here falls back rather than reporting twice.
+func (d Doctor) TimeoutDuration() time.Duration {
+	if strings.TrimSpace(d.Timeout) == "" {
+		return DefaultDoctorTimeout
+	}
+	timeout, err := time.ParseDuration(d.Timeout)
+	if err != nil || timeout <= 0 {
+		return DefaultDoctorTimeout
+	}
+	return timeout
+}
+
+// ReportsSignedIn reads the auth probe's output. With no SignedIn expression
+// the exit status has already decided, so any output counts.
+func (d Doctor) ReportsSignedIn(output string) bool {
+	if strings.TrimSpace(d.SignedIn) == "" {
+		return true
+	}
+	expr, err := regexp.Compile(d.SignedIn)
+	if err != nil {
+		return false
+	}
+	return expr.MatchString(output)
+}
+
+// ModelsFrom reads the model list out of the probe's output, one model per
+// line, in the order the CLI printed them and without duplicates. A line the
+// ModelPattern rejects is dropped, and its first capture group, when it has
+// one, is what the line contributes.
+func (d Doctor) ModelsFrom(output string) []string {
+	var expr *regexp.Regexp
+	if pattern := strings.TrimSpace(d.ModelPattern); pattern != "" {
+		compiled, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil
+		}
+		expr = compiled
+	}
+	seen := make(map[string]bool)
+	models := make([]string, 0, 16)
+	for _, line := range strings.Split(output, "\n") {
+		model := strings.TrimSpace(line)
+		if expr != nil {
+			match := expr.FindStringSubmatch(model)
+			if match == nil {
+				continue
+			}
+			if len(match) > 1 {
+				model = strings.TrimSpace(match[1])
+			} else {
+				model = strings.TrimSpace(match[0])
+			}
+		}
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		models = append(models, model)
+	}
+	return models
+}
+
+// validate reports the first thing wrong with the doctor block. A field that
+// belongs to a probe the definition does not declare is rejected rather than
+// ignored, on the same grounds as the quota block: a probe that silently does
+// nothing looks exactly like a working one.
+func (d Doctor) validate() error {
+	for field, argv := range map[string][]string{"doctor.auth": d.Auth, "doctor.models": d.Models} {
+		for _, arg := range argv {
+			if strings.TrimSpace(arg) == "" {
+				return fmt.Errorf("field %q cannot contain an empty argument", field)
+			}
+		}
+	}
+	if len(d.Auth) == 0 && strings.TrimSpace(d.SignedIn) != "" {
+		return fmt.Errorf(`field "doctor.signedIn" is only meaningful alongside "doctor.auth"`)
+	}
+	if len(d.Models) == 0 && strings.TrimSpace(d.ModelPattern) != "" {
+		return fmt.Errorf(`field "doctor.modelPattern" is only meaningful alongside "doctor.models"`)
+	}
+	for field, pattern := range map[string]string{"doctor.signedIn": d.SignedIn, "doctor.modelPattern": d.ModelPattern} {
+		if strings.TrimSpace(pattern) == "" {
+			continue
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("field %q: %w", field, err)
+		}
+	}
+	if strings.TrimSpace(d.Timeout) != "" {
+		timeout, err := time.ParseDuration(d.Timeout)
+		if err != nil {
+			return fmt.Errorf(`field "doctor.timeout": %w`, err)
+		}
+		if timeout <= 0 {
+			return fmt.Errorf(`field "doctor.timeout": %q must be positive`, d.Timeout)
 		}
 	}
 	return nil
@@ -557,6 +717,9 @@ func (d Definition) Validate() error {
 		return err
 	}
 	if err := d.Quota.validate(); err != nil {
+		return err
+	}
+	if err := d.Doctor.validate(); err != nil {
 		return err
 	}
 	if target := d.Skills.Target; target != "" && !skillsTargetPattern.MatchString(target) {

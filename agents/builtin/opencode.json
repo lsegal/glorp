@@ -14,6 +14,12 @@
     }
   },
   "skills": {"target": "opencode"},
+  "doctor": {
+    "auth": ["{binary}", "auth", "list"],
+    "signedIn": "[1-9][0-9]* credential",
+    "models": ["{binary}", "models"],
+    "modelPattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$"
+  },
   "args": {
     "run": [
       {"args": ["run", "--auto"]},
