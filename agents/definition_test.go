@@ -559,20 +559,64 @@ func TestResumingAgentsKeepTheirOwnTemplate(t *testing.T) {
 	}
 }
 
-// TestDoctorRejectsAModelsNoteWithNoKnownModels checks the note is held to the
-// same rule as every other dependent field: a caveat on a list that does not
-// exist is never printed, and a field that silently does nothing looks exactly
-// like a working one.
-func TestDoctorRejectsAModelsNoteWithNoKnownModels(t *testing.T) {
-	definition := Definition{
-		Name: "noted", Binary: "noted",
+// TestDoctorAcceptsAModelsNoteOnItsOwn checks a definition may say why it
+// cannot list models without carrying a list to caption. A CLI with no listing
+// command is exactly the case issue #566 left with nothing to report, and the
+// note is what it reports instead.
+func TestDoctorAcceptsAModelsNoteOnItsOwn(t *testing.T) {
+	definition := doctorFixture(Doctor{ModelsNote: "not listed by this CLI"})
+	if err := definition.Validate(); err != nil {
+		t.Errorf("Validate() error = %v, want a standalone note accepted", err)
+	}
+}
+
+// TestDoctorRejectsModelReadersWithNoProbe checks the fields that read a model
+// probe's output are held to the same rule as every other dependent field: one
+// that silently does nothing looks exactly like a working one.
+func TestDoctorRejectsModelReadersWithNoProbe(t *testing.T) {
+	for field, doctor := range map[string]Doctor{
+		"doctor.modelsJSON":  {ModelsJSON: "models[].id"},
+		"doctor.modelsStdin": {ModelsStdin: []string{"{}"}},
+	} {
+		err := doctorFixture(doctor).Validate()
+		if err == nil || !strings.Contains(err.Error(), field) {
+			t.Errorf("Validate() error = %v, want it to reject %s with no doctor.models", err, field)
+		}
+	}
+}
+
+// TestDoctorRejectsAnUnreadableModelsPath checks a misspelled path is reported
+// rather than left to extract nothing: a path that matches nothing and a path
+// that is malformed produce the same empty list, and only one of them is the
+// author's mistake.
+func TestDoctorRejectsAnUnreadableModelsPath(t *testing.T) {
+	for _, path := range []string{"models[.id", "models[bad].id", "models..id"} {
+		doctor := Doctor{Models: []string{"{binary}", "models"}, ModelsJSON: path}
+		err := doctorFixture(doctor).Validate()
+		if err == nil || !strings.Contains(err.Error(), "doctor.modelsJSON") {
+			t.Errorf("Validate() error = %v for path %q, want it rejected", err, path)
+		}
+	}
+}
+
+// TestDoctorRejectsAnEmptyStdinLine checks a blank line in the handshake is
+// rejected: a protocol that reads it as an empty frame answers nothing, and
+// the probe would look like a CLI that has no models.
+func TestDoctorRejectsAnEmptyStdinLine(t *testing.T) {
+	doctor := Doctor{Models: []string{"{binary}", "serve"}, ModelsStdin: []string{"{}", "  "}, ModelsJSON: "result.models[].id"}
+	err := doctorFixture(doctor).Validate()
+	if err == nil || !strings.Contains(err.Error(), "doctor.modelsStdin") {
+		t.Errorf("Validate() error = %v, want the empty line rejected", err)
+	}
+}
+
+// doctorFixture is a valid definition carrying the doctor block under test.
+func doctorFixture(doctor Doctor) Definition {
+	return Definition{
+		Name: "probe", Binary: "probe",
 		Session: Session{Assign: AssignNone},
 		Output:  Output{Format: FormatText},
 		Args:    Args{Run: []Fragment{{Args: []string{"{prompt}"}}}},
-		Doctor:  Doctor{ModelsNote: "known for the default provider"},
-	}
-	err := definition.Validate()
-	if err == nil || !strings.Contains(err.Error(), "doctor.modelsNote") {
-		t.Errorf("Validate() error = %v, want it to reject the orphaned note", err)
+		Doctor:  doctor,
 	}
 }

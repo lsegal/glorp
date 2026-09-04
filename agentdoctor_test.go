@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lsegal/glorp/agents"
 )
@@ -66,7 +70,7 @@ func stubDoctor(t *testing.T, installed map[string]bool, version, auth, models f
 			}
 			return []byte(text), nil
 		},
-		run: func(_ context.Context, argv []string, _ agents.Doctor) ([]byte, bool) {
+		run: func(_ context.Context, argv []string, _ agents.Doctor, _ []string) ([]byte, bool) {
 			probe := auth
 			if argv[len(argv)-1] == "models" {
 				probe = models
@@ -221,22 +225,47 @@ func TestAgentDoctorListsKnownModels(t *testing.T) {
 	}
 }
 
-// TestBuiltinAgentsEnumerateTheirModels holds every shipped agent to naming
-// models a caller can copy after --agent: either a listing command the CLI
-// answers, or the names the definition knows it takes. "any model the CLI
-// accepts" is a true answer and a useless one, which is what issue #560 was.
-func TestBuiltinAgentsEnumerateTheirModels(t *testing.T) {
+// TestBuiltinAgentsAskTheirCLIForModels holds every shipped agent to reading
+// its models off the CLI rather than carrying a list of its own, which is what
+// issue #566 asked for: a list written into glorp is stale the morning after a
+// vendor ships. A built-in that genuinely cannot be asked says so in a note
+// instead, which is an answer that cannot go out of date.
+func TestBuiltinAgentsAskTheirCLIForModels(t *testing.T) {
 	registry := agents.MustBuiltin()
 	for _, name := range registry.Names() {
 		definition, ok := registry.Lookup(name)
 		if !ok {
 			t.Fatalf("registry has no definition for %q", name)
 		}
+		if len(definition.Doctor.KnownModels) > 0 {
+			t.Errorf("built-in %q hardcodes doctor.knownModels: ask its CLI with doctor.models instead", name)
+		}
 		if len(definition.Doctor.Models) > 0 || definition.Models.Declared() {
 			continue
 		}
-		if len(definition.Doctor.KnownModels) == 0 {
-			t.Errorf("built-in %q enumerates no models: declare doctor.models or doctor.knownModels", name)
+		if strings.TrimSpace(definition.Doctor.ModelsNote) == "" {
+			t.Errorf("built-in %q neither probes its CLI for models nor says why it cannot", name)
+		}
+	}
+}
+
+// TestBuiltinModelProbesReadTheirOwnAnswers checks each shipped probe is
+// declared whole: a command that only answers a conversation names the lines
+// it is sent, and one that answers in JSON names where the ids are, because a
+// probe missing either half runs and extracts nothing.
+func TestBuiltinModelProbesReadTheirOwnAnswers(t *testing.T) {
+	registry := agents.MustBuiltin()
+	for _, name := range registry.Names() {
+		definition, _ := registry.Lookup(name)
+		doctor := definition.Doctor
+		if len(doctor.Models) == 0 {
+			continue
+		}
+		if len(doctor.ModelsStdin) > 0 && strings.TrimSpace(doctor.ModelsJSON) == "" {
+			t.Errorf("built-in %q talks to its CLI but declares no doctor.modelsJSON to read the reply", name)
+		}
+		if strings.TrimSpace(doctor.ModelsJSON) == "" && strings.TrimSpace(doctor.ModelPattern) == "" {
+			t.Errorf("built-in %q declares a models probe with no way to read its output", name)
 		}
 	}
 }
@@ -396,35 +425,81 @@ func TestAgentDoctorPrefersTheDefinitionsOwnModelsNote(t *testing.T) {
 	}
 }
 
-// TestBuiltinKnownModelsAreShapedForTheirCLI checks the shipped lists still
-// carry the id shape each CLI takes, which is what issue #564 found wrong:
-// cline's ids are provider-scoped slugs and every other built-in's are bare,
-// so a slug that leaks into a bare list is a name someone copies and gets
-// rejected.
-func TestBuiltinKnownModelsAreShapedForTheirCLI(t *testing.T) {
+// TestClineAndGeminiAskOverTheAgentProtocol checks the two CLIs with no
+// listing subcommand are asked the way they can be asked -- an ACP handshake
+// whose session answers with its available models -- rather than carrying a
+// provider-scoped list that goes stale, which is what issue #566 was.
+func TestClineAndGeminiAskOverTheAgentProtocol(t *testing.T) {
 	registry := agents.MustBuiltin()
-	for _, name := range registry.Names() {
+	for _, name := range []string{"cline", "gemini"} {
 		definition, ok := registry.Lookup(name)
 		if !ok {
 			t.Fatalf("registry has no definition for %q", name)
 		}
-		for _, model := range definition.Doctor.KnownModels {
-			if scoped := strings.Contains(model, "/"); scoped != (name == "cline") {
-				t.Errorf("built-in %q knows model %q: only cline takes provider-scoped ids", name, model)
-			}
+		argv := definition.Doctor.ModelsArgv(name)
+		if len(argv) == 0 || argv[len(argv)-1] != "--acp" {
+			t.Errorf("%s models probe = %q, want the ACP mode its CLI answers in", name, argv)
+		}
+		stdin := strings.Join(definition.Doctor.ModelsStdinLines(name), " ")
+		if !strings.Contains(stdin, "initialize") || !strings.Contains(stdin, "session/new") {
+			t.Errorf("%s probe writes %q, want the ACP handshake that produces a model list", name, stdin)
 		}
 	}
 }
 
-// TestClineSaysItsKnownModelsAreProviderScoped checks the one built-in whose
-// catalog depends on the provider a user authenticated says so in the report,
-// rather than presenting one provider's ids as the CLI's whole catalog.
-func TestClineSaysItsKnownModelsAreProviderScoped(t *testing.T) {
-	definition, ok := agents.MustBuiltin().Lookup("cline")
+// TestRunProbeConversationAsksAndStopsAtTheAnswer checks the conversational
+// probe against a real process: it writes the definition's lines, reads the
+// reply, and returns as soon as the output carries a model list rather than
+// waiting for a server that never exits, which is what every CLI answering
+// over a stdio protocol is.
+func TestRunProbeConversationAsksAndStopsAtTheAnswer(t *testing.T) {
+	spec := agents.Doctor{
+		Models:      []string{os.Args[0]},
+		ModelsStdin: []string{`{"id":0,"method":"initialize"}`, `{"id":1,"method":"model/list"}`},
+		ModelsJSON:  "result.models[].modelId",
+		Timeout:     "30s",
+	}
+	argv := []string{os.Args[0], "-test.run=TestDoctorProbeHelperProcess", "-test.timeout=60s"}
+	started := time.Now()
+	out, ok := runDoctorProbeAsHelper(t, argv, spec)
 	if !ok {
-		t.Fatal("registry has no definition for cline")
+		t.Fatalf("probe reported failure, output = %q", out)
 	}
-	if !strings.Contains(definition.Doctor.ModelsNote, "provider") {
-		t.Errorf("cline modelsNote = %q, want it to name the provider the list belongs to", definition.Doctor.ModelsNote)
+	models := spec.ModelsFrom(string(out))
+	if strings.Join(models, ",") != "muse-spark-1.3,muse-spark-1.2" {
+		t.Errorf("models = %v, want the ones the helper answered with", models)
 	}
+	if elapsed := time.Since(started); elapsed > 20*time.Second {
+		t.Errorf("probe took %s, want it to stop at the answer rather than wait out the helper", elapsed)
+	}
+}
+
+// runProbeConversation is driven through the same entry point the report uses,
+// with the helper's environment carried over so it runs as the child half of
+// the test rather than as the whole suite.
+func runDoctorProbeAsHelper(t *testing.T, argv []string, spec agents.Doctor) ([]byte, bool) {
+	t.Helper()
+	t.Setenv("GLORP_DOCTOR_PROBE_HELPER", "1")
+	return runDoctorProbe(context.Background(), argv, spec, spec.ModelsStdinLines(argv[0]))
+}
+
+// TestDoctorProbeHelperProcess is not a test: it is the CLI half of
+// TestRunProbeConversationAsksAndStopsAtTheAnswer, a stand-in for an agent
+// that answers a handshake and then goes on waiting for its client.
+func TestDoctorProbeHelperProcess(t *testing.T) {
+	if os.Getenv("GLORP_DOCTOR_PROBE_HELPER") != "1" {
+		t.Skip("helper process for TestRunProbeConversationAsksAndStopsAtTheAnswer")
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		if !strings.Contains(scanner.Text(), "model/list") {
+			fmt.Println(`{"id":0,"result":{"serverInfo":{"name":"helper"}}}`)
+			continue
+		}
+		fmt.Println(`{"id":1,"result":{"models":[{"modelId":"muse-spark-1.3"},{"modelId":"muse-spark-1.2"}]}}`)
+		break
+	}
+	// The report is what ends this process: an agent serving a protocol waits
+	// for the next request, and a probe that waited with it would never return.
+	time.Sleep(30 * time.Second)
 }
