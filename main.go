@@ -1944,14 +1944,19 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 // claudeToolUseDetailKeys are the tool input fields that carry enough context
 // to make a progress line useful, most specific first. A bare "Running: Read"
 // says nothing about what the agent is doing; "Running: Read main.go" does.
+// The camelCase spellings sit beside the snake_case ones because the list is
+// read for every agent's tool calls now, not only Claude's: opencode names the
+// same field filePath, and a definition cannot rename it.
 var claudeToolUseDetailKeys = []string{
-	"command", "file_path", "notebook_path", "pattern", "url", "query",
+	"command", "file_path", "filePath", "notebook_path", "pattern", "url", "query",
 	"path", "description", "prompt", "skill",
 }
 
 // claudeToolUseDetailPathKeys hold filesystem paths, which are shortened from
 // the front so the filename survives truncation.
-var claudeToolUseDetailPathKeys = map[string]bool{"file_path": true, "notebook_path": true, "path": true}
+var claudeToolUseDetailPathKeys = map[string]bool{
+	"file_path": true, "filePath": true, "notebook_path": true, "path": true,
+}
 
 const claudeToolUseDetailLimit = 120
 
