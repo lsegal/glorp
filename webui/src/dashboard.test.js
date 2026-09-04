@@ -408,12 +408,22 @@ describe("modelOptionsFrom", () => {
 		expect(modelOptionsFrom(null, [{ name: "codex", models: [] }])).toEqual([]);
 	});
 
-	it("keeps an already active spec selectable even with no models for it", () => {
+	it("keeps an active spec selectable while its agent has not reported models", () => {
 		expect(modelOptionsFrom({ agents: ["codex"] }, [], ["codex"])).toEqual([
 			{ value: "codex", agent: "codex", model: "" },
 		]);
 		expect(
 			modelOptionsFrom({ agents: ["codex"] }, [], ["codex/gpt-5.6"]),
+		).toEqual([{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }]);
+	});
+
+	it("drops a bare active default after the agent reports concrete models", () => {
+		expect(
+			modelOptionsFrom(
+				{ agents: ["codex"] },
+				[{ name: "codex", models: ["codex/gpt-5.6"] }],
+				["codex"],
+			),
 		).toEqual([{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }]);
 	});
 
@@ -558,6 +568,12 @@ describe("toggleActiveModel", () => {
 		expect(toggleActiveModel(["codex"], "muse/muse-1", true)).toEqual([
 			"codex",
 			"muse/muse-1",
+		]);
+	});
+
+	it("replaces an agent's bare default when selecting one of its models", () => {
+		expect(toggleActiveModel(["codex"], "codex/gpt-5.6", true)).toEqual([
+			"codex/gpt-5.6",
 		]);
 	});
 
