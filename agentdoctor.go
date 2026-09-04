@@ -60,9 +60,9 @@ type agentReport struct {
 	// what turns a bare "unavailable" into something actionable: the flag the
 	// CLI rejected, the command that is missing, the account that is signed
 	// out.
-	quotaErr error
-	models      []string
-	modelNote   string
+	quotaErr  error
+	models    []string
+	modelNote string
 }
 
 // installed reports whether the agent's CLI was found on PATH.
