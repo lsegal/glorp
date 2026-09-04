@@ -361,6 +361,90 @@ func TestClaudeDefinitionContract(t *testing.T) {
 	}.check(t)
 }
 
+// TestOpencodeDefinitionContract proves the shipped opencode definition. The
+// CLI has no session ID glorp can either assign or read back -- `opencode run`
+// prints none in its default output format, and `--session` only accepts an ID
+// opencode itself minted -- so the definition declares no session at all and a
+// resume is rendered as a plain `opencode run` carrying the recovery prompt.
+// The gh-fix workflow is re-entrant and adopts the draft pull request already
+// open, so restarting is the intended behaviour rather than a lost job.
+func TestOpencodeDefinitionContract(t *testing.T) {
+	agentContract{
+		Definition: builtinDefinition(t, "opencode"),
+		Repo:       "o/r",
+		Number:     7,
+		Stdout:     "working on it",
+		// --auto is unconditional rather than gated on the run's --yolo:
+		// `opencode run` cannot prompt, so anything it would have asked about
+		// -- reaching the isolated clone outside the working directory, above
+		// all -- is auto-rejected without it, and the job dies on a permission
+		// nobody can grant. This is the same reason claude gets
+		// --permission-mode auto when the run is not in yolo mode.
+		WantRun:    []string{"run", "--auto", freshPrompt("o/r", 7)},
+		WantResume: []string{"run", "--auto", resumePrompt()},
+		WantOutput: "working on it",
+	}.check(t)
+}
+
+// TestOpencodeDefinitionRendersModelLevelAndVision pins the rest of the
+// opencode argv: the model is a provider/model pair, the reasoning level is a
+// model variant, and a vision call hands the screenshot over with --file,
+// which opencode reads through its own read tool and attaches as an image.
+func TestOpencodeDefinitionRendersModelLevelAndVision(t *testing.T) {
+	definition := builtinDefinition(t, "opencode")
+	prompt := "/gh-fix o/r#7"
+	for _, test := range []struct {
+		name   string
+		mode   agents.Mode
+		values agents.Values
+		want   []string
+	}{
+		{
+			name: "run with model and level", mode: agents.ModeRun,
+			values: agents.Values{Prompt: prompt, Model: "anthropic/claude-opus-5", Level: "high"},
+			want:   []string{"run", "--auto", "--model", "anthropic/claude-opus-5", "--variant", "high", prompt},
+		},
+		{
+			// The run's own --yolo adds nothing: --auto is already the only
+			// permission mode a non-interactive opencode can work in.
+			name: "run in yolo mode", mode: agents.ModeRun,
+			values: agents.Values{Prompt: prompt, Yolo: true},
+			want:   []string{"run", "--auto", prompt},
+		},
+		{
+			// opencode reads no remote-control settings, so the run's flag
+			// reaches its argv not at all.
+			name: "run ignores remote control", mode: agents.ModeRun,
+			values: agents.Values{Prompt: prompt, RemoteControl: true, Settings: `{"remoteControlAtStartup":true}`, SessionName: "glorp o/r#7"},
+			want:   []string{"run", "--auto", prompt},
+		},
+		{
+			// A session ID glorp happens to be holding is never rendered: the
+			// definition assigns none, so there is nothing to resume by.
+			name: "resume carries no session", mode: agents.ModeResume,
+			values: agents.Values{Prompt: prompt, Session: "ses_1a2b3c"},
+			want:   []string{"run", "--auto", prompt},
+		},
+		{
+			name: "vision", mode: agents.ModeVision,
+			values: agents.Values{Prompt: prompt, Image: "/tmp/shot.png", Model: "anthropic/claude-opus-5"},
+			want:   []string{"run", "--auto", "--file", "/tmp/shot.png", "--model", "anthropic/claude-opus-5", prompt},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := definition.Render(test.mode, test.values); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("argv = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+	if definition.AssignsSessionID() || definition.CapturesSessionID() {
+		t.Fatal("opencode declares a session ID glorp can neither assign nor capture")
+	}
+	if !definition.AcceptsLevel("high") || definition.AcceptsLevel("ultra") {
+		t.Fatal("opencode levels are not validated against the definition")
+	}
+}
+
 // TestConfiguredAgentDefinitionIsDispatchable proves the whole path an agent
 // nobody built in takes: declared in .glorp.config.json, accepted by --agent,
 // and dispatched through the executable its own definition names.
