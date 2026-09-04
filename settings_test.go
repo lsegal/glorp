@@ -84,7 +84,7 @@ func TestValidateSettingsUpdateRejectsBadValues(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := validateSettingsUpdate(tc.update); err == nil {
+			if err := validateSettingsUpdate(agentRegistry(), tc.update); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})

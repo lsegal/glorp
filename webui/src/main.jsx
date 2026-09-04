@@ -17,6 +17,9 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+	agentOptionHint,
+	agentOptionsFrom,
+	agentSpecOptions,
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchSettings,
@@ -212,7 +215,7 @@ function StatusBar({ snapshot, connected }) {
 
 function SettingsModal({ onClose }) {
 	const [form, setForm] = useState(null);
-	const [agents, setAgents] = useState([]);
+	const [agentOptions, setAgentOptions] = useState([]);
 	const [readyStateDefault, setReadyStateDefault] = useState("");
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -221,7 +224,7 @@ function SettingsModal({ onClose }) {
 		fetchSettings()
 			.then((snapshot) => {
 				if (cancelled) return;
-				setAgents(snapshot.agents || []);
+				setAgentOptions(agentOptionsFrom(snapshot));
 				setReadyStateDefault(snapshot.readyStateDefault ?? "");
 				setForm({
 					concurrency: String(snapshot.concurrency ?? ""),
@@ -291,15 +294,22 @@ function SettingsModal({ onClose }) {
 								type="text"
 								value={form.agent}
 								onChange={update("agent")}
-								list={agents.length > 0 ? "settings-agent-options" : undefined}
+								list={
+									agentOptions.length > 0 ? "settings-agent-options" : undefined
+								}
 								placeholder="codex, claude, claude/opus:high, ..."
 							/>
-							{agents.length > 0 && (
+							{agentOptions.length > 0 && (
 								<datalist id="settings-agent-options">
-									{agents.map((agent) => (
-										<option key={agent} value={agent} />
+									{agentSpecOptions(agentOptions).map((spec) => (
+										<option key={spec} value={spec} />
 									))}
 								</datalist>
+							)}
+							{agentOptionHint(agentOptions, form.agent) && (
+								<small className="settings-hint">
+									{agentOptionHint(agentOptions, form.agent)}
+								</small>
 							)}
 						</label>
 						<label htmlFor="settings-ready-state">

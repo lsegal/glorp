@@ -88,7 +88,7 @@ func TestCommandFlagsExposeWatchAndUIDefaults(t *testing.T) {
 func TestWatchFlagValuesParse(t *testing.T) {
 	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
-	flags := watchFlagSet(&agents, &filter)
+	flags := watchFlagSet(&agents, &agentBinaryFlag{}, &filter)
 	if err := flags.Parse([]string{"--poll", "--concurrency", "5", "--interval", "2m", "--agent", "claude/opus", "owner/repo"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestWatchRemoteControlDefaultsOff(t *testing.T) {
 	// advertise a capability the run does not get (issue #502).
 	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
-	flags := watchFlagSet(&agents, &filter)
+	flags := watchFlagSet(&agents, &agentBinaryFlag{}, &filter)
 	if err := flags.Parse([]string{"owner/repo"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestWatchRemoteControlDefaultsOff(t *testing.T) {
 		t.Fatal("remote-control = true, want the default to be off")
 	}
 
-	on := watchFlagSet(&agents, &filter)
+	on := watchFlagSet(&agents, &agentBinaryFlag{}, &filter)
 	if err := on.Parse([]string{"--remote-control", "owner/repo"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
