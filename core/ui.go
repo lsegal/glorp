@@ -1,6 +1,17 @@
 package core
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrNotReady is returned by the settings and job-action handlers when the
+// run loop has not yet reached its dispatch select statement. Before that
+// point the handlers would otherwise block indefinitely on an unbuffered
+// channel nothing is reading from yet, leaving the dashboard's "loading
+// settings..." spinner stuck with no error and no timeout (issue #579). The
+// dashboard treats this as a signal to retry rather than a hard failure.
+var ErrNotReady = errors.New("run is still starting")
 
 // JobSnapshot is one agent run as the dashboards draw it.
 type JobSnapshot struct {
