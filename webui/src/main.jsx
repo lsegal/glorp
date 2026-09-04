@@ -17,8 +17,6 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-	agentOptionHint,
-	agentOptionsFrom,
 	agentStatusFor,
 	buildSettingsUpdate,
 	deliveryLabel,
@@ -26,9 +24,10 @@ import {
 	fetchSettings,
 	jobActionAvailability,
 	jobAgentSummary,
+	modelOptionsFrom,
 	submitJobAction,
 	submitSettings,
-	toggleActiveAgent,
+	toggleActiveModel,
 } from "./dashboard";
 import "./index.css";
 
@@ -215,41 +214,38 @@ function StatusBar({ snapshot, connected }) {
 	);
 }
 
-// AgentStatusRow renders one agent's checkbox alongside the auth and quota
-// state /api/agents reports for it (issue #572), so toggling which agents are
-// active reads the same information `glorp agents` prints to the terminal.
-function AgentStatusRow({ option, checked, onToggle, status }) {
-	const hint = agentOptionHint([option], option.name);
+// ModelChip renders one selectable agent/model entry as a toggle chip (issue
+// #582), annotated with the auth and quota state /api/agents reports for its
+// agent, so toggling which models are active reads the same information
+// `glorp agents` prints to the terminal.
+function ModelChip({ option, checked, onToggle, status }) {
+	const title = status
+		? `auth: ${status.auth} · quota: ${status.quota}${status.installed ? "" : " · not installed"}`
+		: "probing...";
 	return (
-		<label className="agent-row" htmlFor={`settings-agent-${option.name}`}>
-			<input
-				id={`settings-agent-${option.name}`}
-				type="checkbox"
-				checked={checked}
-				onChange={(event) => onToggle(option.name, event.target.checked)}
-			/>
-			<span className="agent-row-body">
-				<span className="agent-row-name">{option.name}</span>
-				<span className="agent-row-meta">
-					{status ? (
-						<>
-							auth: {status.auth} · quota: {status.quota}
-							{!status.installed && " · not installed"}
-						</>
-					) : (
-						"probing..."
-					)}
-				</span>
-				{hint && <small className="settings-hint">{hint}</small>}
-			</span>
-		</label>
+		<button
+			type="button"
+			className={`model-chip${checked ? " active" : ""}`}
+			aria-pressed={checked}
+			title={title}
+			onClick={() => onToggle(option.value, !checked)}
+		>
+			{option.model ? (
+				<>
+					<span className="model-chip-agent">{option.agent}</span>/
+					{option.model}
+				</>
+			) : (
+				option.agent
+			)}
+		</button>
 	);
 }
 
 function SettingsModal({ onClose }) {
 	const [tab, setTab] = useState("general");
 	const [form, setForm] = useState(null);
-	const [agentOptions, setAgentOptions] = useState([]);
+	const [modelOptions, setModelOptions] = useState([]);
 	const [agentStatuses, setAgentStatuses] = useState([]);
 	const [readyStateDefault, setReadyStateDefault] = useState("");
 	const [error, setError] = useState("");
@@ -259,7 +255,7 @@ function SettingsModal({ onClose }) {
 		fetchSettings()
 			.then((snapshot) => {
 				if (cancelled) return;
-				setAgentOptions(agentOptionsFrom(snapshot));
+				setModelOptions(modelOptionsFrom(snapshot));
 				setReadyStateDefault(snapshot.readyStateDefault ?? "");
 				setForm({
 					concurrency: String(snapshot.concurrency ?? ""),
@@ -282,10 +278,10 @@ function SettingsModal({ onClose }) {
 	}, []);
 	const update = (field) => (event) =>
 		setForm({ ...form, [field]: event.target.value });
-	const toggleAgent = (name, checked) =>
+	const toggleModel = (value, checked) =>
 		setForm({
 			...form,
-			activeAgents: toggleActiveAgent(form.activeAgents, name, checked),
+			activeAgents: toggleActiveModel(form.activeAgents, value, checked),
 		});
 	const submit = async (event) => {
 		event.preventDefault();
@@ -336,11 +332,11 @@ function SettingsModal({ onClose }) {
 							<button
 								type="button"
 								role="tab"
-								aria-selected={tab === "agents"}
-								className={tab === "agents" ? "active" : ""}
-								onClick={() => setTab("agents")}
+								aria-selected={tab === "models"}
+								className={tab === "models" ? "active" : ""}
+								onClick={() => setTab("models")}
 							>
-								Agents
+								Models
 							</button>
 						</div>
 						{tab === "general" && (
@@ -377,21 +373,23 @@ function SettingsModal({ onClose }) {
 								</label>
 							</>
 						)}
-						{tab === "agents" && (
-							<fieldset className="agent-list">
-								<legend className="sr-only">Active agents</legend>
-								{agentOptions.length === 0 && (
+						{tab === "models" && (
+							<fieldset className="model-list">
+								<legend className="sr-only">Active models</legend>
+								{modelOptions.length === 0 && (
 									<p className="modal-loading">no agents registered</p>
 								)}
-								{agentOptions.map((option) => (
-									<AgentStatusRow
-										key={option.name}
-										option={option}
-										checked={form.activeAgents.includes(option.name)}
-										onToggle={toggleAgent}
-										status={agentStatusFor(agentStatuses, option.name)}
-									/>
-								))}
+								<div className="model-chips">
+									{modelOptions.map((option) => (
+										<ModelChip
+											key={option.value}
+											option={option}
+											checked={form.activeAgents.includes(option.value)}
+											onToggle={toggleModel}
+											status={agentStatusFor(agentStatuses, option.value)}
+										/>
+									))}
+								</div>
 							</fieldset>
 						)}
 						{error && <p className="modal-error">{error}</p>}
