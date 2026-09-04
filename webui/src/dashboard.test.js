@@ -14,6 +14,7 @@ import {
 	lastPollLabel,
 	modelOptionsFrom,
 	parseAllowedCommenters,
+	probedModelsByAgent,
 	submitJobAction,
 	submitSettings,
 	toggleActiveModel,
@@ -340,6 +341,28 @@ describe("agent options", () => {
 	});
 });
 
+describe("probedModelsByAgent", () => {
+	it("indexes each agent's probed models with the agent prefix stripped", () => {
+		expect(
+			probedModelsByAgent([
+				{ name: "codex", models: ["codex/gpt-5.6", "codex/gpt-5.6-mini"] },
+				{ name: "muse", models: ["muse-1"] },
+				{ name: "claude", models: [] },
+			]),
+		).toEqual(
+			new Map([
+				["codex", ["gpt-5.6", "gpt-5.6-mini"]],
+				["muse", ["muse-1"]],
+			]),
+		);
+	});
+
+	it("tolerates a missing or empty status list", () => {
+		expect(probedModelsByAgent()).toEqual(new Map());
+		expect(probedModelsByAgent([null, {}])).toEqual(new Map());
+	});
+});
+
 describe("modelOptionsFrom", () => {
 	const options = [
 		{ name: "codex", levels: ["low", "high"] },
@@ -347,20 +370,59 @@ describe("modelOptionsFrom", () => {
 		{ name: "plain" },
 	];
 
-	it("expands each agent's models into their own qualified entry", () => {
+	it("expands each agent's declared models into their own qualified entry", () => {
 		expect(modelOptionsFrom({ agentOptions: options })).toEqual([
-			{ value: "codex", agent: "codex", model: "" },
 			{ value: "muse/muse-1", agent: "muse", model: "muse-1" },
 			{ value: "muse/muse-2", agent: "muse", model: "muse-2" },
-			{ value: "plain", agent: "plain", model: "" },
 		]);
 	});
 
-	it("falls back to the bare agent names with no allow-list", () => {
-		expect(modelOptionsFrom({ agents: ["codex"] })).toEqual([
+	it("fills an agent with no allow-list from its probed models", () => {
+		expect(
+			modelOptionsFrom({ agentOptions: options }, [
+				{ name: "codex", models: ["codex/gpt-5.6"] },
+				{ name: "plain", models: ["plain/p-1"] },
+			]),
+		).toEqual([
+			{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" },
+			{ value: "muse/muse-1", agent: "muse", model: "muse-1" },
+			{ value: "muse/muse-2", agent: "muse", model: "muse-2" },
+			{ value: "plain/p-1", agent: "plain", model: "p-1" },
+		]);
+	});
+
+	it("prefers the declared allow-list over what the probe reported", () => {
+		expect(
+			modelOptionsFrom(
+				{ agentOptions: [{ name: "muse", models: ["muse-1"] }] },
+				[{ name: "muse", models: ["muse/other"] }],
+			),
+		).toEqual([{ value: "muse/muse-1", agent: "muse", model: "muse-1" }]);
+	});
+
+	it("never offers a bare agent name with no model behind it", () => {
+		expect(modelOptionsFrom({ agents: ["codex"] })).toEqual([]);
+		expect(modelOptionsFrom({})).toEqual([]);
+		expect(modelOptionsFrom(null, [{ name: "codex", models: [] }])).toEqual([]);
+	});
+
+	it("keeps an already active spec selectable even with no models for it", () => {
+		expect(modelOptionsFrom({ agents: ["codex"] }, [], ["codex"])).toEqual([
 			{ value: "codex", agent: "codex", model: "" },
 		]);
-		expect(modelOptionsFrom({})).toEqual([]);
+		expect(
+			modelOptionsFrom({ agents: ["codex"] }, [], ["codex/gpt-5.6"]),
+		).toEqual([{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }]);
+	});
+
+	it("does not duplicate an active spec the probe already offers", () => {
+		expect(
+			modelOptionsFrom(
+				{ agents: ["codex"] },
+				[{ name: "codex", models: ["codex/gpt-5.6"] }],
+				["codex/gpt-5.6"],
+			),
+		).toEqual([{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" }]);
 	});
 });
 
@@ -418,27 +480,21 @@ describe("agentSummaries", () => {
 		{ name: "muse", auth: "unknown", quota: "n/a", installed: false },
 	];
 
-	it("collects one summary per unique agent, in first-seen order", () => {
-		const options = [
-			{ value: "codex/gpt-5.6", agent: "codex", model: "gpt-5.6" },
-			{ value: "codex/gpt-5.6-mini", agent: "codex", model: "gpt-5.6-mini" },
-			{ value: "muse", agent: "muse", model: "" },
-		];
-		expect(agentSummaries(options, statuses)).toEqual([
+	it("collects one summary per registered agent, in snapshot order", () => {
+		expect(agentSummaries({ agents: ["codex", "muse"] }, statuses)).toEqual([
 			{ agent: "codex", status: statuses[0] },
 			{ agent: "muse", status: statuses[1] },
 		]);
 	});
 
-	it("leaves status undefined for an agent with no probe result yet", () => {
-		const options = [{ value: "claude", agent: "claude", model: "" }];
-		expect(agentSummaries(options, statuses)).toEqual([
-			{ agent: "claude", status: undefined },
-		]);
+	it("keeps an agent that contributes no model chip", () => {
+		expect(
+			agentSummaries({ agentOptions: [{ name: "claude" }] }, statuses),
+		).toEqual([{ agent: "claude", status: undefined }]);
 	});
 
-	it("returns an empty list for no options", () => {
-		expect(agentSummaries([], statuses)).toEqual([]);
+	it("returns an empty list for no agents", () => {
+		expect(agentSummaries({}, statuses)).toEqual([]);
 		expect(agentSummaries(undefined, statuses)).toEqual([]);
 	});
 });

@@ -245,8 +245,11 @@ function ModelChip({ option, checked, onToggle, status }) {
 
 // AgentStatusList renders one always-visible auth/quota line per agent behind
 // the models tab's chips (issue #585), since #583 left that reading
-// reachable only by hovering a chip's title.
-function AgentStatusList({ summaries }) {
+// reachable only by hovering a chip's title. Once the probe has answered, an
+// agent it said nothing about reads "unavailable" rather than sitting on
+// "probing..." forever, and an agent it listed no models for says so, since
+// that is why it contributes no chip (issue #589).
+function AgentStatusList({ summaries, probed }) {
 	if (!summaries.length) return null;
 	return (
 		<ul className="agent-status-list">
@@ -258,9 +261,11 @@ function AgentStatusList({ summaries }) {
 							<>
 								auth: {status.auth} · quota: {status.quota}
 								{!status.installed && " · not installed"}
+								{!status.models?.length &&
+									` · ${status.modelNote || "no models reported"}`}
 							</>
 						) : (
-							"probing..."
+							(probed && "unavailable") || "probing..."
 						)}
 					</span>
 				</li>
@@ -272,8 +277,12 @@ function AgentStatusList({ summaries }) {
 function SettingsModal({ onClose }) {
 	const [tab, setTab] = useState("general");
 	const [form, setForm] = useState(null);
-	const [modelOptions, setModelOptions] = useState([]);
+	const [settings, setSettings] = useState(null);
 	const [agentStatuses, setAgentStatuses] = useState([]);
+	// probed flips once /api/agents has answered either way, so the models tab
+	// can tell "still probing" from "probed, and this is all there is"
+	// (issue #589).
+	const [probed, setProbed] = useState(false);
 	const [readyStateDefault, setReadyStateDefault] = useState("");
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -287,7 +296,7 @@ function SettingsModal({ onClose }) {
 		const controller = new AbortController();
 		fetchSettingsWithRetry(controller.signal)
 			.then((snapshot) => {
-				setModelOptions(modelOptionsFrom(snapshot));
+				setSettings(snapshot);
 				setReadyStateDefault(snapshot.readyStateDefault ?? "");
 				setForm({
 					concurrency: String(snapshot.concurrency ?? ""),
@@ -304,12 +313,21 @@ function SettingsModal({ onClose }) {
 			.catch(() => {
 				// The agents tab's status column is a diagnostic on top of the
 				// settings it lets you edit; a probe failure leaves it showing
-				// "probing..." rather than blocking the form.
-			});
+				// what it knows rather than blocking the form.
+			})
+			.finally(() => !controller.signal.aborted && setProbed(true));
 		return () => {
 			controller.abort();
 		};
 	}, []);
+	// The chips are derived rather than stored: the probed model lists arrive
+	// after the settings snapshot does, and an agent's entries only exist once
+	// they have (issue #589).
+	const modelOptions = modelOptionsFrom(
+		settings,
+		agentStatuses,
+		form?.activeAgents,
+	);
 	const update = (field) => (event) =>
 		setForm({ ...form, [field]: event.target.value });
 	const toggleModel = (value, checked) =>
@@ -411,7 +429,11 @@ function SettingsModal({ onClose }) {
 							<fieldset className="model-list">
 								<legend className="sr-only">Active models</legend>
 								{modelOptions.length === 0 && (
-									<p className="modal-loading">no agents registered</p>
+									<p className="modal-loading">
+										{probed
+											? "no agent models available"
+											: "probing agents for models..."}
+									</p>
 								)}
 								<div className="model-chips">
 									{modelOptions.map((option) => (
@@ -425,7 +447,8 @@ function SettingsModal({ onClose }) {
 									))}
 								</div>
 								<AgentStatusList
-									summaries={agentSummaries(modelOptions, agentStatuses)}
+									summaries={agentSummaries(settings, agentStatuses)}
+									probed={probed}
 								/>
 							</fieldset>
 						)}
