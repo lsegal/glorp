@@ -246,18 +246,28 @@ func (d *agentDoctor) reportModels(ctx context.Context, definition agents.Defini
 }
 
 // declaredModels is what the definition alone can say about an agent's models:
-// its allow-list when it names one, and otherwise a note, because "the
-// definition validates any model" and "the agent takes no model" are different
-// answers and neither is a list.
+// its allow-list when it names one, then the models it knows the CLI accepts,
+// and otherwise a note, because "the definition validates any model" and "the
+// agent takes no model" are different answers and neither is a list.
+//
+// The known list is qualified with a note rather than presented as the whole
+// truth: it is what glorp has been told, not what the CLI enforces, and a
+// model that shipped after this definition did still works.
 func declaredModels(definition agents.Definition) ([]string, string) {
 	switch {
 	case definition.Models.AcceptsNothing():
 		return nil, "not accepted by this agent"
 	case definition.Models.Declared():
 		return qualify(definition.Name, definition.Models.Values()), ""
+	case len(definition.Doctor.KnownModels) > 0:
+		return qualify(definition.Name, definition.Doctor.KnownModels), knownModelsNote
 	}
 	return nil, "any model the CLI accepts"
 }
+
+// knownModelsNote qualifies a list glorp declared rather than read from the
+// CLI, so nobody reads it as the CLI's own catalog.
+const knownModelsNote = "known to glorp; the CLI may accept others"
 
 // qualify renders models as the agent/model names --agent takes, which is the
 // whole point of listing them.
@@ -333,7 +343,11 @@ func writeAgentModels(out io.Writer, report agentReport) {
 		writeAgentField(out, "models", orDefault(report.modelNote, doctorUnknown))
 		return
 	}
-	writeAgentField(out, "models", fmt.Sprintf("%d available", len(report.models)))
+	header := fmt.Sprintf("%d available", len(report.models))
+	if note := strings.TrimSpace(report.modelNote); note != "" {
+		header = fmt.Sprintf("%d %s", len(report.models), note)
+	}
+	writeAgentField(out, "models", header)
 	for _, model := range report.models {
 		fmt.Fprintf(out, "  %-*s  %s\n", doctorFieldWidth, "", model)
 	}

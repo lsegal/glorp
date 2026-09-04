@@ -444,6 +444,14 @@ type Doctor struct {
 	// a model, and its first capture group, when it has one, is the model id.
 	// It needs Models.
 	ModelPattern string `json:"modelPattern,omitempty"`
+	// KnownModels are the models the definition itself knows the CLI accepts,
+	// for the CLIs that have no listing command to ask. It is what the report
+	// falls back to instead of saying only that any model is accepted, which
+	// is true and useless: a caller reading the report is there to find a
+	// name to put after --agent. It is deliberately not an allow-list -- a
+	// model released this morning still runs -- so the report labels it as
+	// what glorp knows rather than as what the CLI takes.
+	KnownModels []string `json:"knownModels,omitempty"`
 	// Timeout bounds one probe, as a Go duration string. The report is a
 	// diagnostic, so a CLI that hangs is abandoned and reported as unknown
 	// rather than allowed to hold the whole listing up.
@@ -533,6 +541,11 @@ func (d Doctor) validate() error {
 			if strings.TrimSpace(arg) == "" {
 				return fmt.Errorf("field %q cannot contain an empty argument", field)
 			}
+		}
+	}
+	for _, model := range d.KnownModels {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf(`field "doctor.knownModels" cannot contain an empty value`)
 		}
 	}
 	if len(d.Auth) == 0 && strings.TrimSpace(d.SignedIn) != "" {

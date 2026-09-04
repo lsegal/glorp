@@ -31,11 +31,13 @@ func testDoctorRegistry(t *testing.T) *agents.Registry {
 	declared := base("declared")
 	declared.Models = agents.NewAllowList("opus", "sonnet")
 	silent := base("silent")
+	known := base("known")
+	known.Doctor = agents.Doctor{KnownModels: []string{"opus", "sonnet"}}
 	nomodel := base("nomodel")
 	nomodel.Models = agents.NewAllowList()
 	old := base("old")
 	old.MinVersion = "2.0.0"
-	registry, err := agents.NewRegistry(probed, declared, silent, nomodel, old)
+	registry, err := agents.NewRegistry(probed, declared, silent, known, nomodel, old)
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
@@ -196,6 +198,59 @@ func TestAgentDoctorFallsBackToDeclaredModels(t *testing.T) {
 	}
 }
 
+// TestAgentDoctorListsKnownModels checks a definition that names no allow-list
+// but knows what its CLI takes is enumerated rather than dismissed with the
+// note that any model is accepted, which is the whole point of the field
+// (issue #560). The list is labelled as glorp's rather than the CLI's, because
+// it is not an allow-list: a model released after the definition still runs.
+func TestAgentDoctorListsKnownModels(t *testing.T) {
+	doctor := stubDoctor(t, map[string]bool{"known": true}, noProbe, noProbe, noProbe, nil)
+	report := reportFor(t, doctor.Report(context.Background()), "known")
+	if strings.Join(report.models, ",") != "known/opus,known/sonnet" {
+		t.Errorf("known models = %v, want the known list qualified", report.models)
+	}
+	if !strings.Contains(report.modelNote, "known to glorp") {
+		t.Errorf("known note = %q, want it to say the list is glorp's", report.modelNote)
+	}
+	registry := testDoctorRegistry(t)
+	definition, _ := registry.Lookup("known")
+	if !definition.AcceptsModel("a-model-released-this-morning") {
+		t.Error("knownModels rejects an unlisted model, want it to stay a hint rather than an allow-list")
+	}
+}
+
+// TestBuiltinAgentsEnumerateTheirModels holds every shipped agent to naming
+// models a caller can copy after --agent: either a listing command the CLI
+// answers, or the names the definition knows it takes. "any model the CLI
+// accepts" is a true answer and a useless one, which is what issue #560 was.
+func TestBuiltinAgentsEnumerateTheirModels(t *testing.T) {
+	registry := agents.MustBuiltin()
+	for _, name := range registry.Names() {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("registry has no definition for %q", name)
+		}
+		if len(definition.Doctor.Models) > 0 || definition.Models.Declared() {
+			continue
+		}
+		if len(definition.Doctor.KnownModels) == 0 {
+			t.Errorf("built-in %q enumerates no models: declare doctor.models or doctor.knownModels", name)
+		}
+	}
+}
+
+// TestAgentDoctorPrefersProbedModelsOverKnownOnes checks a live listing wins:
+// the known list exists for the CLIs that have no listing command, not to
+// override one that does.
+func TestAgentDoctorPrefersProbedModelsOverKnownOnes(t *testing.T) {
+	models := func(string) (string, bool) { return "gpt-5.6\n", true }
+	doctor := stubDoctor(t, map[string]bool{"probed": true}, noProbe, noProbe, models, nil)
+	report := reportFor(t, doctor.Report(context.Background()), "probed")
+	if strings.Join(report.models, ",") != "probed/gpt-5.6" || report.modelNote != "" {
+		t.Errorf("probed = %v/%q, want the probed list with no note", report.models, report.modelNote)
+	}
+}
+
 // TestAgentDoctorFlagsAnOldBinary checks a CLI below its definition's declared
 // minimum is called out rather than reported as ready, which is the whole point
 // of declaring the minimum.
@@ -240,12 +295,16 @@ func TestWriteAgentReportsRendersEveryField(t *testing.T) {
 			auth: doctorSignedIn, quota: "week 40% left", tracksQuota: true,
 			models: []string{"codex/gpt-5.6", "codex/gpt-5.6-codex"},
 		},
+		{
+			name: "cline", binary: "cline", path: "/opt/cline", auth: doctorUnknown,
+			models: []string{"cline/anthropic/claude-opus-5"}, modelNote: knownModelsNote,
+		},
 		{name: "muse", binary: "muse", modelNote: "any model the CLI accepts"},
 	})
 	text := out.String()
 	for _, want := range []string{
 		statusReady + " codex", "/opt/codex, version 1.2.3", "signed in", "week 40% left",
-		"2 available", "\n" + strings.Repeat(" ", 12) + "codex/gpt-5.6\n",
+		"2 available", "1 " + knownModelsNote, "cline/anthropic/claude-opus-5", "\n" + strings.Repeat(" ", 12) + "codex/gpt-5.6\n",
 		statusMissing + "  muse", "muse (not installed)",
 	} {
 		if !strings.Contains(text, want) {
