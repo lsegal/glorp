@@ -51,6 +51,9 @@ func (j JSONL) validate() error {
 	if j.ToolInput != "" && j.ToolName == "" {
 		return fmt.Errorf(`field "output.jsonl.toolInput" needs "output.jsonl.toolName"; a tool input is rendered as part of the call it belongs to`)
 	}
+	if j.TextDelta && j.Text == "" {
+		return fmt.Errorf(`field "output.jsonl.textDelta" needs "output.jsonl.text"; there is no text to join without it`)
+	}
 	if len(j.Ignore) > 0 && j.Type == "" {
 		return fmt.Errorf(`field "output.jsonl.ignore" needs "output.jsonl.type"; event types cannot be skipped without knowing where the type is`)
 	}
