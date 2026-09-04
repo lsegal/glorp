@@ -81,6 +81,7 @@ Anything wrong with the file stops the run, naming the file, the agent, and the 
 | --- | --- | --- | --- | --- |
 | `name` | string | yes | — | The name used in `--agent name/model:level`. Letters, digits, dot, dash, and underscore only, since `/` and `:` are that syntax's separators. |
 | `binary` | string | yes | — | The executable the agent is invoked through. `--agent-binary NAME=PATH` overrides it per run. |
+| `minVersion` | string | no | none | The lowest version of `binary` the definition's argv works with, as a dotted version such as `"0.58.0"`. See [`minVersion`](#minversion). |
 | `args` | object | yes | — | The argv templates. See [`args`](#args). |
 | `env` | object of string→string | no | none | Extra environment for the child process, layered on top of glorp's own environment. |
 | `session` | object | yes | — | How the session ID is established. See [`session`](#session). |
@@ -146,6 +147,26 @@ Each template is a list of **fragments**, appended in order. A fragment is delib
 | `remoteControl` | The run was started with `--remote-control`. |
 
 So `{"when": "yolo", "args": ["--dangerously-skip-permissions"]}` adds the bypass flag only under `--yolo`, and `{"when": "!yolo", "args": ["--permission-mode", "auto"]}` adds the safe default the rest of the time.
+
+### `minVersion`
+
+An agent's argv is written against a particular release of its CLI. When an older one is installed, the flags the definition renders do not exist yet, and the run dies on an unrecognized-argument error from the child process that says nothing about the version being the cause.
+
+`minVersion` says which release the definition was written against:
+
+```json
+{"binary": "gemini", "minVersion": "0.58.0"}
+```
+
+Before every dispatch glorp runs `binary --version` on the executable the run resolved -- so `--agent-binary` is what gets checked -- and compares what it reports:
+
+- **Below the minimum:** the dispatch fails before the agent starts, with an error naming the agent, the version found, the version required, and both ways to fix it: upgrade the CLI, or point glorp at a newer install with `--agent-binary NAME=PATH`.
+- **At or above it:** the run proceeds as usual.
+- **No version glorp can read**, either because the CLI prints none or because asking it failed: a warning goes into the run's output and the dispatch proceeds anyway. Blocking there would break any CLI that prints its version some way glorp has not seen.
+
+The version is read out of whatever banner surrounds it, compared component by component -- so `0.9.0` is older than `0.58.0`, not newer the way a string comparison has it -- and a prerelease suffix such as `-beta.3` is ignored rather than treated as unreadable.
+
+A definition that omits `minVersion` is not checked at all and starts no extra process. Of the built-ins only `gemini` declares one, `0.58.0`, the release its `--session-id`, `--resume`, and `--output-format` arguments were measured against.
 
 ### `session`
 
@@ -306,6 +327,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
 {
   "name": "gemini",
   "binary": "gemini",
+  "minVersion": "0.58.0",
   "levels": [],
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},
@@ -640,6 +662,8 @@ Run `glorp agents` after every edit; it loads the same registry `glorp watch` do
 **"unknown section" or "looks like a work-state record."** The config file takes one section, `agents`. If glorp reports a work-state record, you pointed `--config` at `.glorp.json` — the file glorp rewrites — instead of `.glorp.config.json`.
 
 **Your agent is not in `glorp agents`.** Either the file is not where glorp looked (it reads `.glorp.config.json` in the working directory unless `--config` says otherwise, and a missing file is not an error) or the `agents` section is empty. Pass `--config` explicitly to be sure.
+
+**A dispatch failed naming a version.** The agent's definition declares a `minVersion` its installed CLI is older than, so glorp stopped before running it rather than letting the CLI reject arguments it does not have. Upgrade the CLI, or point that agent at a newer install with `--agent-binary NAME=PATH`. A warning that the version could not be read is the other half of the same check: the run went ahead, and if it then fails on an unrecognized argument, the version is the first thing to check by hand.
 
 **Telling whether an agent lacks resume support.** Read its definition's `session.assign`: `none` means there is no session, so glorp restarts the work with the recovery prompt rather than resuming it. The dashboard shows a restarted job as a new run on the same issue, and the run log says so. This is expected for `opencode` and `cline`.
 
