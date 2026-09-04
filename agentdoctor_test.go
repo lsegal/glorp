@@ -33,11 +33,13 @@ func testDoctorRegistry(t *testing.T) *agents.Registry {
 	silent := base("silent")
 	known := base("known")
 	known.Doctor = agents.Doctor{KnownModels: []string{"opus", "sonnet"}}
+	noted := base("noted")
+	noted.Doctor = agents.Doctor{KnownModels: []string{"vendor/one"}, ModelsNote: "known for the default provider"}
 	nomodel := base("nomodel")
 	nomodel.Models = agents.NewAllowList()
 	old := base("old")
 	old.MinVersion = "2.0.0"
-	registry, err := agents.NewRegistry(probed, declared, silent, known, nomodel, old)
+	registry, err := agents.NewRegistry(probed, declared, silent, known, noted, nomodel, old)
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
@@ -376,5 +378,53 @@ func TestAgentReportShowsWhyAQuotaIsUnavailable(t *testing.T) {
 	}
 	if got := describeQuota(agentReport{}); got != "not tracked" {
 		t.Fatalf("quota line for an agent with no source = %q, want %q", got, "not tracked")
+	}
+}
+
+// TestAgentDoctorPrefersTheDefinitionsOwnModelsNote checks a definition that
+// writes its own caveat is reported with it rather than with the generic one:
+// a CLI that routes to a provider has no single catalog, and "the CLI may
+// accept others" does not say which provider the list belongs to.
+func TestAgentDoctorPrefersTheDefinitionsOwnModelsNote(t *testing.T) {
+	doctor := stubDoctor(t, map[string]bool{"noted": true}, noProbe, noProbe, noProbe, nil)
+	report := reportFor(t, doctor.Report(context.Background()), "noted")
+	if report.modelNote != "known for the default provider" {
+		t.Errorf("modelNote = %q, want the definition's own note", report.modelNote)
+	}
+	if strings.Join(report.models, ",") != "noted/vendor/one" {
+		t.Errorf("models = %v, want the known list qualified", report.models)
+	}
+}
+
+// TestBuiltinKnownModelsAreShapedForTheirCLI checks the shipped lists still
+// carry the id shape each CLI takes, which is what issue #564 found wrong:
+// cline's ids are provider-scoped slugs and every other built-in's are bare,
+// so a slug that leaks into a bare list is a name someone copies and gets
+// rejected.
+func TestBuiltinKnownModelsAreShapedForTheirCLI(t *testing.T) {
+	registry := agents.MustBuiltin()
+	for _, name := range registry.Names() {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("registry has no definition for %q", name)
+		}
+		for _, model := range definition.Doctor.KnownModels {
+			if scoped := strings.Contains(model, "/"); scoped != (name == "cline") {
+				t.Errorf("built-in %q knows model %q: only cline takes provider-scoped ids", name, model)
+			}
+		}
+	}
+}
+
+// TestClineSaysItsKnownModelsAreProviderScoped checks the one built-in whose
+// catalog depends on the provider a user authenticated says so in the report,
+// rather than presenting one provider's ids as the CLI's whole catalog.
+func TestClineSaysItsKnownModelsAreProviderScoped(t *testing.T) {
+	definition, ok := agents.MustBuiltin().Lookup("cline")
+	if !ok {
+		t.Fatal("registry has no definition for cline")
+	}
+	if !strings.Contains(definition.Doctor.ModelsNote, "provider") {
+		t.Errorf("cline modelsNote = %q, want it to name the provider the list belongs to", definition.Doctor.ModelsNote)
 	}
 }

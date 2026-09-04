@@ -24,7 +24,7 @@ This page is the reference for that file and that schema.
 
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
-None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL` names is passed straight through to the CLI, because these CLIs take a live catalog and a list that validated it would reject a model released this morning. `glorp agents` enumerates them all the same -- `opencode` lists its own with `opencode models`, and the rest declare the names they are known to take in `doctor.knownModels`, which the report labels *known to glorp; the CLI may accept others* rather than presenting it as the catalog.
+None of the built-ins names a `models` allow-list: whatever `--agent NAME/MODEL` names is passed straight through to the CLI, because these CLIs take a live catalog and a list that validated it would reject a model released this morning. `glorp agents` enumerates them all the same -- `opencode` lists its own with `opencode models`, and the rest declare the names they are known to take in `doctor.knownModels`, which the report labels *known to glorp; the CLI may accept others* rather than presenting it as the catalog. `cline` replaces that label with its own `doctor.modelsNote`: its ids are provider-scoped, so the list is the default `cline` provider's catalog and `-P/--provider` changes both the catalog and the id format.
 
 `gemini` is the built-in that declares `"levels": []`. That is not the same as naming no list at all: an empty list accepts nothing, so `--agent gemini:high` stops the run naming the agent instead of accepting a level the definition has no `{level}` fragment to pass on. See [allow-lists](#allow-lists) below.
 
@@ -259,6 +259,7 @@ The set of ids skills.sh knows grows without glorp, so the shape of the id is ch
 | `doctor.models` | array of string | no | none | The argv that lists the models the agent accepts, one per line on its stdout. `{binary}` substitutes as above. |
 | `doctor.modelPattern` | regular expression | no | none | Narrows what counts as a model in that output, for a command that decorates its list. Only a matching line is a model, and its first capture group, when it has one, is the model id. Needs `doctor.models`. |
 | `doctor.knownModels` | array of string | no | none | The models the definition itself knows the CLI accepts, for a CLI with no listing command to ask. Reported as `agent/model` names labelled *known to glorp; the CLI may accept others*, and never used to validate `--agent`, so a model released after the definition still runs. |
+| `doctor.modelsNote` | string | no | none | Replaces the label the report puts on `doctor.knownModels`, for a CLI that routes to a provider and therefore has no one catalog: the list is right for the provider it was written against and wrong for the next one. Needs `doctor.knownModels`. |
 | `doctor.timeout` | duration string | no | `20s` | Bounds one probe. The report is a diagnostic, so a CLI that hangs is reported as unknown rather than allowed to hold the listing up. Must be positive. |
 
 Both probes are optional, and neither is ever run by a dispatch — `glorp agents` is the only caller. An agent that declares nothing here still appears in the report: what it could not answer is shown as `unknown`, and its models come from its `models` allow-list, then from `doctor.knownModels`, and otherwise from a note saying the CLI accepts any model, or that it accepts none. A field belonging to a probe the definition does not declare is rejected rather than ignored, for the same reason the `quota` block rejects one.
@@ -291,12 +292,12 @@ These are the shipped documents, verbatim, and they are the best worked examples
     "auth": ["{binary}", "login", "status"],
     "signedIn": "(?im)^\\s*Logged in",
     "knownModels": [
+      "gpt-6-astra",
+      "gpt-5.6-sol",
       "gpt-5.6-terra",
-      "gpt-5.1-codex-max",
-      "gpt-5.1-codex",
-      "gpt-5.1",
-      "gpt-5-codex",
-      "gpt-5"
+      "gpt-5.6-luna",
+      "gpt-5.3-codex-spark",
+      "gpt-5.5"
     ]
   },
   "args": {
@@ -394,7 +395,10 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "skills": {"target": "gemini-cli"},
   "doctor": {
     "knownModels": [
-      "gemini-3-pro-preview",
+      "gemini-3.1-pro-preview",
+      "gemini-3.5-flash",
+      "gemini-3-flash-preview",
+      "gemini-3.1-flash-lite",
       "gemini-2.5-pro",
       "gemini-2.5-flash",
       "gemini-2.5-flash-lite"
@@ -450,7 +454,9 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "doctor": {
     "knownModels": [
       "muse-spark-1.3",
-      "muse-spark-1.2"
+      "muse-spark-1.3-contributor",
+      "muse-spark-1.2",
+      "muse-spark-1.2-contributor"
     ]
   },
   "args": {
@@ -551,9 +557,11 @@ These are the shipped documents, verbatim, and they are the best worked examples
       "anthropic/claude-fable-5.1",
       "anthropic/claude-opus-5",
       "anthropic/claude-sonnet-5",
+      "openai/gpt-5.6-sol",
       "openai/gpt-5.6-terra",
-      "google/gemini-3-pro-preview"
-    ]
+      "google/gemini-3.1-pro-preview"
+    ],
+    "modelsNote": "known to glorp for the default cline provider; -P/--provider changes the catalog and the id format"
   },
   "args": {
     "run": [

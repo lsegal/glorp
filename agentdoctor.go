@@ -260,7 +260,7 @@ func declaredModels(definition agents.Definition) ([]string, string) {
 	case definition.Models.Declared():
 		return qualify(definition.Name, definition.Models.Values()), ""
 	case len(definition.Doctor.KnownModels) > 0:
-		return qualify(definition.Name, definition.Doctor.KnownModels), knownModelsNote
+		return qualify(definition.Name, definition.Doctor.KnownModels), modelsNote(definition.Doctor)
 	}
 	return nil, "any model the CLI accepts"
 }
@@ -268,6 +268,16 @@ func declaredModels(definition agents.Definition) ([]string, string) {
 // knownModelsNote qualifies a list glorp declared rather than read from the
 // CLI, so nobody reads it as the CLI's own catalog.
 const knownModelsNote = "known to glorp; the CLI may accept others"
+
+// modelsNote is the label the report puts on that list: the definition's own
+// when it wrote one, because a CLI that routes to a provider needs to say
+// which provider the list belongs to, and the general caveat otherwise.
+func modelsNote(doctor agents.Doctor) string {
+	if note := strings.TrimSpace(doctor.ModelsNote); note != "" {
+		return note
+	}
+	return knownModelsNote
+}
 
 // qualify renders models as the agent/model names --agent takes, which is the
 // whole point of listing them.

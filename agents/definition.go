@@ -452,6 +452,13 @@ type Doctor struct {
 	// model released this morning still runs -- so the report labels it as
 	// what glorp knows rather than as what the CLI takes.
 	KnownModels []string `json:"knownModels,omitempty"`
+	// ModelsNote replaces the label the report puts on that known list, for
+	// an agent where "known to glorp; the CLI may accept others" is not the
+	// whole caveat. A CLI that routes to a provider has no one catalog: the
+	// same list is right for the provider it was written against and wrong
+	// for the next one, and the report has to be able to say so. It needs
+	// KnownModels.
+	ModelsNote string `json:"modelsNote,omitempty"`
 	// Timeout bounds one probe, as a Go duration string. The report is a
 	// diagnostic, so a CLI that hangs is abandoned and reported as unknown
 	// rather than allowed to hold the whole listing up.
@@ -553,6 +560,9 @@ func (d Doctor) validate() error {
 	}
 	if len(d.Models) == 0 && strings.TrimSpace(d.ModelPattern) != "" {
 		return fmt.Errorf(`field "doctor.modelPattern" is only meaningful alongside "doctor.models"`)
+	}
+	if len(d.KnownModels) == 0 && strings.TrimSpace(d.ModelsNote) != "" {
+		return fmt.Errorf(`field "doctor.modelsNote" is only meaningful alongside "doctor.knownModels"`)
 	}
 	for field, pattern := range map[string]string{"doctor.signedIn": d.SignedIn, "doctor.modelPattern": d.ModelPattern} {
 		if strings.TrimSpace(pattern) == "" {
