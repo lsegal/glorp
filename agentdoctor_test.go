@@ -70,7 +70,7 @@ func stubDoctor(t *testing.T, installed map[string]bool, version, auth, models f
 			text, ok := probe(argv[0])
 			return []byte(text), ok
 		},
-		quotaFor: func(_ context.Context, name, _ string) string { return quota[name] },
+		quotaFor: func(_ context.Context, name, _ string) (string, error) { return quota[name], nil },
 	}
 }
 
@@ -113,7 +113,7 @@ func TestAgentDoctorSkipsProbesForAMissingBinary(t *testing.T) {
 	ran := false
 	probe := func(string) (string, bool) { ran = true; return "", true }
 	doctor := stubDoctor(t, nil, probe, probe, probe, map[string]string{"probed": "week 50% left"})
-	doctor.quotaFor = func(context.Context, string, string) string { ran = true; return "" }
+	doctor.quotaFor = func(context.Context, string, string) (string, error) { ran = true; return "", nil }
 	report := reportFor(t, doctor.Report(context.Background()), "probed")
 	if ran {
 		t.Error("a probe ran for an agent whose binary is not installed")
@@ -300,5 +300,22 @@ func TestAgentsUsageDocumentsTheReport(t *testing.T) {
 		if flags.Lookup(name) == nil {
 			t.Errorf("glorp agents has no -%s flag", name)
 		}
+	}
+}
+
+// TestAgentReportShowsWhyAQuotaIsUnavailable checks the report says why a
+// declared quota reader could not answer. A bare "unavailable" hid a Codex
+// reader that had been passing a flag the CLI rejects for as long as the flag
+// had been wrong; the reason is what makes that visible.
+func TestAgentReportShowsWhyAQuotaIsUnavailable(t *testing.T) {
+	failed := describeQuota(agentReport{tracksQuota: true, quotaErr: errors.New("unexpected argument '--stdio' found")})
+	if !strings.Contains(failed, "unavailable") || !strings.Contains(failed, "--stdio") {
+		t.Fatalf("quota line = %q, want it to report unavailable and why", failed)
+	}
+	if got := describeQuota(agentReport{tracksQuota: true}); got != "unavailable" {
+		t.Fatalf("quota line without a reason = %q, want %q", got, "unavailable")
+	}
+	if got := describeQuota(agentReport{}); got != "not tracked" {
+		t.Fatalf("quota line for an agent with no source = %q, want %q", got, "not tracked")
 	}
 }

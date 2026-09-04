@@ -33,25 +33,36 @@ type codexQuotaReader struct {
 	Binary string
 	mu     sync.Mutex
 	quota  string
+	err    error
 	readAt time.Time
 }
 
-func (r *codexQuotaReader) Read(ctx context.Context) string {
+func (r *codexQuotaReader) Read(ctx context.Context) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if time.Since(r.readAt) < time.Minute {
-		return r.quota
+		return r.quota, r.err
 	}
 	quota, err := readCodexQuota(ctx, r.Binary)
 	if err == nil {
 		r.quota = quota
 	}
+	r.err = err
 	r.readAt = time.Now()
-	return r.quota
+	return r.quota, r.err
+}
+
+// codexQuotaArgv is the argv the Codex quota reader runs. `app-server` speaks
+// JSON-RPC over stdio by default; it once took an explicit `--stdio` flag,
+// which current releases reject outright, taking the whole reading with it.
+// The transport is the default, so naming it is what breaks, not what works.
+func codexQuotaArgv(binary string) []string {
+	return []string{binary, "app-server"}
 }
 
 func readCodexQuota(ctx context.Context, binary string) (string, error) {
-	cmd := exec.CommandContext(ctx, binary, "app-server", "--stdio")
+	argv := codexQuotaArgv(binary)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return "", err
@@ -116,21 +127,23 @@ type claudeQuotaReader struct {
 	Binary string
 	mu     sync.Mutex
 	quota  string
+	err    error
 	readAt time.Time
 }
 
-func (r *claudeQuotaReader) Read(ctx context.Context) string {
+func (r *claudeQuotaReader) Read(ctx context.Context) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if time.Since(r.readAt) < time.Minute {
-		return r.quota
+		return r.quota, r.err
 	}
 	quota, err := readClaudeQuota(ctx, r.Binary)
 	if err == nil {
 		r.quota = quota
 	}
+	r.err = err
 	r.readAt = time.Now()
-	return r.quota
+	return r.quota, r.err
 }
 
 // readClaudeQuota runs the local `/usage` slash command, which reports the
@@ -200,21 +213,23 @@ type commandQuotaReader struct {
 	Spec   agents.Quota
 	mu     sync.Mutex
 	quota  string
+	err    error
 	readAt time.Time
 }
 
-func (r *commandQuotaReader) Read(ctx context.Context) string {
+func (r *commandQuotaReader) Read(ctx context.Context) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if time.Since(r.readAt) < time.Minute {
-		return r.quota
+		return r.quota, r.err
 	}
 	quota, err := readCommandQuota(ctx, r.Binary, r.Spec)
 	if err == nil {
 		r.quota = quota
 	}
+	r.err = err
 	r.readAt = time.Now()
-	return r.quota
+	return r.quota, r.err
 }
 
 // readCommandQuota runs one quota command under the definition's timeout. A
@@ -326,10 +341,13 @@ func quotaStringAt(document any, path string) (string, bool) {
 	return "", false
 }
 
-// namedQuotaReader reads quota text for a single named agent.
+// namedQuotaReader reads quota text for a single named agent. The read
+// reports why it could not answer as well as what it read, so a reader whose
+// command fails is something a caller can show rather than an empty string
+// indistinguishable from an agent that tracks no quota at all.
 type namedQuotaReader struct {
 	name string
-	read func(context.Context) string
+	read func(context.Context) (string, error)
 }
 
 // namedQuotaReaders builds one quota reader per configured agent, deduplicated
@@ -342,7 +360,7 @@ type namedQuotaReader struct {
 func namedQuotaReaders(registry *agents.Registry, names []string, binaryFor func(string) string) []namedQuotaReader {
 	seen := make(map[string]bool, len(names))
 	readers := make([]namedQuotaReader, 0, len(names))
-	untracked := func(context.Context) string { return "" }
+	untracked := func(context.Context) (string, error) { return "", nil }
 	for _, name := range names {
 		if seen[name] {
 			continue
@@ -353,7 +371,7 @@ func namedQuotaReaders(registry *agents.Registry, names []string, binaryFor func
 			readers = append(readers, namedQuotaReader{name: name, read: untracked})
 			continue
 		}
-		var read func(context.Context) string
+		var read func(context.Context) (string, error)
 		switch definition.Quota.ReaderName() {
 		case agents.QuotaCodex:
 			read = (&codexQuotaReader{Binary: binaryFor(name)}).Read
@@ -375,7 +393,8 @@ func combinedQuotaReader(readers []namedQuotaReader) func(context.Context) map[s
 	return func(ctx context.Context) map[string]string {
 		result := make(map[string]string, len(readers))
 		for _, reader := range readers {
-			result[reader.name] = reader.read(ctx)
+			quota, _ := reader.read(ctx)
+			result[reader.name] = quota
 		}
 		return result
 	}

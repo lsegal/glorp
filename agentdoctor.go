@@ -56,6 +56,11 @@ type agentReport struct {
 	// same on the line and mean opposite things.
 	quota       string
 	tracksQuota bool
+	// quotaErr is why the reader could not answer, when it could not. It is
+	// what turns a bare "unavailable" into something actionable: the flag the
+	// CLI rejected, the command that is missing, the account that is signed
+	// out.
+	quotaErr error
 	models      []string
 	modelNote   string
 }
@@ -88,7 +93,7 @@ type agentDoctor struct {
 	lookPath func(string) (string, error)
 	version  func(ctx context.Context, binary string) ([]byte, error)
 	run      func(ctx context.Context, argv []string, spec agents.Doctor) ([]byte, bool)
-	quotaFor func(ctx context.Context, name, binary string) string
+	quotaFor func(ctx context.Context, name, binary string) (string, error)
 }
 
 // newAgentDoctor builds the doctor that talks to the real machine.
@@ -98,7 +103,7 @@ func newAgentDoctor(registry *agents.Registry) *agentDoctor {
 		lookPath: exec.LookPath,
 		version:  func(ctx context.Context, binary string) ([]byte, error) { return agentVersionCommand(ctx, binary) },
 		run:      runDoctorProbe,
-		quotaFor: func(ctx context.Context, name, binary string) string {
+		quotaFor: func(ctx context.Context, name, binary string) (string, error) {
 			return readAgentQuota(ctx, registry, name, binary)
 		},
 	}
@@ -124,12 +129,13 @@ func runDoctorProbe(ctx context.Context, argv []string, spec agents.Doctor) ([]b
 
 // readAgentQuota reads one agent's quota through the same readers the watch
 // status bar uses, so the report never grows a second opinion about quota.
-func readAgentQuota(ctx context.Context, registry *agents.Registry, name, binary string) string {
+func readAgentQuota(ctx context.Context, registry *agents.Registry, name, binary string) (string, error) {
 	readers := namedQuotaReaders(registry, []string{name}, func(string) string { return binary })
 	if len(readers) == 0 {
-		return ""
+		return "", nil
 	}
-	return strings.TrimSpace(readers[0].read(ctx))
+	quota, err := readers[0].read(ctx)
+	return strings.TrimSpace(quota), err
 }
 
 // Report probes every registered agent and returns one entry each, in the
@@ -169,7 +175,7 @@ func (d *agentDoctor) reportAgent(ctx context.Context, name string) agentReport 
 	report.path = path
 	report.version, report.versionNote = d.reportVersion(ctx, definition, path)
 	report.tracksQuota = definition.Quota.ReaderName() != agents.QuotaNone
-	report.quota = d.quotaFor(ctx, name, path)
+	report.quota, report.quotaErr = d.quotaFor(ctx, name, path)
 	report.auth = d.reportAuth(ctx, definition, path, report.quota)
 	report.models, report.modelNote = d.reportModels(ctx, definition, path)
 	return report
@@ -295,6 +301,9 @@ func describeQuota(report agentReport) string {
 		return text
 	}
 	if report.tracksQuota {
+		if report.quotaErr != nil {
+			return "unavailable: " + firstLine(strings.TrimSpace(report.quotaErr.Error()))
+		}
 		return "unavailable"
 	}
 	return "not tracked"

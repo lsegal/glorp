@@ -81,8 +81,9 @@ func TestQuotaReadersWithoutASourceSpawnNothing(t *testing.T) {
 		return "definitely-not-a-real-binary"
 	})
 	for _, reader := range readers {
-		if got := reader.read(context.Background()); got != "" {
-			t.Fatalf("%s quota = %q, want untracked", reader.name, got)
+		got, err := reader.read(context.Background())
+		if got != "" || err != nil {
+			t.Fatalf("%s quota = %q (err %v), want untracked and no error", reader.name, got, err)
 		}
 	}
 	if binaryCalls != 0 {
@@ -178,11 +179,11 @@ func TestCommandQuotaReaderKeepsTheLastGoodReading(t *testing.T) {
 	reader := &commandQuotaReader{Binary: binary, Spec: agents.Quota{
 		Reader: agents.QuotaCommand, Command: []string{"{binary}"}, PercentUsed: "used",
 	}}
-	if got := reader.Read(context.Background()); got != "75% left" {
-		t.Fatalf("first read = %q", got)
+	if got, err := reader.Read(context.Background()); got != "75% left" || err != nil {
+		t.Fatalf("first read = %q (err %v)", got, err)
 	}
-	if got := reader.Read(context.Background()); got != "75% left" {
-		t.Fatalf("cached read = %q", got)
+	if got, err := reader.Read(context.Background()); got != "75% left" || err != nil {
+		t.Fatalf("cached read = %q (err %v)", got, err)
 	}
 	runs, err := os.ReadFile(counter)
 	if err != nil {
@@ -191,10 +192,47 @@ func TestCommandQuotaReaderKeepsTheLastGoodReading(t *testing.T) {
 	if len(runs) != 1 {
 		t.Fatalf("ran the quota command %d times within the cache window, want 1", len(runs))
 	}
-	// A later failure must not replace the good reading with an empty one.
+	// A later failure must not replace the good reading with an empty one,
+	// but it must still report why it failed so the report can say so.
 	reader.readAt = time.Time{}
 	reader.Spec.Command = []string{filepath.Join(dir, "gone")}
-	if got := reader.Read(context.Background()); got != "75% left" {
+	got, err := reader.Read(context.Background())
+	if got != "75% left" {
 		t.Fatalf("read after a failure = %q, want the last good reading", got)
+	}
+	if err == nil {
+		t.Fatal("read after a failure reported no error, want the reason the command failed")
+	}
+}
+
+// TestCodexQuotaArgvIsWhatTheCLIAccepts pins the argv the Codex quota reader
+// runs. It once passed `app-server --stdio`, a flag current Codex releases
+// reject outright, so every read failed and Codex reported no quota at all
+// with nothing on screen to say why. `app-server` speaks JSON-RPC over stdio
+// by default, so the working argv is the one that names no transport; this
+// test fails loudly if a flag is ever put back.
+func TestCodexQuotaArgvIsWhatTheCLIAccepts(t *testing.T) {
+	argv := codexQuotaArgv("codex")
+	if got := strings.Join(argv, " "); got != "codex app-server" {
+		t.Fatalf("codex quota argv = %q, want %q", got, "codex app-server")
+	}
+	for _, arg := range argv[1:] {
+		if strings.HasPrefix(arg, "-") {
+			t.Fatalf("codex quota argv passes flag %q; app-server defaults to stdio and rejects transport flags it does not know", arg)
+		}
+	}
+}
+
+// TestCodexQuotaReaderReportsWhyItCouldNotRead checks a Codex read that
+// cannot run its binary reports the reason rather than only an empty string,
+// which is what lets `glorp agents` say more than "unavailable".
+func TestCodexQuotaReaderReportsWhyItCouldNotRead(t *testing.T) {
+	reader := &codexQuotaReader{Binary: filepath.Join(t.TempDir(), "definitely-not-codex")}
+	quota, err := reader.Read(context.Background())
+	if quota != "" {
+		t.Fatalf("quota = %q, want empty for a binary that does not exist", quota)
+	}
+	if err == nil {
+		t.Fatal("read reported no error for a missing binary, want the reason it failed")
 	}
 }
