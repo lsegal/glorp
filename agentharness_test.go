@@ -349,7 +349,9 @@ func TestCodexDefinitionContract(t *testing.T) {
 		Number:     7,
 		SessionID:  "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
 		Stdout:     "working on it",
-		WantRun:    []string{"exec", freshPrompt("o/r", 7)},
+		// The spec names no model, so the argv carries the definition's
+		// own defaultModel rather than leaving the choice to the CLI.
+		WantRun:    []string{"exec", "--model", "gpt-5.6-terra", freshPrompt("o/r", 7)},
 		WantResume: []string{"exec", "resume", "3f2504e0-4f89-11d3-9a0c-0305e82c3301", resumePrompt()},
 		WantOutput: "working on it",
 	}.check(t)
@@ -367,6 +369,7 @@ func TestClaudeDefinitionContract(t *testing.T) {
 		Stdout:     `{"type":"assistant","message":{"content":[{"type":"text","text":"working on it"}]}}`,
 		WantRun: []string{
 			"-p", "--session-id", "session-7", "--permission-mode", "auto",
+			"--model", "sonnet",
 			"--output-format", "stream-json", "--verbose", freshPrompt("o/r", 7),
 		},
 		WantResume: []string{

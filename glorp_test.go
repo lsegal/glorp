@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lsegal/glorp/agents"
 	"github.com/mattn/go-isatty"
 )
 
@@ -1455,12 +1456,29 @@ func TestGlorpKeepsWatchingWhenProjectResetFails(t *testing.T) {
 	}
 }
 
+// codexDefaultModel and claudeDefaultModel are the managed defaults those two
+// built-in definitions declare (issue #612), read from the definitions rather
+// than restated here so a default that moves does not need every argv
+// expectation below edited with it.
+var (
+	codexDefaultModel  = builtinDefaultModel("codex")
+	claudeDefaultModel = builtinDefaultModel("claude")
+)
+
+func builtinDefaultModel(name string) string {
+	definition, ok := agents.MustBuiltin().Lookup(name)
+	if !ok {
+		panic("no built-in agent " + name)
+	}
+	return definition.ModelOrDefault("")
+}
+
 func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args: %#v", got)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", claudeDefaultModel, "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args: %#v", got)
 	}
 }
@@ -1469,7 +1487,7 @@ func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
 	prompt := "/gh-fix owner/repo#12 identity:/glorp:ABC\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Repository: "owner/repo", Target: "https://github.com/users/owner/projects/3"}
 	got := commandArgs(CommandRunner{Agent: "codex", Repo: "wrong/repo", Identity: "ABC"}, issue)
-	want := []string{"exec", prompt}
+	want := []string{"exec", "--model", codexDefaultModel, prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
@@ -1479,7 +1497,7 @@ func TestCommandRunnerUsesGhDiscussForDiscussionTargets(t *testing.T) {
 	prompt := "/gh-discuss 5\n\nRepository: owner/repo\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 5, Target: "https://github.com/owner/repo/discussions"}
 	got := commandArgs(CommandRunner{Agent: "codex"}, issue)
-	want := []string{"exec", prompt}
+	want := []string{"exec", "--model", codexDefaultModel, prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
@@ -1487,10 +1505,10 @@ func TestCommandRunnerUsesGhDiscussForDiscussionTargets(t *testing.T) {
 
 func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex yolo args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--model", claudeDefaultModel, "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude yolo args = %#v, want %#v", got, want)
 	}
 }
@@ -1499,7 +1517,7 @@ func TestCommandRunnerRemoteControlMakesClaudeRunsViewable(t *testing.T) {
 	prompt := "/gh-fix owner/repo#12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Target: "owner/repo"}
 	got := commandArgs(CommandRunner{Agent: "claude", RemoteControl: true}, issue)
-	want := []string{"-p", "--permission-mode", "auto", "--settings", `{"remoteControlAtStartup":true}`, "--rc", "glorp owner/repo#12", "--output-format", "stream-json", "--verbose", prompt}
+	want := []string{"-p", "--permission-mode", "auto", "--settings", `{"remoteControlAtStartup":true}`, "--rc", "glorp owner/repo#12", "--model", claudeDefaultModel, "--output-format", "stream-json", "--verbose", prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude remote control args = %#v, want %#v", got, want)
 	}
@@ -1511,7 +1529,7 @@ func TestCommandRunnerRemoteControlLeavesCodexUnchanged(t *testing.T) {
 	prompt := "/gh-fix owner/repo#12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Target: "owner/repo"}
 	got := commandArgs(CommandRunner{Agent: "codex", RemoteControl: true}, issue)
-	if want := []string{"exec", prompt}; !reflect.DeepEqual(got, want) {
+	if want := []string{"exec", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex remote control args = %#v, want %#v", got, want)
 	}
 }
@@ -1549,7 +1567,7 @@ func TestCommandRunnerPassesAgentSpecModelAndLevel(t *testing.T) {
 	if got, want := commandArgs(CommandRunner{Agent: "claude/claude-sonnet:medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "codex:low"}, Issue{Number: 12}), []string{"exec", "-c", "model_reasoning_effort=low", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex:low"}, Issue{Number: 12}), []string{"exec", "--model", codexDefaultModel, "-c", "model_reasoning_effort=low", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex level-only args = %#v, want %#v", got, want)
 	}
 }
@@ -1573,12 +1591,17 @@ func TestParseAgentSpec(t *testing.T) {
 		value string
 		want  agentSpec
 	}{
-		{"codex", agentSpec{Name: "codex"}},
-		{" claude ", agentSpec{Name: "claude"}},
+		// An agent named without a model takes its definition's managed
+		// default, so the model glorp chose is the one the spec carries
+		// everywhere it goes rather than something only the CLI knows.
+		{"codex", agentSpec{Name: "codex", Model: codexDefaultModel}},
+		{" claude ", agentSpec{Name: "claude", Model: claudeDefaultModel}},
 		{"claude/opus", agentSpec{Name: "claude", Model: "opus"}},
-		{"codex:high", agentSpec{Name: "codex", Level: "high"}},
+		{"codex:high", agentSpec{Name: "codex", Model: codexDefaultModel, Level: "high"}},
 		{"codex/gpt-5.6:medium", agentSpec{Name: "codex", Model: "gpt-5.6", Level: "medium"}},
 		{"claude/anthropic/claude-opus:low", agentSpec{Name: "claude", Model: "anthropic/claude-opus", Level: "low"}},
+		// gemini names no default model, so its bare spec still carries
+		// none and the CLI keeps choosing for itself.
 		{"gemini", agentSpec{Name: "gemini"}},
 		{"gemini/gemini-2.5-pro", agentSpec{Name: "gemini", Model: "gemini-2.5-pro"}},
 	} {
@@ -1589,8 +1612,8 @@ func TestParseAgentSpec(t *testing.T) {
 		if got != test.want {
 			t.Fatalf("parseAgentSpec(%q) = %#v, want %#v", test.value, got, test.want)
 		}
-		if roundTrip := got.String(); roundTrip != strings.TrimSpace(test.value) && test.value != " claude " {
-			t.Fatalf("agentSpec(%q).String() = %q", test.value, roundTrip)
+		if roundTrip := got.String(); roundTrip != test.want.String() {
+			t.Fatalf("agentSpec(%q).String() = %q, want %q", test.value, roundTrip, test.want.String())
 		}
 	}
 	for _, value := range []string{"nosuchagent", "codex/gpt-5:turbo", "claude/", "codex/gpt-5:", ""} {
@@ -1640,7 +1663,7 @@ func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 func TestCommandRunnerStartsClaudeWithPersistedSessionID(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	session := AgentSession{ID: "session-12", Agent: "claude"}
-	want := []string{"-p", "--session-id", "session-12", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", prompt}
+	want := []string{"-p", "--session-id", "session-12", "--permission-mode", "auto", "--model", claudeDefaultModel, "--output-format", "stream-json", "--verbose", prompt}
 	if got := commandArgsForSession(CommandRunner{Agent: "codex"}, Issue{Number: 12}, session); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Claude initial args = %#v, want %#v", got, want)
 	}
@@ -4046,4 +4069,28 @@ func jsonStringBody(t *testing.T, value string) string {
 		t.Fatal(err)
 	}
 	return string(encoded[1 : len(encoded)-1])
+}
+
+// TestCommandRunnerUsesAConfiguredDefaultModel checks the managed default
+// reaches the dispatched argv end to end, from a definition a config file
+// declared rather than one glorp ships (issue #612), and that a spec naming its
+// own model still overrides it.
+func TestCommandRunnerUsesAConfiguredDefaultModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), agents.DefaultConfigPath)
+	if err := os.WriteFile(path, []byte(`{"agents":[{"name":"codex","defaultModel":"gpt-5.4"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := agents.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	got := commandArgs(CommandRunner{Agent: "codex", Definitions: registry}, Issue{Number: 12})
+	if want := []string{"exec", "--model", "gpt-5.4", prompt}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("configured default argv = %#v, want %#v", got, want)
+	}
+	explicit := commandArgs(CommandRunner{Agent: "codex/gpt-5.6-sol", Definitions: registry}, Issue{Number: 12})
+	if want := []string{"exec", "--model", "gpt-5.6-sol", prompt}; !reflect.DeepEqual(explicit, want) {
+		t.Fatalf("explicit model argv = %#v, want %#v", explicit, want)
+	}
 }

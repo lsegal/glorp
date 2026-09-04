@@ -136,6 +136,10 @@ type AgentStatus struct {
 	// ModelNote explains a missing or partial list.
 	Models    []string `json:"models,omitempty"`
 	ModelNote string   `json:"modelNote,omitempty"`
+	// DefaultModel is the model glorp runs this agent with when --agent names
+	// none, empty for an agent whose definition leaves the choice to its own
+	// CLI (issue #612).
+	DefaultModel string `json:"defaultModel,omitempty"`
 	// Status is one of "ok", "warn", or "missing", matching the marker
 	// `glorp agents` prefixes each block with.
 	Status string `json:"status"`

@@ -13,15 +13,15 @@ This page is the reference for that file and that schema.
 
 `glorp agents` reports on the agents in force for the current configuration -- whether each CLI is installed, its version, whether it is signed in, its quota, and the `agent/model` names `--agent` accepts. `glorp agents -names` prints one name per line instead, and `glorp agents -skills` prints the skills.sh target ids they install skills for. The built-in set is:
 
-| `--agent` | CLI | Levels accepted | Session resume | Quota | skills.sh target |
-| --- | --- | --- | --- | --- | --- |
-| `codex` | [Codex CLI](https://developers.openai.com/codex/cli/) | `low`, `medium`, `high` | yes — Codex prints the ID, glorp reads it back | `codex` | `codex` |
-| `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `low`, `medium`, `high` | yes — glorp assigns the ID | `claude` | `claude-code` |
-| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | none — the CLI has no reasoning-effort flag | yes — glorp assigns the ID | none | `gemini-cli` |
-| `muse` | [Meta Muse Code](https://dev.meta.ai/docs/muse-code) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | yes — glorp assigns the ID | none | `universal` |
-| `opencode` | [opencode](https://opencode.ai) | `low`, `medium`, `high` | no — recovery restarts the work | none | `opencode` |
-| `cline` | [Cline](https://cline.bot) | `none`, `low`, `medium`, `high`, `xhigh` | no — recovery restarts the work | none | `cline` |
-| `agy` | [Antigravity CLI](https://antigravity.google/docs/cli/overview) | `low`, `medium`, `high` | no — recovery restarts the work | none | `antigravity-cli` |
+| `--agent` | CLI | Levels accepted | Default model | Session resume | Quota | skills.sh target |
+| --- | --- | --- | --- | --- | --- | --- |
+| `codex` | [Codex CLI](https://developers.openai.com/codex/cli/) | `low`, `medium`, `high` | `gpt-5.6-terra` | yes — Codex prints the ID, glorp reads it back | `codex` | `codex` |
+| `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `low`, `medium`, `high` | `sonnet` | yes — glorp assigns the ID | `claude` | `claude-code` |
+| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | none — the CLI has no reasoning-effort flag | the CLI's own | yes — glorp assigns the ID | none | `gemini-cli` |
+| `muse` | [Meta Muse Code](https://dev.meta.ai/docs/muse-code) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra` | the CLI's own | yes — glorp assigns the ID | none | `universal` |
+| `opencode` | [opencode](https://opencode.ai) | `low`, `medium`, `high` | the CLI's own | no — recovery restarts the work | none | `opencode` |
+| `cline` | [Cline](https://cline.bot) | `none`, `low`, `medium`, `high`, `xhigh` | the CLI's own | no — recovery restarts the work | none | `cline` |
+| `agy` | [Antigravity CLI](https://antigravity.google/docs/cli/overview) | `low`, `medium`, `high` | the CLI's own | no — recovery restarts the work | none | `antigravity-cli` |
 
 An agent with no resume support is not a degraded one. glorp's recovery prompt asks the agent to pick the work back up from the branch and the open draft pull request, and the `gh-fix` skill is re-entrant by design, so a restarted run adopts what the previous one left behind instead of starting over.
 
@@ -112,6 +112,7 @@ Anything wrong with the file stops the run, naming the file, the agent, and the 
 | `session` | object | yes | — | How the session ID is established. See [`session`](#session). |
 | `levels` | array of string | no | any | Allow-list for the `:level` part of `--agent`. See [allow-lists](#allow-lists). |
 | `models` | array of string | no | any | Allow-list for the `/model` part of `--agent`. See [allow-lists](#allow-lists). |
+| `defaultModel` | string | no | none | The model glorp runs the agent with when `--agent` names none. See [`defaultModel`](#defaultmodel). |
 | `output` | object | yes | — | How stdout is decoded. See [`output`](#output). |
 | `missingSession` | array of string | no | none | Extra phrases that mean "the session you asked me to resume is gone". See [`missingSession`](#missingsession). |
 | `quota` | object | no | `{"reader": "none"}` | Where the status bar's quota reading comes from. See [`quota`](#quota). |
@@ -131,6 +132,20 @@ Anything wrong with the file stops the run, naming the file, the agent, and the 
 The empty list is what keeps a level from being parsed and then quietly discarded for want of a `{level}` fragment to render it into — indistinguishable, from the outside, from a level that was honoured. `gemini` declares `"levels": []` for exactly that reason.
 
 Overriding an allow-list with `null` restores accepting *anything*, not accepting nothing; write `[]` when you mean the latter.
+
+### `defaultModel`
+
+Agent CLIs mostly default to their largest model, which is the wrong thing to point a queue of issues at. A definition may name the model glorp runs it with when `--agent` gives it none, so the choice is glorp's rather than the CLI's:
+
+```json
+{"name": "codex", "defaultModel": "gpt-5.6-terra"}
+```
+
+The default is resolved where the `--agent` spec is parsed, so it is the model the rendered argv passes, the model the dashboard shows, and the model written into the `agent/model:level` string the work state persists -- a resumed session keeps the model it started with even if the default later moves. An explicit `--agent codex/gpt-5.6-sol` always wins, and `glorp agents` prints the default on its own `default` line.
+
+The value must be one `models` admits when that allow-list names values. A config file that narrows `models` on a built-in therefore has to name a `defaultModel` the narrowed list allows, or drop the inherited one with `"defaultModel": null`, rather than have glorp quietly run a model the file just said it would not accept.
+
+Leaving the field out keeps the older behaviour: no `{model}` fragment is rendered and the CLI decides for itself. That is what the built-ins whose catalogs are per-account do -- `gemini`, `muse`, `cline`, `opencode`, and `agy` name no default, because there is no model id glorp can promise every account has.
 
 ### `args`
 
@@ -307,6 +322,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "name": "codex",
   "binary": "codex",
   "levels": ["low", "medium", "high"],
+  "defaultModel": "gpt-5.6-terra",
   "session": {
     "assign": "capture",
     "capture": "(?i)session id:\\s*([0-9a-f]{8}-[0-9a-f-]{27,})",
@@ -353,6 +369,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "binary": "claude",
   "levels": ["low", "medium", "high"],
   "env": {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"},
+  "defaultModel": "sonnet",
   "session": {"assign": "glorp"},
   "output": {"format": "stream-json"},
   "quota": {"reader": "claude"},
