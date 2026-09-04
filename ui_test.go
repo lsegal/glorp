@@ -393,11 +393,12 @@ func TestDashboardShowsAllNamedQuotas(t *testing.T) {
 	}
 }
 
-// TestDashboardTruncatesTheStatusBarWithManyAgents checks a run configured
-// with four agents keeps the status bar on one line. The quota cell grows with
-// every agent, and a bar wider than the terminal used to wrap onto a second
-// line and shove the job grid up the screen.
-func TestDashboardTruncatesTheStatusBarWithManyAgents(t *testing.T) {
+// TestDashboardWrapsTheStatusBarWithManyAgents checks a run configured with
+// four agents keeps every status bar section readable. The quota cell grows
+// with every agent, and rather than truncate the sections into stubs the bar
+// now rolls onto a second line (issue #616) while each line still fits the
+// terminal.
+func TestDashboardWrapsTheStatusBarWithManyAgents(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{
@@ -409,17 +410,92 @@ func TestDashboardTruncatesTheStatusBarWithManyAgents(t *testing.T) {
 			"opal":   "",
 		},
 	}))
-	lines := strings.Split(updated.(dashboard).View(), "\n")
-	footer := lines[len(lines)-1]
-	if width := lipgloss.Width(footer); width > 100 {
-		t.Fatalf("status bar width = %d, want it truncated to the terminal's 100", width)
-	}
-	// Truncation shortens the widest cell rather than dropping cells, so every
-	// section is still identifiable.
-	for _, want := range []string{"jobs:", "quota:", "targets:"} {
-		if !strings.Contains(footer, want) {
-			t.Fatalf("status bar %q lost the %q section", footer, want)
+	view := updated.(dashboard).View()
+	for _, line := range strings.Split(view, "\n") {
+		if width := lipgloss.Width(line); width > 100 {
+			t.Fatalf("dashboard line width = %d, want it within the terminal's 100: %q", width, line)
 		}
+	}
+	// Wrapping keeps every section rather than dropping or stubbing any.
+	for _, want := range []string{"jobs:", "quota:", "targets:"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("status bar lost the %q section: %s", want, view)
+		}
+	}
+}
+
+// TestStatusBarWrapsRatherThanShrinkPastMinimum covers the core of issue #616:
+// four sections that cannot all show ten columns on one line are split across
+// lines instead of truncated below minStatusBarCellWidth.
+func TestStatusBarWrapsRatherThanShrinkPastMinimum(t *testing.T) {
+	items := []string{"jobs: 1 active", "quota: weekly 87% left", "push: delivered", "targets: lsegal/glorp"}
+	view := renderStatusBar(40, items)
+	lines := strings.Split(view, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("status bar stayed on one line at width 40: %q", view)
+	}
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > 40 {
+			t.Fatalf("status bar line width = %d, want within 40: %q", width, line)
+		}
+	}
+	for _, want := range []string{"jobs:", "quota:", "push:", "targets:"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("status bar lost the %q section: %q", want, view)
+		}
+	}
+}
+
+// TestStatusBarStaysOnOneLineWhenItFits keeps the common wide-terminal case
+// from regressing into a needlessly tall bar.
+func TestStatusBarStaysOnOneLineWhenItFits(t *testing.T) {
+	items := []string{"jobs: 1 active", "quota: weekly 87% left", "push: delivered", "targets: lsegal/glorp"}
+	view := renderStatusBar(120, items)
+	if strings.Contains(view, "\n") {
+		t.Fatalf("status bar wrapped at width 120: %q", view)
+	}
+}
+
+// TestFitStatusBarItemsKeepsTheMinimumCellWidth checks a row of sections is
+// never squeezed below the readable minimum, which is what makes the bar wrap.
+func TestFitStatusBarItemsKeepsTheMinimumCellWidth(t *testing.T) {
+	fitted := fitStatusBarItems([]string{"quota: weekly 87% left", "targets: lsegal/glorp"}, 24, 0)
+	for _, item := range fitted {
+		if lipgloss.Width(item) < minStatusBarCellWidth {
+			t.Fatalf("cell %q is %d wide, want at least %d", item, lipgloss.Width(item), minStatusBarCellWidth)
+		}
+	}
+}
+
+// TestStatusBarTruncatesASingleTooNarrowSection checks the fallback: a
+// terminal too narrow for even one section truncates rather than overflows.
+func TestStatusBarTruncatesASingleTooNarrowSection(t *testing.T) {
+	view := renderStatusBar(6, []string{"quota: weekly 87% left"})
+	if width := lipgloss.Width(view); width > 6 {
+		t.Fatalf("status bar width = %d, want within 6: %q", width, view)
+	}
+}
+
+// TestWrapStatusBarItemsGivesEveryRowRoomForItsSections checks the packing
+// itself: no row promises more sections than it can show at the minimum width.
+func TestWrapStatusBarItemsGivesEveryRowRoomForItsSections(t *testing.T) {
+	items := []string{"jobs: 1 active", "quota: weekly 87% left", "push: delivered", "targets: lsegal/glorp"}
+	rows := wrapStatusBarItems(items, 40)
+	seen := 0
+	index := 0
+	for _, row := range rows {
+		need := 0
+		for range row {
+			need += minStatusBarCellWidth + statusBarCellOverhead(index)
+			index++
+		}
+		if need > 40 && len(row) > 1 {
+			t.Fatalf("row %q needs %d columns, more than the 40 available", row, need)
+		}
+		seen += len(row)
+	}
+	if seen != len(items) {
+		t.Fatalf("wrapping kept %d of %d sections", seen, len(items))
 	}
 }
 
