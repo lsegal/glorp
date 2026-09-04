@@ -17,12 +17,14 @@
   },
   "skills": {"target": "universal"},
   "doctor": {
-    "knownModels": [
-      "muse-spark-1.3",
-      "muse-spark-1.3-contributor",
-      "muse-spark-1.2",
-      "muse-spark-1.2-contributor"
-    ]
+    "models": ["{binary}", "serve"],
+    "modelsStdin": [
+      "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"glorp\",\"version\":\"1\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/list\",\"params\":{}}"
+    ],
+    "modelsJSON": "result.models[].modelId",
+    "timeout": "45s"
   },
   "args": {
     "run": [

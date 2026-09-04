@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -92,7 +93,7 @@ type agentDoctor struct {
 	// and quotaFor reads one agent's quota text.
 	lookPath func(string) (string, error)
 	version  func(ctx context.Context, binary string) ([]byte, error)
-	run      func(ctx context.Context, argv []string, spec agents.Doctor) ([]byte, bool)
+	run      func(ctx context.Context, argv []string, spec agents.Doctor, stdin []string) ([]byte, bool)
 	quotaFor func(ctx context.Context, name, binary string) (string, error)
 }
 
@@ -112,19 +113,74 @@ func newAgentDoctor(registry *agents.Registry) *agentDoctor {
 // runDoctorProbe runs one probe under the definition's timeout, reporting its
 // combined output and whether it exited zero. A probe that fails is not an
 // error the report stops for: it is the answer.
-func runDoctorProbe(ctx context.Context, argv []string, spec agents.Doctor) ([]byte, bool) {
+func runDoctorProbe(ctx context.Context, argv []string, spec agents.Doctor, stdin []string) ([]byte, bool) {
 	if len(argv) == 0 {
 		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(ctx, spec.TimeoutDuration())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.WaitDelay = quotaCommandWaitDelay
+	if len(stdin) > 0 {
+		return runProbeConversation(cmd, spec, stdin)
+	}
 	// A probe is told nothing, so a CLI that would prompt reads EOF and gives
 	// up instead of waiting on a terminal the report does not have.
 	cmd.Stdin = strings.NewReader("")
-	cmd.WaitDelay = quotaCommandWaitDelay
 	out, err := process.CombinedOutput(cmd)
 	return out, err == nil
+}
+
+// probeLineLimit bounds one line of a conversational probe's output. A model
+// catalog arrives as a single JSON-RPC response, and a CLI that fronts a
+// couple of hundred models writes all of them on that one line.
+const probeLineLimit = 4 << 20
+
+// runProbeConversation drives a probe that answers over a stdio protocol
+// instead of printing and exiting: it writes the definition's lines, holds the
+// pipe open -- an agent speaking JSON-RPC abandons a client that hangs up
+// mid-handshake -- and reads stdout until the output carries a model list.
+//
+// It stops at that first answer rather than waiting for the process to end,
+// because it never will: these commands are servers, and a report that waited
+// for one would wait for its whole timeout every time it succeeded.
+func runProbeConversation(cmd *exec.Cmd, spec agents.Doctor, lines []string) ([]byte, bool) {
+	input, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, false
+	}
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, false
+	}
+	// Only stdout is read: an agent that logs its startup to stderr would
+	// otherwise interleave that noise into the responses being parsed.
+	cmd.Stderr = io.Discard
+	if err := process.Start(cmd); err != nil {
+		return nil, false
+	}
+	defer func() {
+		_ = input.Close()
+		_ = process.Stop(cmd)
+	}()
+	go func() {
+		for _, line := range lines {
+			if _, err := io.WriteString(input, line+"\n"); err != nil {
+				return
+			}
+		}
+	}()
+	var collected strings.Builder
+	scanner := bufio.NewScanner(output)
+	scanner.Buffer(make([]byte, 0, 64<<10), probeLineLimit)
+	for scanner.Scan() {
+		collected.Write(scanner.Bytes())
+		collected.WriteByte('\n')
+		if len(spec.ModelsFrom(collected.String())) > 0 {
+			break
+		}
+	}
+	return []byte(collected.String()), collected.Len() > 0
 }
 
 // readAgentQuota reads one agent's quota through the same readers the watch
@@ -209,7 +265,7 @@ func (d *agentDoctor) reportVersion(ctx context.Context, definition agents.Defin
 // agent with neither is reported as unknown rather than guessed at.
 func (d *agentDoctor) reportAuth(ctx context.Context, definition agents.Definition, binary, quota string) string {
 	if argv := definition.Doctor.AuthArgv(binary); len(argv) > 0 {
-		out, ok := d.run(ctx, argv, definition.Doctor)
+		out, ok := d.run(ctx, argv, definition.Doctor, nil)
 		if ok && definition.Doctor.ReportsSignedIn(string(out)) {
 			return doctorSignedIn
 		}
@@ -230,19 +286,18 @@ func (d *agentDoctor) reportModels(ctx context.Context, definition agents.Defini
 	if len(argv) == 0 {
 		return declaredModels(definition)
 	}
-	out, ok := d.run(ctx, argv, definition.Doctor)
-	if !ok {
-		models, note := declaredModels(definition)
-		if len(models) == 0 {
-			note = "could not be listed by " + strings.Join(argv, " ")
-		}
-		return models, note
+	out, ok := d.run(ctx, argv, definition.Doctor, definition.Doctor.ModelsStdinLines(binary))
+	if models := definition.Doctor.ModelsFrom(string(out)); ok && len(models) > 0 {
+		return qualify(definition.Name, models), ""
 	}
-	models := definition.Doctor.ModelsFrom(string(out))
-	if len(models) == 0 {
-		return declaredModels(definition)
+	// A probe that ran and listed nothing is as unanswered as one that failed:
+	// a CLI signed out of its provider prints a handshake and no catalog, and
+	// reporting that as "any model the CLI accepts" would hide the reason.
+	models, note := declaredModels(definition)
+	if len(models) == 0 && strings.TrimSpace(definition.Doctor.ModelsNote) == "" {
+		note = "could not be listed by " + strings.Join(argv, " ")
 	}
-	return qualify(definition.Name, models), ""
+	return models, note
 }
 
 // declaredModels is what the definition alone can say about an agent's models:
@@ -261,6 +316,10 @@ func declaredModels(definition agents.Definition) ([]string, string) {
 		return qualify(definition.Name, definition.Models.Values()), ""
 	case len(definition.Doctor.KnownModels) > 0:
 		return qualify(definition.Name, definition.Doctor.KnownModels), modelsNote(definition.Doctor)
+	case strings.TrimSpace(definition.Doctor.ModelsNote) != "":
+		// A definition that cannot list its models can still say what to
+		// write after --agent, which is what the field is read for.
+		return nil, strings.TrimSpace(definition.Doctor.ModelsNote)
 	}
 	return nil, "any model the CLI accepts"
 }

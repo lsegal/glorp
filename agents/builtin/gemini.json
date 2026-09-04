@@ -9,15 +9,13 @@
   "missingSession": ["no previous sessions found", "invalid session identifier"],
   "skills": {"target": "gemini-cli"},
   "doctor": {
-    "knownModels": [
-      "gemini-3.1-pro-preview",
-      "gemini-3.5-flash",
-      "gemini-3-flash-preview",
-      "gemini-3.1-flash-lite",
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite"
-    ]
+    "models": ["{binary}", "--acp"],
+    "modelsStdin": [
+      "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false}}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/new\",\"params\":{\"cwd\":\".\",\"mcpServers\":[]}}"
+    ],
+    "modelsJSON": "result.models.availableModels[].modelId",
+    "timeout": "45s"
   },
   "args": {
     "run": [
