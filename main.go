@@ -292,19 +292,7 @@ func runWatch(args []string) int {
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
 	if webUI != nil {
-		webUI.SetJobActionHandler(w.handleJobAction)
-		webUI.SetSettingsHandler(w.ApplySettings)
-		// The server only starts accepting requests once its handlers are wired,
-		// so a request arriving right after startup can never observe the
-		// unset-handler window and see a spurious "settings unavailable" (#571).
-		go func() {
-			if err := webServer.Serve(webListener); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
-			}
-		}()
-		webURL := fmt.Sprintf("http://localhost:%d", webPort)
-		fmt.Fprintf(output, "web UI listening on %s\n", webURL)
-		webUI.Log("web UI listening on " + webURL)
+		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, w.ApplySettings)
 	}
 	var server *http.Server
 	if !poll {
@@ -371,6 +359,24 @@ func runWatch(args []string) int {
 		ui.program.Quit()
 	}
 	return 0
+}
+
+// startWebUI wires the dashboard's job-action and settings handlers, then
+// begins serving requests. The handlers must be wired before the server
+// starts accepting connections: a request that lands in the gap sees the
+// handler as unset and gets a spurious "unavailable" response, which the
+// settings modal has no retry for and so is left stuck (issue #571).
+func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)) {
+	webUI.SetJobActionHandler(jobActionHandler)
+	webUI.SetSettingsHandler(settingsHandler)
+	go func() {
+		if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
+		}
+	}()
+	webURL := fmt.Sprintf("http://localhost:%d", port)
+	fmt.Fprintf(output, "web UI listening on %s\n", webURL)
+	webUI.Log("web UI listening on " + webURL)
 }
 
 // splitAllowedCommenters parses the comma-separated --allowed-commenters

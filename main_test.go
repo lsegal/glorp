@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -18,8 +19,49 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lsegal/glorp/core"
+	"github.com/lsegal/glorp/webui"
 	"github.com/mattn/go-isatty"
 )
+
+// TestStartWebUIWiresHandlersBeforeServing guards against the web UI server
+// accepting requests before its settings/job-action handlers are wired
+// (issue #571): a request that landed in that gap saw the handler as unset
+// and got a spurious "unavailable" response the settings modal never
+// recovered from.
+func TestStartWebUIWiresHandlersBeforeServing(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	freePort := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	listener, port, err := webui.Listen(freePort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui, err := webui.New("v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: ui}
+	defer server.Close()
+	startWebUI(ui, server, listener, port, io.Discard,
+		func(context.Context, core.JobAction) error { return nil },
+		func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error) {
+			return core.SettingsSnapshot{Concurrency: 3}, nil
+		})
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/settings", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /api/settings = %d, want %d (settings handler must be wired before the server starts serving): %s", resp.StatusCode, http.StatusOK, body)
+	}
+}
 
 func TestListenForWebhooksAssignsRandomPort(t *testing.T) {
 	listener, err := listenForWebhooks("127.0.0.1:0")
