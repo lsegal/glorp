@@ -129,18 +129,13 @@ Run without ngrok or managed webhooks by polling every 30 seconds:
 glorp watch --poll --interval 30s owner/repo
 ```
 
-The browser dashboard is available at `http://localhost:8765` by default. If that port is occupied, glorp uses the next available port and logs the selected URL. Choose a different starting port, switch to the terminal dashboard, or disable UI entirely:
+The terminal dashboard and the browser dashboard are both shown by default when stdout is a terminal. The browser dashboard is available at `http://localhost:8765` by default; if that port is occupied, glorp uses the next available port and logs the selected URL. Choose a different starting port, or disable either dashboard:
 
 ```sh
 glorp watch --web-ui-port 9000 owner/repo
-glorp watch --ui tui owner/repo
-glorp watch --ui none owner/repo
-```
-
-`--no-ui` remains available as an alias for `--ui none`:
-
-```sh
-glorp watch --no-ui owner/repo
+glorp watch --no-webui owner/repo
+glorp watch --no-tui owner/repo
+glorp watch --no-tui --no-webui owner/repo
 ```
 
 Open a running dashboard in a browser without hunting for its URL. `glorp ui` scans localhost from port 8765 upward, and when several instances are running it shows an interactive picker (or opens the lowest port when stdout is not a terminal):
@@ -214,7 +209,7 @@ Repository webhooks also subscribe to GitHub's `issue_comment` event so this han
 
 glorp terminates every subprocess it starts — the ngrok tunnel, agent runs, and helper commands — when it shuts down, including on `SIGINT`, `SIGTERM`, and `SIGHUP`. It also arranges the same should glorp be killed outright and run no cleanup at all: on Linux each subprocess carries a parent-death signal, and on Windows each one joins a job object that is destroyed with glorp. macOS and the BSDs offer no kernel equivalent, so glorp there keeps a small reaper process that holds a pipe to glorp and records the process groups glorp owns; the kernel closes that pipe when glorp dies, and the reaper terminates whatever is left. A `SIGKILL` of `glorp watch` therefore leaves no tunnel or agent behind on any supported platform.
 
-Glorp serves either a localhost-only browser dashboard or an interactive terminal dashboard, selected by `--ui`. The browser dashboard mirrors the terminal dashboard's agent cards, output viewports, scrolling behavior, daemon logs, job counts, quota, delivery mode, and target status. `--ui web` is the default, `--ui tui` enables the terminal dashboard when stdout is a terminal, and `--ui none` writes timestamped progress to stdout. `--no-ui` is equivalent to `--ui none`.
+Glorp serves both a localhost-only browser dashboard and an interactive terminal dashboard by default. The browser dashboard mirrors the terminal dashboard's agent cards, output viewports, scrolling behavior, daemon logs, job counts, quota, delivery mode, and target status. The terminal dashboard only takes over when stdout is a terminal; `--no-tui` and `--no-webui` each disable one independently, and using both writes timestamped progress to stdout instead.
 
 ## CLI reference
 
@@ -261,8 +256,8 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--listen ADDRESS` | `:0` | Address for the local GitHub webhook HTTP server. Port `0` selects an available port automatically. |
 | `--ngrok-api URL` | `http://127.0.0.1:4040` | Deprecated and ignored. The public tunnel URL is read from the log of the ngrok process glorp starts. |
 | `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. Left at its default, glorp falls back to `npx --yes ngrok` when no `ngrok` is installed; set to anything else, the named executable must exist. |
-| `--ui MODE` | `web` | Select the UI: `web`, `tui`, or `none`. |
-| `--no-ui` | `false` | Disable all UI; equivalent to `--ui none`. |
+| `--no-tui` | `false` | Disable the interactive terminal dashboard; it is otherwise shown by default when stdout is a terminal. |
+| `--no-webui` | `false` | Disable the browser dashboard; it is otherwise shown by default. |
 | `--poll` | `false` | Use polling without starting ngrok or configuring GitHub webhooks. |
 | `--ready-state NAME` | auto (`Todo` or `Ready`) | Project status that marks an issue ready for an agent; matching is case-insensitive. |
 | `--remote-control` | `false` | Ask Claude runs to start Remote Control so a headless agent is viewable, and steerable, from the Claude mobile app and claude.ai/code. Claude receives `--settings {"remoteControlAtStartup":true}`, layered on top of your own settings, plus `--rc "glorp owner/repo#N"` so concurrent runs are told apart by issue instead of sharing a host name. **Claude does not honour this under `-p`**: measured against Claude Code 2.1.248, a headless run started with exactly these arguments starts no bridge and never reaches the app, which is why the flag is off by default. It is kept as an opt-in so a Claude release that reads the setting in print mode needs no change here. **No substitute lever exists either** (issue #506): `autoUploadSessions`, the hoped-for view-only mirror, is not a Claude Code setting at all — it is absent from the settings reference, and a `-p` run with every debug category on makes no upload or session-share request of any kind. `claude remote-control`, the separate server mode, hosts only the sessions it creates itself: its `--session-id` takes a server-side code session rather than a local session UUID, so reattaching to a run glorp started is rejected as `invalid session ID: must be a cse_… or session_… tagged ID`, and it also refuses to start until the workspace trust dialog has been accepted interactively — which a `-p` run never triggers, because print mode skips that dialog — and then asks `Enable Remote Control? (y/n)` on the terminal. The remaining answer is a Claude Code change, filed upstream as [anthropics/claude-code#91906](https://github.com/anthropics/claude-code/issues/91906); until it lands, a run is followed in glorp's own dashboard, which is localhost only, and turning the flag on prints that once at startup rather than silently reaching nobody. Codex runs are unaffected and stay viewable in glorp's own dashboard only, so opting in on a watch that has Codex configured prints that once at startup rather than leaving the run's absence from the phone unexplained. `codex exec` takes no Remote Control argument, and Codex's separate `codex remote-control` daemon is not a way around that: it is the app-server hosting the threads it starts itself, so glorp has nothing to hand it an already-running `codex exec`, its `start`, `stop`, and `pair` commands run on Unix only, and pairing a device to it is a manual step. Reaching Codex runs from a phone would mean driving Codex over the app-server protocol instead of `codex exec` altogether. |

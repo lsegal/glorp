@@ -71,7 +71,7 @@ func TestCommandFlagsExposeWatchAndUIDefaults(t *testing.T) {
 	if watch == nil {
 		t.Fatal("watch has no flag set")
 	}
-	for _, name := range []string{"interval", "poll", "agent", "filter", "web-ui-port", "ui", "concurrency"} {
+	for _, name := range []string{"interval", "poll", "agent", "filter", "web-ui-port", "no-tui", "no-webui", "concurrency"} {
 		if watch.Lookup(name) == nil {
 			t.Fatalf("watch flag %q is missing", name)
 		}
