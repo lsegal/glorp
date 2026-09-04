@@ -220,6 +220,8 @@ func runWatch(args []string) int {
 	}
 	var webUI *webui.Server
 	var webServer *http.Server
+	var webListener net.Listener
+	var webPort int
 	if mode == "web" {
 		var err error
 		webUI, err = webui.New(version)
@@ -227,14 +229,14 @@ func runWatch(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		listener, port, err := webui.Listen(webUIPort)
+		webListener, webPort, err = webui.Listen(webUIPort)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		// Record the bound port so `glorp ui` finds this instance even when it
 		// listens far away from the default scan range.
-		removeRecord, err := writeDashboardRecord(dashboardRecordsDir(os.Getenv), port, os.Getpid())
+		removeRecord, err := writeDashboardRecord(dashboardRecordsDir(os.Getenv), webPort, os.Getpid())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "record dashboard port: %v\n", err)
 		}
@@ -246,15 +248,7 @@ func runWatch(args []string) int {
 			return 1
 		}
 		defer stopFrontend()
-		go func() {
-			if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
-			}
-		}()
 		defer webServer.Close()
-		webURL := fmt.Sprintf("http://localhost:%d", port)
-		fmt.Fprintf(output, "web UI listening on %s\n", webURL)
-		webUI.Log("web UI listening on " + webURL)
 	} else if mode == "none" {
 		fmt.Fprintln(output, "UI disabled")
 	}
@@ -300,6 +294,17 @@ func runWatch(args []string) int {
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
+		// The server only starts accepting requests once its handlers are wired,
+		// so a request arriving right after startup can never observe the
+		// unset-handler window and see a spurious "settings unavailable" (#571).
+		go func() {
+			if err := webServer.Serve(webListener); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
+			}
+		}()
+		webURL := fmt.Sprintf("http://localhost:%d", webPort)
+		fmt.Fprintf(output, "web UI listening on %s\n", webURL)
+		webUI.Log("web UI listening on " + webURL)
 	}
 	var server *http.Server
 	if !poll {
