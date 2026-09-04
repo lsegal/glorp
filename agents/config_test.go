@@ -196,3 +196,26 @@ func TestConfigIsNeverWritten(t *testing.T) {
 		t.Fatalf("config file = %q, want it untouched", raw)
 	}
 }
+
+// TestConfigEmptyAllowListDeclaresNoValue checks the config file can say what
+// a built-in says: an empty list declares that the agent takes no value for
+// that dimension, which is distinct from null, the documented way to clear an
+// inherited list back to accepting anything (issue #532).
+func TestConfigEmptyAllowListDeclaresNoValue(t *testing.T) {
+	path := writeConfig(t, `{"agents":[{"name":"codex","levels":[]}]}`)
+	registry, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	codex, _ := registry.Lookup("codex")
+	if !codex.Levels.AcceptsNothing() {
+		t.Fatalf("levels = %v, want an agent that takes none", codex.Levels.Values())
+	}
+	if codex.AcceptsLevel("high") {
+		t.Fatal("a level was admitted by an agent that declares none")
+	}
+	// The rest of the built-in is still inherited through the merge.
+	if codex.Binary != "codex" || !codex.Supports(ModeResume) {
+		t.Fatalf("codex = %#v, want the built-in's other fields", codex)
+	}
+}
