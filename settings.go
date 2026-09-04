@@ -106,6 +106,9 @@ func (w *Glorp) settingsRequestsChan() chan settingsRequest {
 // settings snapshot. It hands the update to the running Run loop, which
 // owns the mutated fields, so it only takes effect once Run is looping.
 func (w *Glorp) ApplySettings(ctx context.Context, update SettingsUpdate) (SettingsSnapshot, error) {
+	if err := w.checkReady(ctx); err != nil {
+		return SettingsSnapshot{}, err
+	}
 	request := settingsRequest{update: update, done: make(chan settingsResult, 1)}
 	select {
 	case w.settingsRequestsChan() <- request:
