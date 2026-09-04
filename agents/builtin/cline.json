@@ -1,0 +1,27 @@
+{
+  "name": "cline",
+  "binary": "cline",
+  "levels": ["none", "low", "medium", "high", "xhigh"],
+  "session": {"assign": "none"},
+  "output": {"format": "text"},
+  "args": {
+    "run": [
+      {"args": ["--auto-approve", "true"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--thinking", "{level}"]},
+      {"args": ["{prompt}"]}
+    ],
+    "resume": [
+      {"args": ["--auto-approve", "true"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--thinking", "{level}"]},
+      {"args": ["{prompt}"]}
+    ],
+    "vision": [
+      {"args": ["--auto-approve", "true"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"when": "level", "args": ["--thinking", "{level}"]},
+      {"args": ["{prompt}"]}
+    ]
+  }
+}
