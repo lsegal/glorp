@@ -1494,6 +1494,8 @@ func TestParseAgentSpec(t *testing.T) {
 		{"codex:high", agentSpec{Name: "codex", Level: "high"}},
 		{"codex/gpt-5.6:medium", agentSpec{Name: "codex", Model: "gpt-5.6", Level: "medium"}},
 		{"claude/anthropic/claude-opus:low", agentSpec{Name: "claude", Model: "anthropic/claude-opus", Level: "low"}},
+		{"gemini", agentSpec{Name: "gemini"}},
+		{"gemini/gemini-2.5-pro", agentSpec{Name: "gemini", Model: "gemini-2.5-pro"}},
 	} {
 		got, err := parseAgentSpec(test.value)
 		if err != nil {
@@ -1506,7 +1508,7 @@ func TestParseAgentSpec(t *testing.T) {
 			t.Fatalf("agentSpec(%q).String() = %q", test.value, roundTrip)
 		}
 	}
-	for _, value := range []string{"gemini", "codex/gpt-5:turbo", "claude/", "codex/gpt-5:", ""} {
+	for _, value := range []string{"nosuchagent", "codex/gpt-5:turbo", "claude/", "codex/gpt-5:", ""} {
 		if _, err := parseAgentSpec(value); err == nil {
 			t.Fatalf("parseAgentSpec(%q) error = nil, want error", value)
 		}
@@ -1527,8 +1529,8 @@ func TestAgentFlagCollectsSpecs(t *testing.T) {
 	if got, want := flags.names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("names() = %#v, want %#v", got, want)
 	}
-	if err := flags.Set("gemini"); err == nil {
-		t.Fatal("Set(\"gemini\") error = nil, want error")
+	if err := flags.Set("nosuchagent"); err == nil {
+		t.Fatal("Set(\"nosuchagent\") error = nil, want error")
 	}
 }
 
