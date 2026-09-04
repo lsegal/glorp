@@ -40,6 +40,7 @@ type Server struct {
 	assets   http.Handler
 	action   func(context.Context, core.JobAction) error
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
+	agents   func(context.Context) ([]core.AgentStatus, error)
 }
 
 // New builds a dashboard server that reports version.
@@ -60,6 +61,15 @@ func (ui *Server) SetJobActionHandler(handler func(context.Context, core.JobActi
 func (ui *Server) SetSettingsHandler(handler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)) {
 	ui.mu.Lock()
 	ui.settings = handler
+	ui.mu.Unlock()
+}
+
+// SetAgentsHandler wires the settings modal's agents tab (issue #572) to a
+// function that probes every registered agent for its install, sign-in, and
+// quota state, mirroring what `glorp agents` prints.
+func (ui *Server) SetAgentsHandler(handler func(context.Context) ([]core.AgentStatus, error)) {
+	ui.mu.Lock()
+	ui.agents = handler
 	ui.mu.Unlock()
 }
 
@@ -89,6 +99,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/settings" {
 		ui.serveSettings(w, r)
+		return
+	}
+	if r.URL.Path == "/api/agents" {
+		ui.serveAgents(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -157,6 +171,31 @@ func (ui *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(snapshot)
+}
+
+// serveAgents backs the settings modal's agents tab (issue #572). It probes
+// every registered agent and reports its install, sign-in, and quota state,
+// the same information `glorp agents` prints to the terminal.
+func (ui *Server) serveAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ui.mu.RLock()
+	handler := ui.agents
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "agents unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	statuses, err := handler(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(statuses)
 }
 
 func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {

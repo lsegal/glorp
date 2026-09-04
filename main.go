@@ -300,6 +300,9 @@ func runWatch(args []string) int {
 	if webUI != nil {
 		webUI.SetJobActionHandler(w.handleJobAction)
 		webUI.SetSettingsHandler(w.ApplySettings)
+		webUI.SetAgentsHandler(func(ctx context.Context) ([]core.AgentStatus, error) {
+			return agentStatuses(ctx, w.registry())
+		})
 	}
 	var server *http.Server
 	if !poll {
