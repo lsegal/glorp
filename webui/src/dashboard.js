@@ -259,11 +259,13 @@ export function modelOptionsFrom(snapshot, statuses, selected) {
 	const probed = probedModelsByAgent(statuses);
 	const options = [];
 	const seen = new Set();
-	const add = (agent, model) => {
+	const add = (agent, model, isDefault) => {
 		const value = model ? `${agent}/${model}` : agent;
 		if (!agent || seen.has(value)) return;
 		seen.add(value);
-		options.push({ value, agent, model });
+		options.push(
+			isDefault ? { value, agent, model, isDefault } : { value, agent, model },
+		);
 	};
 	for (const option of agentOptionsFrom(snapshot)) {
 		if (!option?.name) continue;
@@ -275,14 +277,16 @@ export function modelOptionsFrom(snapshot, statuses, selected) {
 	for (const value of selected || []) {
 		const agent = specAgentName(value);
 		const spec = String(value || "").trim();
-		// Once an agent has reported its models, that report is authoritative.
-		// In particular, a bare default such as `codex` must not become a fake
-		// model chip beside the real Codex models (issue #609).
-		if (probed.has(agent)) continue;
-		add(
-			agent,
-			spec.startsWith(`${agent}/`) ? spec.slice(agent.length + 1) : "",
-		);
+		const model = spec.startsWith(`${agent}/`)
+			? spec.slice(agent.length + 1)
+			: "";
+		// A bare spec such as `codex` pins no model: the CLI auto-picks one,
+		// and glorp never learns its name. Dropping the spec once the agent
+		// reported real models (issue #609) left that auto-picked choice with
+		// no chip at all, so the models tab showed nothing selected (issue
+		// #611). It is kept instead, flagged so the chip reads as the agent's
+		// default rather than as a model named after the agent.
+		add(agent, model, !model);
 	}
 	return options;
 }
@@ -302,7 +306,10 @@ export function modelGroupsFrom(snapshot, statuses, selected) {
 	for (const option of agentOptionsFrom(snapshot)) add(option?.name);
 	for (const option of modelOptionsFrom(snapshot, statuses, selected)) {
 		add(option.agent);
-		groups.get(option.agent).options.push(option);
+		// The default chip stands for the whole agent, so it leads its group
+		// rather than trailing the concrete models (issue #611).
+		if (option.isDefault) groups.get(option.agent).options.unshift(option);
+		else groups.get(option.agent).options.push(option);
 	}
 	// Keep the configured order within each auth state, but put choices that
 	// can be used now ahead of agents the probe says are signed out (issue #597).
