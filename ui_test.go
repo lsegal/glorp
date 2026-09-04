@@ -504,6 +504,48 @@ func TestDashboardTrimsOldestJobs(t *testing.T) {
 	}
 }
 
+func TestSortJobSnapshotsPrioritizesRunningThenErroredThenCompleted(t *testing.T) {
+	now := time.Now()
+	jobs := []JobSnapshot{
+		{Number: 1, Status: "complete", Started: now},
+		{Number: 2, Status: "active", Started: now.Add(-time.Hour)},
+		{Number: 3, Status: "failed", Started: now.Add(-30 * time.Minute)},
+		{Number: 4, Status: "queued", Started: now.Add(-10 * time.Minute)},
+	}
+	sortJobSnapshots(jobs)
+	var order []int
+	for _, job := range jobs {
+		order = append(order, job.Number)
+	}
+	want := []int{2, 3, 4, 1}
+	if fmt.Sprint(order) != fmt.Sprint(want) {
+		t.Fatalf("sortJobSnapshots order = %v, want %v", order, want)
+	}
+}
+
+func TestDashboardShowsRunningJobEvenWhenOlderThanSixNewerCompletedJobs(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(dashboard)
+	now := time.Now()
+	jobs := make([]JobSnapshot, 6)
+	for i := range jobs {
+		jobs[i] = JobSnapshot{Number: i + 1, Title: "job", Status: "complete", Started: now.Add(time.Duration(i) * time.Second)}
+	}
+	// The oldest job (#100, started before all the "complete" jobs above) is
+	// still running, so it must stay visible instead of being pushed out by
+	// six more-recently-started completed jobs.
+	jobs = append(jobs, JobSnapshot{Number: 100, Title: "still running", Status: "active", Started: now.Add(-time.Hour)})
+	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{Concurrency: 3, Jobs: jobs}))
+	view := updated.(dashboard).View()
+	if !strings.Contains(view, "#100") {
+		t.Fatalf("dashboard dropped the running job in favor of newer completed jobs: %s", view)
+	}
+	if strings.Contains(view, "#1 ") {
+		t.Fatalf("dashboard should have pushed the oldest completed job out: %s", view)
+	}
+}
+
 func TestDashboardUsesTwoByThreeAgentGrid(t *testing.T) {
 	if maxVisibleJobs != 6 || jobGridColumns != 2 || jobCardHeight != 13 {
 		t.Fatalf("agent grid = %d jobs, %d columns, card height %d; want 6, 2, 13", maxVisibleJobs, jobGridColumns, jobCardHeight)
