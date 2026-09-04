@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -181,8 +182,8 @@ func TestInvalidDefinitionsNameTheirField(t *testing.T) {
 		}, `"session.capture"`},
 		{"capture where none is read", func(d *Definition) { d.Session.Capture = "x" }, `"session.capture"`},
 		{"unknown output format", func(d *Definition) { d.Output.Format = "yaml" }, `"output.format"`},
-		{"empty level", func(d *Definition) { d.Levels = []string{"high", " "} }, `"levels"`},
-		{"empty model", func(d *Definition) { d.Models = []string{""} }, `"models"`},
+		{"empty level", func(d *Definition) { d.Levels = NewAllowList("high", " ") }, `"levels"`},
+		{"empty model", func(d *Definition) { d.Models = NewAllowList("") }, `"models"`},
 		{"unusable env name", func(d *Definition) { d.Env = map[string]string{"A=B": "c"} }, `"env"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -210,7 +211,7 @@ func TestAllowListsAdmitAnythingWhenEmpty(t *testing.T) {
 	if !open.AcceptsLevel("whatever") || !open.AcceptsModel("whatever") {
 		t.Fatal("an empty allow-list rejected a value")
 	}
-	limited := Definition{Levels: []string{"low"}, Models: []string{"opus"}}
+	limited := Definition{Levels: NewAllowList("low"), Models: NewAllowList("opus")}
 	if limited.AcceptsLevel("high") || limited.AcceptsModel("sonnet") {
 		t.Fatal("an allow-list admitted a value it does not list")
 	}
@@ -403,5 +404,77 @@ func TestBuiltinAgentsKeepTheirQuotaReaders(t *testing.T) {
 		if got := definition.Quota.ReaderName(); got != want {
 			t.Fatalf("%s quota reader = %q, want %q", name, got, want)
 		}
+	}
+}
+
+// TestADeclaredEmptyAllowListAdmitsNothing checks the third state the schema
+// spells: an agent whose CLI has no reasoning-effort flag declares the empty
+// list and rejects a level instead of accepting one it cannot render (issue
+// #532).
+func TestADeclaredEmptyAllowListAdmitsNothing(t *testing.T) {
+	none := Definition{Name: "acme", Levels: NewAllowList()}
+	if !none.Levels.Declared() || !none.Levels.AcceptsNothing() {
+		t.Fatal("an empty list did not read as declared-and-empty")
+	}
+	for _, level := range []string{"high", "none", ""} {
+		if none.AcceptsLevel(level) {
+			t.Fatalf("level %q was admitted by a list that admits nothing", level)
+		}
+	}
+	// The message names the agent rather than telling the caller to pick from
+	// an empty set, which is the whole reason the state exists.
+	if err := none.LevelError(); err == nil || err.Error() != "agent acme takes no reasoning level" {
+		t.Fatalf("LevelError() = %v, want it to name the agent", err)
+	}
+	listed := Definition{Name: "acme", Levels: NewAllowList("low", "high")}
+	if err := listed.LevelError(); err == nil || err.Error() != "agent level must be low or high" {
+		t.Fatalf("LevelError() = %v, want the allow-list", err)
+	}
+	models := Definition{Name: "acme", Models: NewAllowList()}
+	if models.AcceptsModel("acme-1") {
+		t.Fatal("a model was admitted by a list that admits nothing")
+	}
+	if err := models.ModelError(); err == nil || err.Error() != "agent acme takes no model" {
+		t.Fatalf("ModelError() = %v, want it to name the agent", err)
+	}
+}
+
+// TestAllowListRoundTripsItsThreeStates checks absent, empty, and populated
+// survive the marshal-and-merge trip the agent config file puts a definition
+// through, since an empty list flattened back to an absent one would silently
+// restore the accept-anything behaviour it exists to replace.
+func TestAllowListRoundTripsItsThreeStates(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		encoded string
+		want    string
+	}{
+		{"absent", `{"binary":"acme"}`, "null"},
+		{"null", `{"binary":"acme","levels":null}`, "null"},
+		{"empty", `{"binary":"acme","levels":[]}`, "[]"},
+		{"listed", `{"binary":"acme","levels":["low","high"]}`, `["low","high"]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var definition Definition
+			if err := json.Unmarshal([]byte(test.encoded), &definition); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(definition.Levels)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != test.want {
+				t.Fatalf("levels = %s, want %s", encoded, test.want)
+			}
+			var again Definition
+			if err := json.Unmarshal([]byte(`{"levels":`+string(encoded)+`}`), &again); err != nil {
+				t.Fatal(err)
+			}
+			if again.Levels.Declared() != definition.Levels.Declared() ||
+				again.Levels.AcceptsNothing() != definition.Levels.AcceptsNothing() ||
+				!reflect.DeepEqual(again.Levels.Values(), definition.Levels.Values()) {
+				t.Fatalf("round trip lost the state: %#v", again.Levels)
+			}
+		})
 	}
 }

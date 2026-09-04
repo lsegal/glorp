@@ -1,6 +1,7 @@
 {
   "name": "gemini",
   "binary": "gemini",
+  "levels": [],
   "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
   "session": {"assign": "glorp"},
   "output": {"format": "text"},

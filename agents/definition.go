@@ -8,6 +8,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -32,11 +33,10 @@ type Definition struct {
 	// Session says how a session ID is established and what happens to it
 	// when a resume fails.
 	Session Session `json:"session"`
-	// Levels and Models are optional allow-lists used to validate --agent and
-	// to say what was expected when it does not match. An empty list accepts
-	// anything.
-	Levels []string `json:"levels,omitempty"`
-	Models []string `json:"models,omitempty"`
+	// Levels and Models are the optional allow-lists used to validate --agent
+	// and to say what was expected when it does not match.
+	Levels AllowList `json:"levels"`
+	Models AllowList `json:"models"`
 	// Output names how the agent's stdout is decoded: passed through as it
 	// is written, decoded as Claude's streaming envelope, or decoded by the
 	// generic JSONL decoder configured with the agent's own field paths.
@@ -52,6 +52,85 @@ type Definition struct {
 	// gh-discuss skills is installed for, so the installers derive their
 	// --agent list from the registry instead of a hand-edited one.
 	Skills Skills `json:"skills,omitempty"`
+}
+
+// AllowList is the set of values one dimension of --agent -- a reasoning
+// level or a model -- admits. Three states are distinct, and JSON spells them
+// apart, because "the definition names no allow-list" and "the CLI has no such
+// flag at all" are different claims: the field absent (or null) admits any
+// value, ["low", "high"] admits exactly those, and the empty list [] admits
+// none. Without that last state an agent whose CLI takes no reasoning level
+// accepts one and then drops it, since its argv template has no {level}
+// fragment to render it into -- indistinguishable, at the --agent prompt, from
+// a level that was honoured.
+type AllowList struct {
+	values  []string
+	present bool
+}
+
+// NewAllowList builds a declared allow-list of the given values. Called with
+// none it is the empty list, which admits nothing.
+func NewAllowList(values ...string) AllowList {
+	return AllowList{values: append([]string(nil), values...), present: true}
+}
+
+// Values are the admitted values, nil when the list is absent.
+func (a AllowList) Values() []string { return append([]string(nil), a.values...) }
+
+// Declared reports whether the definition named a list at all.
+func (a AllowList) Declared() bool { return a.present }
+
+// AcceptsNothing reports the declared-but-empty list: the agent takes no value
+// for this dimension.
+func (a AllowList) AcceptsNothing() bool { return a.present && len(a.values) == 0 }
+
+// Admits reports whether the list allows a value. An absent list allows any.
+func (a AllowList) Admits(value string) bool {
+	if !a.present {
+		return true
+	}
+	return contains(a.values, value)
+}
+
+// UnmarshalJSON reads the three states. null is the absent list, so a config
+// override that resets the field to the schema default keeps meaning "admits
+// anything" rather than silently meaning "admits nothing".
+func (a *AllowList) UnmarshalJSON(raw []byte) error {
+	*a = AllowList{}
+	if isJSONNull(raw) {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return err
+	}
+	a.values = values
+	if a.values == nil {
+		a.values = []string{}
+	}
+	a.present = true
+	return nil
+}
+
+// MarshalJSON writes those same three states back, so a definition survives
+// the marshal-and-merge round trip the agent config file makes it take.
+func (a AllowList) MarshalJSON() ([]byte, error) {
+	if !a.present {
+		return []byte("null"), nil
+	}
+	if a.values == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal(a.values)
+}
+
+func (a AllowList) validate(field string) error {
+	for _, value := range a.values {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("field %q cannot contain an empty value", field)
+		}
+	}
+	return nil
 }
 
 // Args are the argv templates for the three shapes of invocation glorp makes:
@@ -415,15 +494,11 @@ func (d Definition) Validate() error {
 			return fmt.Errorf(`field "missingSession" cannot contain an empty value`)
 		}
 	}
-	for _, level := range d.Levels {
-		if strings.TrimSpace(level) == "" {
-			return fmt.Errorf(`field "levels" cannot contain an empty value`)
-		}
+	if err := d.Levels.validate("levels"); err != nil {
+		return err
 	}
-	for _, model := range d.Models {
-		if strings.TrimSpace(model) == "" {
-			return fmt.Errorf(`field "models" cannot contain an empty value`)
-		}
+	if err := d.Models.validate("models"); err != nil {
+		return err
 	}
 	if err := d.Quota.validate(); err != nil {
 		return err
@@ -463,14 +538,28 @@ func validateFragments(mode string, fragments []Fragment) error {
 func (d Definition) SkillsTarget() string { return d.Skills.Target }
 
 // AcceptsLevel and AcceptsModel report whether the definition's allow-lists
-// admit a value. An empty allow-list admits anything.
-func (d Definition) AcceptsLevel(level string) bool { return admits(d.Levels, level) }
+// admit a value.
+func (d Definition) AcceptsLevel(level string) bool { return d.Levels.Admits(level) }
 
 // AcceptsModel reports whether the definition's model allow-list admits a model.
-func (d Definition) AcceptsModel(model string) bool { return admits(d.Models, model) }
+func (d Definition) AcceptsModel(model string) bool { return d.Models.Admits(model) }
 
-func admits(allowed []string, value string) bool {
-	return len(allowed) == 0 || contains(allowed, value)
+// LevelError says why AcceptsLevel refused, in the shape --agent reports it.
+// An agent that takes no level at all is named rather than being told to pick
+// from an empty set, which is the whole point of declaring the empty list.
+func (d Definition) LevelError() error {
+	if d.Levels.AcceptsNothing() {
+		return fmt.Errorf("agent %s takes no reasoning level", d.Name)
+	}
+	return fmt.Errorf("agent level must be %s", JoinOr(d.Levels.Values()))
+}
+
+// ModelError is LevelError for the model dimension.
+func (d Definition) ModelError() error {
+	if d.Models.AcceptsNothing() {
+		return fmt.Errorf("agent %s takes no model", d.Name)
+	}
+	return fmt.Errorf("agent model must be %s", JoinOr(d.Models.Values()))
 }
 
 func contains(values []string, value string) bool {
