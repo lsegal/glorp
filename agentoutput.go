@@ -123,11 +123,12 @@ func (w *jsonlOutputWriter) writeLine(line []byte) error {
 	if w.skips(event) {
 		return nil
 	}
+	paths := w.paths(event)
 	if w.config.TextDelta {
-		return w.writeDelta(event)
+		return w.writeDelta(event, paths)
 	}
-	texts := jsonlStrings(event, w.config.Text)
-	for _, call := range w.toolCalls(event) {
+	texts := jsonlStrings(event, paths.Text)
+	for _, call := range w.toolCalls(event, paths) {
 		texts = append(texts, "Running: "+call)
 	}
 	if len(texts) == 0 {
@@ -143,10 +144,10 @@ func (w *jsonlOutputWriter) writeLine(line []byte) error {
 // fragments. Buffering them and ending the line only when the text stops is
 // what turns "a.txt ", "contains ", "hi" into the sentence it spells, rather
 // than the three lines the event-per-line decoder would write.
-func (w *jsonlOutputWriter) writeDelta(event any) error {
-	fragments := jsonlFragments(event, w.config.Text)
+func (w *jsonlOutputWriter) writeDelta(event any, paths agents.JSONLEvent) error {
+	fragments := jsonlFragments(event, paths.Text)
 	w.pending = append(w.pending, fragments...)
-	calls := w.toolCalls(event)
+	calls := w.toolCalls(event, paths)
 	if len(fragments) > 0 && len(calls) == 0 {
 		// The message is still being written. It ends on the next event that
 		// adds nothing to it, or at the end of the stream.
@@ -201,21 +202,31 @@ func (w *jsonlOutputWriter) skips(event any) bool {
 
 // toolCalls renders the event's tool calls the way Claude's decoder renders
 // its own, so a progress line reads the same whichever agent produced it.
-func (w *jsonlOutputWriter) toolCalls(event any) []string {
-	if w.config.ToolName == "" {
+func (w *jsonlOutputWriter) toolCalls(event any, paths agents.JSONLEvent) []string {
+	if paths.ToolName == "" {
 		return nil
 	}
 	// Name and input are read from the same block when their paths share a
 	// prefix, so a call is never rendered with another call's arguments.
-	prefix, name, input := splitJSONLPaths(w.config.ToolName, w.config.ToolInput)
+	prefix, name, input := splitJSONLPaths(paths.ToolName, paths.ToolInput)
 	var calls []string
 	for _, block := range jsonlLookup(event, prefix) {
 		tool := firstJSONLString(jsonlLookup(block, name))
 		if tool == "" {
 			continue
 		}
+		if paths.ToolNamePrefix != "" {
+			// The name field doubles as a kind covering more than tool
+			// calls, so what does not carry the prefix is another kind of
+			// turn rather than a call rendered under its internal name.
+			trimmed, ok := strings.CutPrefix(tool, paths.ToolNamePrefix)
+			if !ok || strings.TrimSpace(trimmed) == "" {
+				continue
+			}
+			tool = trimmed
+		}
 		var arguments json.RawMessage
-		if values := jsonlLookup(block, input); w.config.ToolInput != "" && len(values) > 0 {
+		if values := jsonlLookup(block, input); paths.ToolInput != "" && len(values) > 0 {
 			if encoded, err := json.Marshal(values[0]); err == nil {
 				arguments = encoded
 			}
@@ -223,6 +234,37 @@ func (w *jsonlOutputWriter) toolCalls(event any) []string {
 		calls = append(calls, claudeToolUseSummary(tool, arguments))
 	}
 	return calls
+}
+
+// paths resolves the field paths that apply to one event: the definition's
+// shared ones, with the override for the event's own type laid over them. It
+// is what lets a stream that spreads a logical event over several typed events
+// describe each of them, rather than pointing one path at all of them.
+func (w *jsonlOutputWriter) paths(event any) agents.JSONLEvent {
+	paths := agents.JSONLEvent{
+		Text: w.config.Text, ToolName: w.config.ToolName,
+		ToolInput: w.config.ToolInput, ToolNamePrefix: w.config.ToolNamePrefix,
+	}
+	if len(w.config.Events) == 0 {
+		return paths
+	}
+	for _, kind := range jsonlStrings(event, w.config.Type) {
+		override, ok := w.config.Events[kind]
+		if !ok {
+			continue
+		}
+		if override.Text != "" {
+			paths.Text = override.Text
+		}
+		if override.ToolName != "" {
+			// A call's name, input, and prefix replace the shared ones
+			// together: half an override would pair this type's name with
+			// another type's arguments.
+			paths.ToolName, paths.ToolInput, paths.ToolNamePrefix = override.ToolName, override.ToolInput, override.ToolNamePrefix
+		}
+		return paths
+	}
+	return paths
 }
 
 // splitJSONLPaths returns the longest path both fields share along with what
