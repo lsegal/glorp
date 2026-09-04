@@ -90,3 +90,46 @@ func TestAgentReferenceQuotesBuiltinDefinitions(t *testing.T) {
 		}
 	}
 }
+
+// prerequisiteLine returns the single line of doc that names every built-in
+// agent as a prerequisite, found by the marker the file writes it behind.
+func prerequisiteLine(t *testing.T, path, marker string) string {
+	t.Helper()
+	for _, line := range strings.Split(readDoc(t, path), "\n") {
+		if strings.Contains(line, marker) {
+			return line
+		}
+	}
+	t.Fatalf("%s has no line containing %q", path, marker)
+	return ""
+}
+
+// TestBuiltinAgentsLinkTheirDocumentation holds every place that names the
+// shipped agents to naming them as links, so a new built-in cannot land as bare
+// text next to five agents a reader can click through to install.
+func TestBuiltinAgentsLinkTheirDocumentation(t *testing.T) {
+	readme := prerequisiteLine(t, "README.md", "At least one supported coding agent")
+	home := prerequisiteLine(t, "site/layouts/index.html", "on your PATH")
+	reference := readDoc(t, agentReferencePath)
+	for _, name := range agents.MustBuiltin().Names() {
+		if !strings.Contains(readme, ") (`"+name+"`)") {
+			t.Errorf("README prerequisites do not link a documentation page for the built-in agent %q", name)
+		}
+		if !strings.Contains(home, "</a> (<code>"+name+"</code>)") {
+			t.Errorf("site/layouts/index.html prerequisites do not link a documentation page for the built-in agent %q", name)
+		}
+		var row string
+		for _, line := range strings.Split(reference, "\n") {
+			if strings.HasPrefix(line, "| `"+name+"` |") {
+				row = line
+			}
+		}
+		if row == "" {
+			t.Errorf("%s has no built-in agents table row for %q", agentReferencePath, name)
+			continue
+		}
+		if !strings.Contains(row, "](http") {
+			t.Errorf("%s does not link a documentation page for the built-in agent %q", agentReferencePath, name)
+		}
+	}
+}
