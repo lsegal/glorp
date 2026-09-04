@@ -98,7 +98,9 @@ func newAgentDoctor(registry *agents.Registry) *agentDoctor {
 		lookPath: exec.LookPath,
 		version:  func(ctx context.Context, binary string) ([]byte, error) { return agentVersionCommand(ctx, binary) },
 		run:      runDoctorProbe,
-		quotaFor: readAgentQuota,
+		quotaFor: func(ctx context.Context, name, binary string) string {
+			return readAgentQuota(ctx, registry, name, binary)
+		},
 	}
 }
 
@@ -122,8 +124,8 @@ func runDoctorProbe(ctx context.Context, argv []string, spec agents.Doctor) ([]b
 
 // readAgentQuota reads one agent's quota through the same readers the watch
 // status bar uses, so the report never grows a second opinion about quota.
-func readAgentQuota(ctx context.Context, name, binary string) string {
-	readers := namedQuotaReaders(agentRegistry(), []string{name}, func(string) string { return binary })
+func readAgentQuota(ctx context.Context, registry *agents.Registry, name, binary string) string {
+	readers := namedQuotaReaders(registry, []string{name}, func(string) string { return binary })
 	if len(readers) == 0 {
 		return ""
 	}

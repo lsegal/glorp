@@ -254,7 +254,6 @@ func runAgentsCommand(args []string) int {
 		}
 		return 0
 	}
-	setAgentRegistry(registry)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	writeAgentReports(os.Stdout, newAgentDoctor(registry).Report(ctx))
