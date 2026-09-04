@@ -19,8 +19,12 @@ import (
 // mojibake.
 const (
 	statusReady   = "[ok]"
-	statusWarn    = "[!] "
-	statusMissing = "[x] "
+	statusWarn    = "[!]"
+	statusMissing = "[x]"
+
+	// statusWidth pads the markers to one column, so the agent names line up
+	// however many of each the registry produces.
+	statusWidth = 4
 )
 
 // Text the report prints where a probe could not answer. "unknown" is a real
@@ -269,7 +273,7 @@ func writeAgentReports(out io.Writer, reports []agentReport) {
 		if i > 0 {
 			fmt.Fprintln(out)
 		}
-		fmt.Fprintf(out, "%s %s\n", report.status(), report.name)
+		fmt.Fprintf(out, "%-*s %s\n", statusWidth, report.status(), report.name)
 		writeAgentField(out, "binary", describeBinary(report))
 		if !report.installed() {
 			continue
