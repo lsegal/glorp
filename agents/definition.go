@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Definition is everything glorp needs to know to invoke one agent CLI. It is
@@ -40,9 +41,7 @@ type Definition struct {
 	// glorp already decodes are understood here; pluggable decoding is issue
 	// #488, which fills this section in rather than reshaping it.
 	Output Output `json:"output"`
-	// Quota names the quota reader for the agent. Registry-driven quota
-	// reading is issue #489; the field is named here so that issue does not
-	// have to change the schema.
+	// Quota names the quota source for the agent.
 	Quota Quota `json:"quota,omitempty"`
 	// Skills names the skills.sh target the agent's copy of the gh-fix and
 	// gh-discuss skills is installed for, so the installers derive their
@@ -103,11 +102,142 @@ type Skills struct {
 	Target string `json:"target,omitempty"`
 }
 
-// Quota names the quota source for the agent.
+// Quota names the quota source for the agent. An agent that declares none
+// reports no quota at all, which the UI shows as untracked; that is the
+// deliberate default, and it costs no process on any poll.
 type Quota struct {
-	// Reader is the name of the built-in quota reader, empty when the agent
-	// reports no quota.
+	// Reader selects the reader: "none" (the default), "codex", "claude", or
+	// the generic "command" reader below.
 	Reader string `json:"reader,omitempty"`
+	// Command is the argv the "command" reader runs, whose stdout it parses
+	// as JSON. The {binary} placeholder substitutes the executable the agent
+	// itself was resolved to, so --agent-binary reaches the quota call too.
+	Command []string `json:"command,omitempty"`
+	// PercentUsed and ResetAt are dotted paths into that JSON naming the
+	// percentage of the window already consumed and the time it resets.
+	// Either may be omitted when the format does not reference it.
+	PercentUsed string `json:"percentUsed,omitempty"`
+	ResetAt     string `json:"resetAt,omitempty"`
+	// Format is the status-bar template, with {percentUsed}, {percentLeft},
+	// and {resetAt} substituted from the fields above.
+	Format string `json:"format,omitempty"`
+	// Timeout bounds one read, as a Go duration string. A quota call is a
+	// status-bar nicety, so it is never allowed to hang a poll.
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// Quota reader names.
+const (
+	QuotaNone    = "none"
+	QuotaCodex   = "codex"
+	QuotaClaude  = "claude"
+	QuotaCommand = "command"
+)
+
+// DefaultQuotaTimeout bounds one generic quota read when the definition names
+// no timeout of its own.
+const DefaultQuotaTimeout = 30 * time.Second
+
+// defaultQuotaFormat is the template the generic reader renders when the
+// definition names none, matching the shape the built-in readers report in.
+const defaultQuotaFormat = "{percentLeft}% left"
+
+// quotaPlaceholders is every {name} a quota format may substitute.
+var quotaPlaceholders = []string{"percentUsed", "percentLeft", "resetAt"}
+
+// quotaReaders is every reader name the schema accepts.
+var quotaReaders = []string{QuotaNone, QuotaCodex, QuotaClaude, QuotaCommand}
+
+// ReaderName is the reader in force, resolving the empty default to "none".
+func (q Quota) ReaderName() string {
+	if strings.TrimSpace(q.Reader) == "" {
+		return QuotaNone
+	}
+	return q.Reader
+}
+
+// FormatTemplate is the template the generic reader renders.
+func (q Quota) FormatTemplate() string {
+	if strings.TrimSpace(q.Format) == "" {
+		return defaultQuotaFormat
+	}
+	return q.Format
+}
+
+// TimeoutDuration bounds one generic quota read. Validate has already
+// rejected an unparseable value, so a bad one here falls back rather than
+// reporting a second time.
+func (q Quota) TimeoutDuration() time.Duration {
+	if strings.TrimSpace(q.Timeout) == "" {
+		return DefaultQuotaTimeout
+	}
+	timeout, err := time.ParseDuration(q.Timeout)
+	if err != nil || timeout <= 0 {
+		return DefaultQuotaTimeout
+	}
+	return timeout
+}
+
+// Argv renders the generic reader's command, substituting {binary} with the
+// executable the agent was resolved to.
+func (q Quota) Argv(binary string) []string {
+	argv := make([]string, 0, len(q.Command))
+	for _, arg := range q.Command {
+		argv = append(argv, strings.ReplaceAll(arg, "{binary}", binary))
+	}
+	return argv
+}
+
+// validate reports the first thing wrong with the quota block. Fields that
+// belong to the generic reader are rejected on the others rather than
+// ignored, because a "quota" block that silently does nothing looks exactly
+// like a working one until the status bar stays empty.
+func (q Quota) validate() error {
+	reader := q.ReaderName()
+	if !contains(quotaReaders, reader) {
+		return fmt.Errorf(`field "quota.reader": %q must be %s`, q.Reader, JoinOr(quotaReaders))
+	}
+	if reader != QuotaCommand {
+		for field, set := range map[string]bool{
+			"quota.command": len(q.Command) > 0, "quota.percentUsed": q.PercentUsed != "",
+			"quota.resetAt": q.ResetAt != "", "quota.format": q.Format != "",
+			"quota.timeout": q.Timeout != "",
+		} {
+			if set {
+				return fmt.Errorf(`field %q is only meaningful when "quota.reader" is %q`, field, QuotaCommand)
+			}
+		}
+		return nil
+	}
+	if len(q.Command) == 0 {
+		return fmt.Errorf(`field "quota.command" is required when "quota.reader" is %q`, QuotaCommand)
+	}
+	for _, arg := range q.Command {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf(`field "quota.command" cannot contain an empty argument`)
+		}
+	}
+	for _, match := range placeholderPattern.FindAllStringSubmatch(q.FormatTemplate(), -1) {
+		if !contains(quotaPlaceholders, match[1]) {
+			return fmt.Errorf(`field "quota.format": unknown placeholder %s; known placeholders are {%s}`, match[0], strings.Join(sorted(quotaPlaceholders), "}, {"))
+		}
+	}
+	if q.PercentUsed == "" && strings.Contains(q.FormatTemplate(), "{percent") {
+		return fmt.Errorf(`field "quota.percentUsed" is required when "quota.format" substitutes a percentage`)
+	}
+	if q.ResetAt == "" && strings.Contains(q.FormatTemplate(), "{resetAt}") {
+		return fmt.Errorf(`field "quota.resetAt" is required when "quota.format" substitutes {resetAt}`)
+	}
+	if strings.TrimSpace(q.Timeout) != "" {
+		timeout, err := time.ParseDuration(q.Timeout)
+		if err != nil {
+			return fmt.Errorf(`field "quota.timeout": %w`, err)
+		}
+		if timeout <= 0 {
+			return fmt.Errorf(`field "quota.timeout": %q must be positive`, q.Timeout)
+		}
+	}
+	return nil
 }
 
 // Assign values.
@@ -217,6 +347,9 @@ func (d Definition) Validate() error {
 		if strings.TrimSpace(model) == "" {
 			return fmt.Errorf(`field "models" cannot contain an empty value`)
 		}
+	}
+	if err := d.Quota.validate(); err != nil {
+		return err
 	}
 	if target := d.Skills.Target; target != "" && !skillsTargetPattern.MatchString(target) {
 		return fmt.Errorf(`field "skills.target": %q must be a skills.sh target id: lowercase letters, digits, and dashes`, target)

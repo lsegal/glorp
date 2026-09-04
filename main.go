@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,7 +41,7 @@ var errProjectIssueNotFound = errors.New("project issue not found")
 
 // watchFlagSet builds the `glorp watch` flag set. It is also used, without
 // being parsed, to print the command's defaults in `glorp help watch`.
-func watchFlagSet(agentSpecs *agentFlag, filter *filterFlag) *flag.FlagSet {
+func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter *filterFlag) *flag.FlagSet {
 	flags := flag.NewFlagSet("watch", flag.ExitOnError)
 	flags.Duration("interval", 30*time.Second, "time between GitHub issue polls")
 	flags.Bool("poll", false, "poll GitHub instead of waiting for webhooks")
@@ -56,8 +57,9 @@ func watchFlagSet(agentSpecs *agentFlag, filter *filterFlag) *flag.FlagSet {
 	flags.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	flags.Var(agentSpecs, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
 	flags.String("ready-state", "", "project status that marks an issue ready for an agent")
-	flags.String("codex-binary", "codex", "Codex executable")
-	flags.String("claude-binary", "claude", "Claude executable")
+	flags.Var(agentBinaries, "agent-binary", "executable to invoke one agent through, as NAME=PATH (repeatable); overrides the binary its definition names")
+	flags.String("codex-binary", "codex", "Codex executable (alias for --agent-binary codex=PATH)")
+	flags.String("claude-binary", "claude", "Claude executable (alias for --agent-binary claude=PATH)")
 	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (nothing honours the request under -p yet and no alternative lever exists, so this is off by default and currently reaches nobody)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("config", agents.DefaultConfigPath, "agent definition file; read only, never written, and separate from --state")
@@ -77,7 +79,7 @@ func watchFlagSet(agentSpecs *agentFlag, filter *filterFlag) *flag.FlagSet {
 func commandFlags(name string) *flag.FlagSet {
 	switch name {
 	case "watch":
-		return watchFlagSet(&agentFlag{values: []agentSpec{{Name: "codex"}}}, &filterFlag{values: []string{defaultIssueFilter}})
+		return watchFlagSet(&agentFlag{values: []agentSpec{{Name: "codex"}}}, &agentBinaryFlag{}, &filterFlag{values: []string{defaultIssueFilter}})
 	case "ui":
 		return uiFlagSet()
 	case "auth":
@@ -100,8 +102,9 @@ func runWatch(args []string) int {
 	}
 	setAgentRegistry(registry)
 	agentSpecs := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	agentBinaries := agentBinaryFlag{}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
-	flags := watchFlagSet(&agentSpecs, &filter)
+	flags := watchFlagSet(&agentSpecs, &agentBinaries, &filter)
 	flags.Usage = func() {
 		cmd, _ := lookupCommand("watch")
 		fmt.Fprintln(os.Stderr, cmd.usage)
@@ -277,12 +280,6 @@ func runWatch(args []string) int {
 	if ui != nil {
 		wOut = io.Discard
 	}
-	quota := combinedQuotaReader(namedQuotaReaders(agentSpecs.names(), func(agent string) string {
-		if agent == "claude" {
-			return claudeBinary
-		}
-		return codexBinary
-	}))
 	var agentCursor *atomic.Uint64
 	if len(agentSpecs.values) > 1 {
 		agentCursor = &atomic.Uint64{}
@@ -292,7 +289,11 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, Definitions: registry, agentCursor: agentCursor}, Out: wOut}
+	runner := CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, AgentBinaries: agentBinaries.values(), Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, Definitions: registry, agentCursor: agentCursor}
+	// Quota commands are run through the same executable the agent itself is
+	// invoked with, so --agent-binary points both at the same install.
+	quota := combinedQuotaReader(namedQuotaReaders(registry, agentSpecs.names(), runner.binary))
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
@@ -699,6 +700,53 @@ func (f *agentFlag) specs() []string {
 		specs = append(specs, spec.String())
 	}
 	return specs
+}
+
+// agentBinaryFlag collects repeated --agent-binary NAME=PATH values. One
+// executable flag per agent does not scale past the two glorp shipped with,
+// so the agent is named in the value rather than in the flag.
+type agentBinaryFlag struct {
+	paths map[string]string
+}
+
+func (f *agentBinaryFlag) String() string {
+	pairs := make([]string, 0, len(f.paths))
+	for name, path := range f.paths {
+		pairs = append(pairs, name+"="+path)
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, ",")
+}
+
+func (f *agentBinaryFlag) Set(value string) error {
+	name, path, ok := strings.Cut(value, "=")
+	name, path = strings.TrimSpace(name), strings.TrimSpace(path)
+	if !ok || name == "" || path == "" {
+		return fmt.Errorf("agent binary must be written NAME=PATH, such as claude=/opt/homebrew/bin/claude")
+	}
+	// An override for an agent that does not exist is a typo that would
+	// otherwise be silently ignored until the wrong executable ran.
+	registry := agentRegistry()
+	if _, known := registry.Lookup(name); !known {
+		return unknownAgentError(registry, name)
+	}
+	if f.paths == nil {
+		f.paths = make(map[string]string)
+	}
+	f.paths[name] = path
+	return nil
+}
+
+// values renders the overrides for the runner, nil when none were given.
+func (f *agentBinaryFlag) values() map[string]string {
+	if len(f.paths) == 0 {
+		return nil
+	}
+	paths := make(map[string]string, len(f.paths))
+	for name, path := range f.paths {
+		paths[name] = path
+	}
+	return paths
 }
 
 // names lists the agent names, without models, for quota lookups.
@@ -1469,6 +1517,11 @@ func projectStatusError(number int, err error, detail string) error {
 
 type CommandRunner struct {
 	Binary, CodexBinary, ClaudeBinary string
+	// AgentBinaries holds the --agent-binary overrides, keyed by agent name.
+	// It outranks every other source, including the legacy per-agent flags,
+	// because it is the only one that can name an executable for an agent the
+	// config file introduced.
+	AgentBinaries map[string]string
 	// Agents holds every configured agent spec (agent/model:level) to load
 	// balance across when dispatching new issues. AgentName rotates through it
 	// round robin.
@@ -1957,7 +2010,15 @@ func truncateToolUseDetail(value string, isPath bool) string {
 	return string(runes[:claudeToolUseDetailLimit]) + "…"
 }
 
+// binary resolves the executable one agent is invoked through, in the order
+// --agent-binary, the agent's own legacy alias flag, the binary its
+// definition names (a config file's override of it, or the built-in default),
+// and finally the run's default-agent executable for an agent no definition
+// covers.
 func (r CommandRunner) binary(agent string) string {
+	if path := strings.TrimSpace(r.AgentBinaries[agent]); path != "" {
+		return path
+	}
 	switch agent {
 	case "codex":
 		if r.CodexBinary != "" {
@@ -1967,19 +2028,10 @@ func (r CommandRunner) binary(agent string) string {
 		if r.ClaudeBinary != "" {
 			return r.ClaudeBinary
 		}
-	default:
-		// An agent declared in the config file has no executable flag of its
-		// own, and Binary holds the default agent's, so it is invoked through
-		// the executable its own definition names. Registry-driven per-agent
-		// binary flags are issue #489.
-		if definition, ok := r.definition(agent); ok && definition.Binary != "" {
-			return definition.Binary
-		}
 	}
-	if r.Binary != "" {
-		return r.Binary
-	}
-	if definition, ok := r.definition(agent); ok {
+	// Binary holds the default agent's executable, so it never stands in for
+	// another agent's: a definition's own binary comes first.
+	if definition, ok := r.definition(agent); ok && definition.Binary != "" {
 		return definition.Binary
 	}
 	return r.Binary
