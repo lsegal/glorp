@@ -204,8 +204,9 @@ func TestClineLevelsMatchTheCLI(t *testing.T) {
 // the dispatch has to end holding the directory.
 func TestClineDispatchReportsItsCheckoutDirectory(t *testing.T) {
 	checkout := t.TempDir()
+	encoded := jsonStringBody(t, checkout)
 	definition, _ := fakeAgentRun{
-		Stdout: `{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolCallId":"call_1","toolName":"execute_command","output":[{"query":"echo GLORP_CHECKOUT_DIRECTORY=` + checkout + `","result":"GLORP_CHECKOUT_DIRECTORY=` + checkout + `","success":true}]}}\n` +
+		Stdout: `{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolCallId":"call_1","toolName":"execute_command","output":[{"query":"echo GLORP_CHECKOUT_DIRECTORY=` + encoded + `","result":"GLORP_CHECKOUT_DIRECTORY=` + encoded + `","success":true}]}}\n` +
 			`{"ts":"2026-09-04T00:52:27.743Z","type":"agent_event","event":{"type":"content_end","contentType":"text","text":"cloned"}}`,
 	}.install(t, builtinDefinition(t, "cline"))
 	registry, err := agents.NewRegistry(definition)

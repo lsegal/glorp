@@ -3901,7 +3901,7 @@ func TestCheckoutMarkerCaptureWriterReadsMarkerInsideAToolResult(t *testing.T) {
 	var updates []AgentSession
 	capture := &checkoutCapture{onUpdate: func(update AgentSession) { updates = append(updates, update) }}
 	w := &checkoutMarkerCaptureWriter{output: &output, capture: capture}
-	line := `{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolName":"execute_command","output":[{"query":"echo","result":"running\nGLORP_CHECKOUT_DIRECTORY=` + checkout + `\ndone","success":true}]}}` + "\n"
+	line := `{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolName":"execute_command","output":[{"query":"echo","result":"running\nGLORP_CHECKOUT_DIRECTORY=` + jsonStringBody(t, checkout) + `\ndone","success":true}]}}` + "\n"
 	if _, err := io.WriteString(w, line); err != nil {
 		t.Fatal(err)
 	}
@@ -3930,7 +3930,14 @@ func TestCheckoutMarkerCaptureWriterReadsOpencodeAndPlainStreams(t *testing.T) {
 			var updates []AgentSession
 			capture := &checkoutCapture{onUpdate: func(update AgentSession) { updates = append(updates, update) }}
 			w := &checkoutMarkerCaptureWriter{output: io.Discard, capture: capture}
-			text := fmt.Sprintf(line, checkout)
+			// A path inside a JSON string reaches glorp escaped, because the
+			// agent encoded it: a Windows checkout is written with doubled
+			// separators and has to decode back to the path it names.
+			path := checkout
+			if name != "plain" {
+				path = jsonStringBody(t, checkout)
+			}
+			text := fmt.Sprintf(line, path)
 			// Split mid-line so the writer has to reassemble the stream before
 			// scanning it, exactly as a real pipe delivers it.
 			half := len(text) / 2
@@ -3978,9 +3985,20 @@ func TestCheckoutMarkerCaptureWriterIgnoresMarkersThatNameNoCheckout(t *testing.
 	capture := &checkoutCapture{onUpdate: func(update AgentSession) { updates = append(updates, update) }}
 	w := &checkoutMarkerCaptureWriter{output: io.Discard, capture: capture}
 	_, _ = io.WriteString(w, `{"event":{"text":"emit GLORP_CHECKOUT_DIRECTORY=<absolute clone path>"}}`+"\n")
-	_, _ = io.WriteString(w, `{"event":{"text":"GLORP_CHECKOUT_DIRECTORY=`+filepath.ToSlash(filepath.Join(t.TempDir(), "missing"))+`"}}`+"\n")
+	_, _ = io.WriteString(w, `{"event":{"text":"GLORP_CHECKOUT_DIRECTORY=`+jsonStringBody(t, filepath.Join(t.TempDir(), "missing"))+`"}}`+"\n")
 	w.Flush()
 	if len(updates) != 0 {
 		t.Fatalf("invalid checkout metadata was captured: %#v", updates)
 	}
+}
+
+// jsonStringBody renders a value as it appears inside a JSON string, so a test
+// fixture built by hand carries the same escaping an agent's encoder produces.
+func jsonStringBody(t *testing.T, value string) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded[1 : len(encoded)-1])
 }
