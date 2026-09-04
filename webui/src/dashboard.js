@@ -198,29 +198,64 @@ function specAgentName(value) {
 		.split("/")[0];
 }
 
+// probedModelsByAgent indexes the model lists /api/agents reports, keyed by
+// agent and stripped back down to the bare model id. The probe answers with
+// the fully qualified `agent/model` names --agent takes, which is also what a
+// chip's value must be, but the option record keeps the two halves apart.
+export function probedModelsByAgent(statuses) {
+	const models = new Map();
+	for (const status of statuses || []) {
+		if (!status?.name || !status.models?.length) continue;
+		const prefix = `${status.name}/`;
+		models.set(
+			status.name,
+			status.models
+				.map((model) =>
+					String(model).startsWith(prefix)
+						? String(model).slice(prefix.length)
+						: String(model),
+				)
+				.filter(Boolean),
+		);
+	}
+	return models;
+}
+
 // modelOptionsFrom flattens the settings snapshot's agent list into one
 // selectable entry per agent/model pair (issue #582): a fix for #572, which
 // put the multiselect on agents even though picking an agent alone can't
 // choose a model. Selecting a model drives which agent dispatches, so the
-// multiselect belongs here instead. An agent with no declared model
-// allow-list offers itself as a single bare entry, the same spec --agent
-// accepts unqualified.
-export function modelOptionsFrom(snapshot) {
-	const agentOptions = agentOptionsFrom(snapshot);
+// multiselect belongs here instead.
+//
+// Most agent definitions declare no model allow-list, so the snapshot alone
+// used to render them as bare agent names -- a spec that names no model at
+// all, which is exactly what the multiselect exists to choose (issue #589).
+// The models each CLI actually reports come from the same /api/agents probe
+// the chips already read their auth and quota from, so they fill that gap
+// here, and an agent no list can be built for contributes no entry rather
+// than a nonsensical one. A spec the run is already dispatching with is kept
+// regardless, so an active choice can always be switched back off.
+export function modelOptionsFrom(snapshot, statuses, selected) {
+	const probed = probedModelsByAgent(statuses);
 	const options = [];
-	for (const option of agentOptions) {
+	const seen = new Set();
+	const add = (agent, model) => {
+		const value = model ? `${agent}/${model}` : agent;
+		if (!agent || seen.has(value)) return;
+		seen.add(value);
+		options.push({ value, agent, model });
+	};
+	for (const option of agentOptionsFrom(snapshot)) {
 		if (!option?.name) continue;
-		if (option.models?.length) {
-			for (const model of option.models) {
-				options.push({
-					value: `${option.name}/${model}`,
-					agent: option.name,
-					model,
-				});
-			}
-		} else {
-			options.push({ value: option.name, agent: option.name, model: "" });
-		}
+		const models = option.models?.length
+			? option.models
+			: probed.get(option.name) || [];
+		for (const model of models) add(option.name, model);
+	}
+	for (const value of selected || []) {
+		const agent = specAgentName(value);
+		const spec = String(value || "").trim();
+		add(agent, spec.startsWith(`${agent}/`) ? spec.slice(agent.length + 1) : "");
 	}
 	return options;
 }
@@ -242,20 +277,22 @@ export function toggleActiveModel(activeAgents, value, checked) {
 	return Array.from(set);
 }
 
-// agentSummaries collects one status entry per unique agent behind a model
-// options list, in the order each agent's models first appear. #583 moved
-// each agent's auth/quota reading into a chip's hover-only title, so it's no
-// longer visible without hovering every chip; this lets the models tab also
-// render one always-visible status line per agent (issue #585).
-export function agentSummaries(options, statuses) {
+// agentSummaries collects one status entry per registered agent, in the order
+// the settings snapshot lists them. #583 moved each agent's auth/quota
+// reading into a chip's hover-only title, so it's no longer visible without
+// hovering every chip; this lets the models tab also render one always-visible
+// status line per agent (issue #585). It reads the snapshot rather than the
+// model options so an agent that contributes no chip -- one whose models could
+// not be probed (issue #589) -- still says why on its own line.
+export function agentSummaries(snapshot, statuses) {
 	const seen = new Set();
 	const summaries = [];
-	for (const option of options || []) {
-		if (!option?.agent || seen.has(option.agent)) continue;
-		seen.add(option.agent);
+	for (const option of agentOptionsFrom(snapshot)) {
+		if (!option?.name || seen.has(option.name)) continue;
+		seen.add(option.name);
 		summaries.push({
-			agent: option.agent,
-			status: agentStatusFor(statuses, option.agent),
+			agent: option.name,
+			status: agentStatusFor(statuses, option.name),
 		});
 	}
 	return summaries;
