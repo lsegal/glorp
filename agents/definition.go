@@ -25,6 +25,12 @@ type Definition struct {
 	// Binary is the default executable the agent is invoked through. It is
 	// overridable per agent by the run's own binary flags (issue #489).
 	Binary string `json:"binary"`
+	// MinVersion is the lowest version of Binary the definition's argv
+	// templates are known to work with, as a dotted version such as
+	// "0.58.0". Declaring it turns an opaque unrecognized-argument failure
+	// from an older CLI into an error naming both versions (issue #535). An
+	// empty value checks nothing and costs no process.
+	MinVersion string `json:"minVersion,omitempty"`
 	// Args holds the argv template for each mode glorp invokes.
 	Args Args `json:"args"`
 	// Env is extra environment for the child process, layered on top of
@@ -453,6 +459,11 @@ func (d Definition) Validate() error {
 	}
 	if strings.TrimSpace(d.Binary) == "" {
 		return fmt.Errorf(`field "binary" is required`)
+	}
+	if min := strings.TrimSpace(d.MinVersion); min != "" {
+		if _, ok := ParseVersion(min); !ok {
+			return fmt.Errorf(`field "minVersion": %q must be a dotted version such as "0.58.0"`, d.MinVersion)
+		}
 	}
 	if len(d.Args.Run) == 0 {
 		return fmt.Errorf(`field "args.run" is required`)
