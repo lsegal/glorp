@@ -354,12 +354,11 @@ func TestClaimStandingHonoursStaleClaimAge(t *testing.T) {
 	if standing, err := w.claimStanding(context.Background(), target); err != nil || standing.OwnerFresh || standing.OwnerClaimed || standing.SelfHolds {
 		t.Fatalf("unclaimed work should never look claimed, got %+v err=%v", standing, err)
 	}
-	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Hour)})
-	if standing, err := w.claimStanding(context.Background(), target); err != nil || !standing.OwnerFresh || standing.Owner != "OTHER" || standing.OwnerAge < time.Hour {
-		t.Fatalf("a 1h-old claim is younger than the 2h staleness window, got %+v err=%v", standing, err)
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-4 * time.Minute)})
+	if standing, err := w.claimStanding(context.Background(), target); err != nil || !standing.OwnerFresh || standing.Owner != "OTHER" || standing.OwnerAge < 4*time.Minute {
+		t.Fatalf("a 4m-old claim is younger than the 5m staleness window, got %+v err=%v", standing, err)
 	}
-	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
-	w.staleClaim = 30 * time.Minute
+	w.staleClaim = 3 * time.Minute
 	if standing, err := w.claimStanding(context.Background(), target); err != nil || standing.OwnerFresh || standing.Owner != "OTHER" {
 		t.Fatalf("claims older than the staleness window should be reapable, got %+v err=%v", standing, err)
 	}
@@ -371,9 +370,9 @@ func TestClaimStandingReportsThisInstanceAsHolderOfItsOwnNewestClaim(t *testing.
 	target := ownershipTarget{Repo: "o/r", Number: 1}
 
 	comments.inject("o/r", 1, Comment{Body: signComment(askClaimBody, "SELF"), CreatedAt: time.Now().Add(-7 * time.Minute)})
-	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-5 * time.Minute)})
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-4 * time.Minute)})
 	standing, err := w.claimStanding(context.Background(), target)
-	if err != nil || !standing.SelfHolds || standing.OwnerClaimed || standing.SelfAge < 5*time.Minute {
+	if err != nil || !standing.SelfHolds || standing.OwnerClaimed || standing.SelfAge < 4*time.Minute {
 		t.Fatalf("this instance's own recent claim should be reported as held by it, got %+v err=%v", standing, err)
 	}
 
@@ -401,7 +400,7 @@ func TestClaimStandingReportsThisInstanceAsHolderOfItsOwnNewestClaim(t *testing.
 func TestNegotiateContestedIssuesDoesNotReAskWorkThisInstanceAlreadyClaimed(t *testing.T) {
 	comments := newFakeCommentClient()
 	comments.inject("o/r", 1, Comment{Body: signComment(askClaimBody, "SELF"), CreatedAt: time.Now().Add(-7 * time.Minute)})
-	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-5 * time.Minute)})
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "SELF"), CreatedAt: time.Now().Add(-4 * time.Minute)})
 	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
 	pending := []pendingIssue{{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}, contested: true}}
 	seen := map[string]bool{issueKey(pending[0].issue): true}
@@ -596,9 +595,9 @@ func TestNegotiateContestedIssuesLogsStaleAndFreshClaimAges(t *testing.T) {
 		t.Fatalf("only the stale issue should be reaped, got %+v", result)
 	}
 	requireLogged(t, logs.String(),
-		"periodic reap, skipping anything claimed within 2h0m0s",
-		"issue #1 claimed by instance OTHER 1m0s ago (within 2h0m0s); skipping reap",
-		"issue #2 last claimed by instance OTHER 3h0m0s ago (older than 2h0m0s); treating it as abandoned",
+		"periodic reap, skipping anything claimed within 5m0s",
+		"issue #1 claimed by instance OTHER 1m0s ago (within 5m0s); skipping reap",
+		"issue #2 last claimed by instance OTHER 3h0m0s ago (older than 5m0s); treating it as abandoned",
 	)
 }
 
@@ -1062,11 +1061,11 @@ func TestClaimStandingBreaksTimestampTiesBetweenInstances(t *testing.T) {
 // alone, so before issue #511 an issue another instance had just claimed on
 // the ticket was dispatched as uncontested and worked twice. The claim
 // standing on the ticket is now read before the pickup.
-func TestStandDownForStandingClaimsDropsFreshlyClaimedPickups(t *testing.T) {
+func TestStandDownForStandingClaimsUsesTheFiveMinuteCooldownThenNegotiates(t *testing.T) {
 	comments := newFakeCommentClient()
-	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-7 * time.Minute)})
-	comments.inject("o/r", 2, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-3 * time.Hour)})
-	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard}
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-time.Minute)})
+	comments.inject("o/r", 2, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: time.Now().Add(-7 * time.Minute)})
+	w := &Glorp{Comments: comments, Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
 	pending := []pendingIssue{
 		{issue: Issue{Number: 1, Repository: "o/r", Target: "o/r"}},
 		{issue: Issue{Number: 2, Repository: "o/r", Target: "o/r"}},
@@ -1074,14 +1073,16 @@ func TestStandDownForStandingClaimsDropsFreshlyClaimedPickups(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	result := w.standDownForStandingClaims(context.Background(), nil, pending, seen)
-	if len(result) != 2 || result[0].issue.Number != 2 || result[1].issue.Number != 3 {
-		t.Fatalf("result = %+v, want the stale claim (#2) and the unclaimed issue (#3) to survive", result)
+	if len(result) != 2 || result[0].issue.Number != 2 || !result[0].contested || result[1].issue.Number != 3 {
+		t.Fatalf("result = %+v, want the older claim (#2) routed to negotiation and the unclaimed issue (#3) to survive", result)
 	}
 	if !seen[issueKey(Issue{Number: 1, Repository: "o/r", Target: "o/r"})] {
 		t.Fatalf("the issue stood down for must stay marked as seen so the next poll negotiates for it")
 	}
-	if comments.posts != 0 {
-		t.Fatalf("standing down must not post anything, got %d comment(s)", comments.posts)
+	w.negotiateContestedIssues(context.Background(), nil, result, seen, false)
+	w.awaitNegotiations()
+	if comments.posts != 2 {
+		t.Fatalf("the older claim should receive an ask and a claim, got %d comment(s)", comments.posts)
 	}
 }
 

@@ -582,13 +582,12 @@ func (w *Glorp) releasePendingClaim(ctx context.Context, pending pendingIssue, r
 // read for the path that skips negotiation entirely.
 //
 // A candidate claimed by another instance within staleClaimDuration is
-// dropped from the batch and left marked as seen, which is what makes the
-// next poll treat it as contested and route it through the handshake, where
-// a claim that goes stale is reaped as abandoned in the usual way. Work this
-// instance holds the newest claim on is its own and passes through, as does
-// work whose newest foreign claim has already expired, so a genuinely
-// abandoned ticket is still picked up. A comment read that fails leaves the
-// candidate alone rather than stalling dispatch on an unreachable API.
+// dropped from the batch and left marked as seen. An older foreign claim is
+// routed through the ownership handshake instead of being dispatched outright:
+// it asks the other instance whether it is still working before taking over.
+// Work this instance holds the newest claim on is its own and passes through.
+// A comment read that fails leaves the candidate alone rather than stalling
+// dispatch on an unreachable API.
 func (w *Glorp) standDownForStandingClaims(ctx context.Context, checker WorkClosureChecker, newIssues []pendingIssue, seen map[string]bool) []pendingIssue {
 	if w.Comments == nil || len(newIssues) == 0 {
 		return newIssues
@@ -613,8 +612,14 @@ func (w *Glorp) standDownForStandingClaims(ctx context.Context, checker WorkClos
 				keep[i] = true
 				return
 			}
-			if standing.SelfHolds || !standing.OwnerFresh {
+			if standing.SelfHolds || !standing.OwnerClaimed {
 				keep[i] = true
+				return
+			}
+			if !standing.OwnerFresh {
+				newIssues[i].contested = true
+				keep[i] = true
+				w.logf("issue #%d was claimed by instance %s %s ago (older than %s); asking before pickup on %s", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter(), target.describe())
 				return
 			}
 			w.logf("issue #%d not picked up as uncontested; instance %s claimed it %s ago (within %s) on %s", issue.Number, standing.Owner, standing.OwnerAge.Round(time.Second), w.staleClaimAfter(), target.describe())
