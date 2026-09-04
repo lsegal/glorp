@@ -216,6 +216,12 @@ type JSONL struct {
 	// Ignore lists the event types dropped before anything is read out of
 	// them, for the bookkeeping events a stream repeats on every turn.
 	Ignore []string `json:"ignore,omitempty"`
+	// TextDelta says the text an event carries is a fragment of a message
+	// rather than a whole one, as a CLI that streams token-sized deltas
+	// emits. The decoder then buffers what Text names and flushes it as one
+	// line on the next event carrying no text or at the end of the stream,
+	// instead of terminating a line per event. It needs Text.
+	TextDelta bool `json:"textDelta,omitempty"`
 }
 
 // Skills names where an agent reads glorp's skills from.

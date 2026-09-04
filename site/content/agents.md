@@ -192,8 +192,11 @@ A **path** is dot-separated object keys, each optionally suffixed with `[]` to s
 | `output.jsonl.toolName` | path | one of `text` or `toolName` | A tool call's name, rendered as the `Running: ...` progress lines. |
 | `output.jsonl.toolInput` | path | no | The tool call's input object. Needs `toolName`. Paths that share a prefix are paired element by element, so a name and its own input come from the same block. |
 | `output.jsonl.ignore` | array of string | no | Event types dropped before anything is read out of them, for the bookkeeping events a stream repeats every turn. Needs `type`. |
+| `output.jsonl.textDelta` | bool | no | The text an event carries is a fragment of a message rather than a whole one. Needs `text`. Defaults to `false`. |
 
 A decoder that reads neither `text` nor `toolName` renders nothing, so at least one is required.
+
+`textDelta` is for a CLI whose JSON mode streams token-sized fragments. `muse exec --json` emits its message a delta at a time -- `"a.txt "`, `"contains "`, `"hi"` -- and the default decoder writes a line per event, so the sentence is broken across three lines. With `"textDelta": true` the decoder joins the fragments instead and ends the line on the first event carrying no text: a tool call, an event of a shape the definition describes nothing in, a line that is not JSON, or the end of the stream. An event type listed in `ignore` is dropped before any of that, so a bookkeeping event repeated mid-message does not split it. A definition that leaves `textDelta` out decodes exactly as it did before the field existed, one line per event, which is right for an envelope whose text events carry whole messages.
 
 ### `missingSession`
 
@@ -368,7 +371,15 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "binary": "muse",
   "levels": ["none", "minimal", "low", "medium", "high", "xhigh", "ultra"],
   "session": {"assign": "glorp"},
-  "output": {"format": "text"},
+  "output": {
+    "format": "jsonl",
+    "jsonl": {
+      "type": "payload_type",
+      "text": "payload.text",
+      "textDelta": true,
+      "ignore": ["run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled", "tool.result"]
+    }
+  },
   "skills": {"target": "universal"},
   "args": {
     "run": [
@@ -378,7 +389,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
       {"when": "!yolo", "args": ["--approval-mode", "never"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--reasoning-effort", "{level}"]},
-      {"args": ["--user-input-auto-resolve"]},
+      {"args": ["--user-input-auto-resolve", "--json"]},
       {"args": ["{prompt}"]}
     ],
     "resume": [
@@ -387,7 +398,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
       {"when": "!yolo", "args": ["--approval-mode", "never"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--reasoning-effort", "{level}"]},
-      {"args": ["--user-input-auto-resolve"]},
+      {"args": ["--user-input-auto-resolve", "--json"]},
       {"args": ["{prompt}"]}
     ],
     "vision": [

@@ -82,6 +82,10 @@ type jsonlOutputWriter struct {
 	config  agents.JSONL
 	output  io.Writer
 	ignored map[string]bool
+	// pending holds the text fragments of a message still being streamed,
+	// used only when the definition declares its text events are deltas. It
+	// is guarded by lineWriter.mu along with the line buffer itself.
+	pending []string
 }
 
 func newJSONLOutputWriter(output io.Writer, config agents.JSONL) *jsonlOutputWriter {
@@ -106,12 +110,21 @@ func (w *jsonlOutputWriter) writeLine(line []byte) error {
 		// A line that is not an event at all is still the agent talking:
 		// banners, warnings, and stack traces all arrive this way, and a
 		// dropped line is exactly the output someone debugging a failed run
-		// came looking for.
+		// came looking for. A message being streamed as deltas ends first, so
+		// the banner does not land in the middle of the sentence.
+		if w.config.TextDelta {
+			if err := w.flushPending(nil); err != nil {
+				return err
+			}
+		}
 		_, err = fmt.Fprintln(w.output, string(line))
 		return err
 	}
 	if w.skips(event) {
 		return nil
+	}
+	if w.config.TextDelta {
+		return w.writeDelta(event)
 	}
 	texts := jsonlStrings(event, w.config.Text)
 	for _, call := range w.toolCalls(event) {
@@ -124,6 +137,53 @@ func (w *jsonlOutputWriter) writeLine(line []byte) error {
 	}
 	_, err := fmt.Fprintln(w.output, strings.Join(texts, "\n"))
 	return err
+}
+
+// writeDelta decodes one event of a stream whose text arrives as token-sized
+// fragments. Buffering them and ending the line only when the text stops is
+// what turns "a.txt ", "contains ", "hi" into the sentence it spells, rather
+// than the three lines the event-per-line decoder would write.
+func (w *jsonlOutputWriter) writeDelta(event any) error {
+	fragments := jsonlFragments(event, w.config.Text)
+	w.pending = append(w.pending, fragments...)
+	calls := w.toolCalls(event)
+	if len(fragments) > 0 && len(calls) == 0 {
+		// The message is still being written. It ends on the next event that
+		// adds nothing to it, or at the end of the stream.
+		return nil
+	}
+	return w.flushPending(calls)
+}
+
+// flushPending writes the buffered message followed by the progress lines of
+// the event that ended it. Either may be empty: an event of a shape the
+// definition does not describe ends a message without adding a line of its own.
+func (w *jsonlOutputWriter) flushPending(calls []string) error {
+	var texts []string
+	if joined := strings.TrimSpace(strings.Join(w.pending, "")); joined != "" {
+		texts = append(texts, joined)
+	}
+	w.pending = nil
+	for _, call := range calls {
+		texts = append(texts, "Running: "+call)
+	}
+	if len(texts) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintln(w.output, strings.Join(texts, "\n"))
+	return err
+}
+
+// Flush ends the partial line the agent left, then writes the message the
+// stream stopped in the middle of, which for a delta stream is the last thing
+// the agent said.
+func (w *jsonlOutputWriter) Flush() error {
+	if err := w.lineWriter.Flush(); err != nil {
+		return err
+	}
+	w.lineWriter.mu.Lock()
+	defer w.lineWriter.mu.Unlock()
+	return w.flushPending(nil)
 }
 
 // skips reports whether the event's type is one the definition drops.
@@ -231,6 +291,22 @@ func jsonlStrings(value any, path string) []string {
 			continue
 		}
 		if text = strings.TrimSpace(text); text != "" {
+			found = append(found, text)
+		}
+	}
+	return found
+}
+
+// jsonlFragments returns the strings a path names without trimming them, since
+// the space between two deltas is part of the message they spell. Empty
+// strings are dropped: they add nothing to join.
+func jsonlFragments(value any, path string) []string {
+	if path == "" {
+		return nil
+	}
+	var found []string
+	for _, item := range jsonlLookup(value, path) {
+		if text, ok := item.(string); ok && text != "" {
 			found = append(found, text)
 		}
 	}

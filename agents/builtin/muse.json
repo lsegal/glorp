@@ -3,7 +3,15 @@
   "binary": "muse",
   "levels": ["none", "minimal", "low", "medium", "high", "xhigh", "ultra"],
   "session": {"assign": "glorp"},
-  "output": {"format": "text"},
+  "output": {
+    "format": "jsonl",
+    "jsonl": {
+      "type": "payload_type",
+      "text": "payload.text",
+      "textDelta": true,
+      "ignore": ["run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled", "tool.result"]
+    }
+  },
   "skills": {"target": "universal"},
   "args": {
     "run": [
@@ -13,7 +21,7 @@
       {"when": "!yolo", "args": ["--approval-mode", "never"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--reasoning-effort", "{level}"]},
-      {"args": ["--user-input-auto-resolve"]},
+      {"args": ["--user-input-auto-resolve", "--json"]},
       {"args": ["{prompt}"]}
     ],
     "resume": [
@@ -22,7 +30,7 @@
       {"when": "!yolo", "args": ["--approval-mode", "never"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--reasoning-effort", "{level}"]},
-      {"args": ["--user-input-auto-resolve"]},
+      {"args": ["--user-input-auto-resolve", "--json"]},
       {"args": ["{prompt}"]}
     ],
     "vision": [
