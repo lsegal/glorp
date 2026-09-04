@@ -77,7 +77,7 @@ func (d Definition) Render(mode Mode, values Values) []string {
 	case ModeRun:
 		fragments = d.Args.Run
 	case ModeResume:
-		fragments = d.Args.Resume
+		fragments = d.resumeFragments()
 	case ModeVision:
 		fragments = d.Args.Vision
 	}
@@ -102,11 +102,23 @@ func (d Definition) Supports(mode Mode) bool {
 	case ModeRun:
 		return len(d.Args.Run) > 0
 	case ModeResume:
-		return len(d.Args.Resume) > 0
+		return len(d.resumeFragments()) > 0
 	case ModeVision:
 		return len(d.Args.Vision) > 0
 	}
 	return false
+}
+
+// resumeFragments is the template a resume renders. An agent that declares no
+// resumable session (session.assign "none") may leave args.resume out, and
+// falls back to its run template: glorp only ever resumes such an agent to
+// recover work, and the recovery prompt makes that re-run do the recovering.
+// The fallback is explicit here because rendering nothing fails the job.
+func (d Definition) resumeFragments() []Fragment {
+	if len(d.Args.Resume) == 0 && d.Session.Assign == AssignNone {
+		return d.Args.Run
+	}
+	return d.Args.Resume
 }
 
 func fragmentApplies(fragment Fragment, values Values) bool {

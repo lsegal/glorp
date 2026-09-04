@@ -136,9 +136,13 @@ func (a AllowList) validate(field string) error {
 // Args are the argv templates for the three shapes of invocation glorp makes:
 // a fresh run, a resume of an earlier session, and the one-shot vision call
 // browser mode makes on a screenshot.
+//
+// Resume may be left out by an agent whose Session.Assign is AssignNone: it
+// has no session to continue, so a recovery renders Run again rather than a
+// resume template that would only ever be a copy of it.
 type Args struct {
 	Run    []Fragment `json:"run"`
-	Resume []Fragment `json:"resume"`
+	Resume []Fragment `json:"resume,omitempty"`
 	Vision []Fragment `json:"vision,omitempty"`
 }
 
@@ -457,8 +461,12 @@ func (d Definition) Validate() error {
 	if len(d.Args.Run) == 0 {
 		return fmt.Errorf(`field "args.run" is required`)
 	}
-	if len(d.Args.Resume) == 0 {
-		return fmt.Errorf(`field "args.resume" is required`)
+	// A resume template is required of every agent glorp can hold a session
+	// ID for. An agent that declares session.assign "none" has no session to
+	// resume, so it may leave args.resume out and have a recovery re-run its
+	// run template instead of duplicating it verbatim.
+	if len(d.Args.Resume) == 0 && d.Session.Assign != AssignNone {
+		return fmt.Errorf(`field "args.resume" is required unless "session.assign" is %q`, AssignNone)
 	}
 	for mode, fragments := range map[string][]Fragment{
 		"args.run": d.Args.Run, "args.resume": d.Args.Resume, "args.vision": d.Args.Vision,

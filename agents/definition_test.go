@@ -165,6 +165,10 @@ func TestInvalidDefinitionsNameTheirField(t *testing.T) {
 		{"no binary", func(d *Definition) { d.Binary = "" }, `"binary"`},
 		{"no run template", func(d *Definition) { d.Args.Run = nil }, `"args.run"`},
 		{"no resume template", func(d *Definition) { d.Args.Resume = nil }, `"args.resume"`},
+		{"no resume template with a captured session", func(d *Definition) {
+			d.Args.Resume = nil
+			d.Session = Session{Assign: AssignCapture, Capture: `session (\S+)`}
+		}, `"args.resume"`},
 		{"empty fragment", func(d *Definition) { d.Args.Run = []Fragment{{}} }, `"args.run"[0].args`},
 		{"unknown condition", func(d *Definition) {
 			d.Args.Run = []Fragment{{When: "sandbox", Args: []string{"x"}}}
@@ -476,5 +480,81 @@ func TestAllowListRoundTripsItsThreeStates(t *testing.T) {
 				t.Fatalf("round trip lost the state: %#v", again.Levels)
 			}
 		})
+	}
+}
+
+// TestSessionlessAgentMayOmitResume pins the answer issue #541 chose: an agent
+// that declares no resumable session may leave args.resume out, and a resume
+// renders its run template rather than nothing. Rendering nothing would fail
+// the job it was supposed to recover, so the fallback is the whole point.
+func TestSessionlessAgentMayOmitResume(t *testing.T) {
+	definition := Definition{
+		Name: "acme", Binary: "acme",
+		Args:    Args{Run: []Fragment{{Args: []string{"--go"}}, {When: "model", Args: []string{"--model", "{model}"}}, {Args: []string{"{prompt}"}}}},
+		Session: Session{Assign: AssignNone},
+		Output:  Output{Format: FormatText},
+	}
+	if err := definition.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil", err)
+	}
+	if !definition.Supports(ModeResume) {
+		t.Error("Supports(ModeResume) = false, want true through the run fallback")
+	}
+	values := Values{Prompt: "continue", Model: "acme-1", Session: "sess-1"}
+	want := []string{"--go", "--model", "acme-1", "continue"}
+	if got := definition.Render(ModeResume, values); !reflect.DeepEqual(got, want) {
+		t.Errorf("Render(ModeResume) = %q, want %q", got, want)
+	}
+	// A declared resume still wins over the fallback.
+	definition.Args.Resume = []Fragment{{Args: []string{"--continue", "{prompt}"}}}
+	if got, want := definition.Render(ModeResume, values), []string{"--continue", "continue"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Render(ModeResume) with a declared resume = %q, want %q", got, want)
+	}
+}
+
+// TestSessionlessBuiltinsResumeAsTheyRan checks cline and opencode recover
+// exactly as they did when each duplicated its run template under "resume":
+// the argv a resume renders is still the argv a fresh run renders.
+func TestSessionlessBuiltinsResumeAsTheyRan(t *testing.T) {
+	registry := MustBuiltin()
+	for _, name := range []string{"cline", "opencode"} {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("Lookup(%q) missing", name)
+		}
+		if definition.Session.Assign != AssignNone {
+			t.Fatalf("%s session.assign = %q, want %q", name, definition.Session.Assign, AssignNone)
+		}
+		if len(definition.Args.Resume) != 0 {
+			t.Errorf("%s declares args.resume, which duplicates its run template", name)
+		}
+		values := Values{Prompt: "continue", Model: "m", Level: "high"}
+		run, resume := definition.Render(ModeRun, values), definition.Render(ModeResume, values)
+		if len(resume) == 0 || !reflect.DeepEqual(run, resume) {
+			t.Errorf("%s resume argv = %q, want the run argv %q", name, resume, run)
+		}
+	}
+}
+
+// TestResumingAgentsKeepTheirOwnTemplate checks the fallback is confined to
+// sessionless agents: an agent glorp holds a session ID for still resumes with
+// the arguments its definition declares.
+func TestResumingAgentsKeepTheirOwnTemplate(t *testing.T) {
+	registry := MustBuiltin()
+	for _, name := range []string{"codex", "claude", "gemini", "muse"} {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("Lookup(%q) missing", name)
+		}
+		if len(definition.Args.Resume) == 0 {
+			t.Errorf("%s declares no args.resume", name)
+		}
+		// The fallback must not reach these: a resume renders the resume
+		// fragments the definition declares, whatever the run declares.
+		values := Values{Prompt: "continue", Session: "sess-1"}
+		declared := Definition{Args: Args{Run: definition.Args.Resume}}
+		if got, want := definition.Render(ModeResume, values), declared.Render(ModeRun, values); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s resume argv = %q, want its declared template %q", name, got, want)
+		}
 	}
 }

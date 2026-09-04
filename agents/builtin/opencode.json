@@ -12,12 +12,6 @@
       {"when": "level", "args": ["--variant", "{level}"]},
       {"args": ["{prompt}"]}
     ],
-    "resume": [
-      {"args": ["run", "--auto"]},
-      {"when": "model", "args": ["--model", "{model}"]},
-      {"when": "level", "args": ["--variant", "{level}"]},
-      {"args": ["{prompt}"]}
-    ],
     "vision": [
       {"args": ["run", "--auto", "--file", "{image}"]},
       {"when": "model", "args": ["--model", "{model}"]},
