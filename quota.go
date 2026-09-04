@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -156,17 +157,35 @@ func readClaudeQuota(ctx context.Context, binary string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var response struct {
-		Result string `json:"result"`
-	}
-	if err := json.Unmarshal(out, &response); err != nil {
-		return "", err
-	}
-	quota := formatClaudeQuota(response.Result)
+	quota := formatClaudeQuota(claudeUsageText(out))
 	if quota == "" {
 		return "", fmt.Errorf("claude usage response missing session percentage")
 	}
 	return quota, nil
+}
+
+// claudeUsageText pulls the usage report out of what the CLI printed. The
+// result is meant to be one JSON object, but the CLI also prints diagnostics
+// from whatever it loaded on the way -- MCP server warnings, for one -- onto
+// the same stream, and decoding the whole stream strictly turns a perfectly
+// readable usage report into "unavailable". So the JSON values on stdout are
+// decoded one at a time and the first non-empty result wins; when none of it
+// decodes, the raw output is used instead, because the usage lines the
+// patterns look for survive JSON encoding unchanged.
+func claudeUsageText(out []byte) string {
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	for {
+		var response struct {
+			Result string `json:"result"`
+		}
+		if err := decoder.Decode(&response); err != nil {
+			break
+		}
+		if strings.TrimSpace(response.Result) != "" {
+			return response.Result
+		}
+	}
+	return string(out)
 }
 
 // claudeQuotaRequest is the "/usage" slash command: a local status report
