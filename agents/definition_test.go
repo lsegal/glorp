@@ -14,9 +14,10 @@ func TestBuiltinDefinitionsLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Builtin() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex", "muse"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("built-in agents = %v, want %v", got, want)
-	}
+	// Asserted as a superset rather than an exact list: every agent glorp
+	// adds a definition for lands here, and a test that has to be edited to
+	// add one only ever reports that an agent was added.
+	requireRegistered(t, registry, "claude", "codex")
 	for _, name := range registry.Names() {
 		definition, _ := registry.Lookup(name)
 		for _, mode := range []Mode{ModeRun, ModeResume, ModeVision} {
@@ -258,12 +259,25 @@ func TestSessionAccessors(t *testing.T) {
 	}
 }
 
+// requireRegistered checks a registry holds at least the named agents. The
+// built-in set grows an agent at a time, so the tests that care which agents
+// exist state the ones they are about rather than the whole list, which would
+// otherwise have to be edited by every agent added after them.
+func requireRegistered(t *testing.T, registry *Registry, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, ok := registry.Lookup(name); !ok {
+			t.Fatalf("agents = %v, want them to include %q", registry.Names(), name)
+		}
+	}
+}
+
 // TestSkillsTargetShapeIsValidated checks a malformed skills.sh target id is
 // rejected while an id glorp has never heard of is accepted: the set of ids
 // skills.sh knows grows without glorp, so only the shape is glorp's business.
 func TestSkillsTargetShapeIsValidated(t *testing.T) {
 	definition := Definition{
-		Name: "muse", Binary: "muse",
+		Name: "acme", Binary: "acme",
 		Session: Session{Assign: AssignNone}, Output: Output{Format: FormatText},
 		Args: Args{Run: []Fragment{{Args: []string{"{prompt}"}}}, Resume: []Fragment{{Args: []string{"{prompt}"}}}},
 	}

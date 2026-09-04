@@ -73,7 +73,8 @@ func TestUnknownAgentSpecListsTheKnownAgents(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown agent was accepted")
 	}
-	for _, want := range []string{`unknown agent "gemini"`, "claude, codex, muse"} {
+	want := append([]string{`unknown agent "gemini"`}, agents.MustBuiltin().Names()...)
+	for _, want := range want {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want it to mention %s", err, want)
 		}
