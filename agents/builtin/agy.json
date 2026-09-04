@@ -6,7 +6,8 @@
   "output": {"format": "text"},
   "skills": {"target": "antigravity-cli"},
   "doctor": {
-    "models": ["{binary}", "models"]
+    "models": ["{binary}", "models"],
+    "modelPattern": "^[A-Za-z0-9][A-Za-z0-9 ._/:()-]*$"
   },
   "args": {
     "run": [
