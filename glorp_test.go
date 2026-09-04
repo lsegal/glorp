@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -3887,4 +3888,117 @@ func TestConfirmIssueClosedReportsAnUnansweredCheck(t *testing.T) {
 	if closed, answered := w.confirmIssueClosed(context.Background(), src, Issue{Number: 7, Repository: "o/r"}); closed || !answered {
 		t.Fatalf("confirmIssueClosed(open) = (%v, %v), want (false, true)", closed, answered)
 	}
+}
+
+// TestCheckoutMarkerCaptureWriterReadsMarkerInsideAToolResult covers issue
+// #552: cline announces the checkout by running a shell command, so the marker
+// only ever reaches glorp inside a content_end tool result, which the JSONL
+// decoder never reads because the definition maps only text and tool names.
+// Scanning the raw stream before decoding finds it wherever the agent put it.
+func TestCheckoutMarkerCaptureWriterReadsMarkerInsideAToolResult(t *testing.T) {
+	checkout := t.TempDir()
+	var output bytes.Buffer
+	var updates []AgentSession
+	capture := &checkoutCapture{onUpdate: func(update AgentSession) { updates = append(updates, update) }}
+	w := &checkoutMarkerCaptureWriter{output: &output, capture: capture}
+	line := `{"ts":"2026-09-04T00:52:26.311Z","type":"agent_event","event":{"type":"content_end","contentType":"tool","toolName":"execute_command","output":[{"query":"echo","result":"running\nGLORP_CHECKOUT_DIRECTORY=` + jsonStringBody(t, checkout) + `\ndone","success":true}]}}` + "\n"
+	if _, err := io.WriteString(w, line); err != nil {
+		t.Fatal(err)
+	}
+	w.Flush()
+	if got, want := output.String(), line; got != want {
+		t.Fatalf("forwarded output = %q, want %q", got, want)
+	}
+	if want := []AgentSession{{CheckoutDirectory: checkout}}; !reflect.DeepEqual(updates, want) {
+		t.Fatalf("captured metadata = %#v, want %#v", updates, want)
+	}
+}
+
+// TestCheckoutMarkerCaptureWriterReadsOpencodeAndPlainStreams proves the scan
+// is agent-independent, which is the point of reading glorp's own marker off
+// the raw stream: opencode's part-shaped tool state carries it in a field its
+// definition does not map either, and a plain-text agent's line is scanned as
+// it is written.
+func TestCheckoutMarkerCaptureWriterReadsOpencodeAndPlainStreams(t *testing.T) {
+	for name, line := range map[string]string{
+		"opencode": `{"type":"part","part":{"type":"tool","tool":"bash","state":{"status":"completed","output":"GLORP_CHECKOUT_DIRECTORY=%s"}}}`,
+		"plain":    "GLORP_CHECKOUT_DIRECTORY=%s",
+		"chunked":  `{"type":"content_end","event":{"output":[{"result":"GLORP_CHECKOUT_DIRECTORY=%s"}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkout := t.TempDir()
+			var updates []AgentSession
+			capture := &checkoutCapture{onUpdate: func(update AgentSession) { updates = append(updates, update) }}
+			w := &checkoutMarkerCaptureWriter{output: io.Discard, capture: capture}
+			// A path inside a JSON string reaches glorp escaped, because the
+			// agent encoded it: a Windows checkout is written with doubled
+			// separators and has to decode back to the path it names.
+			path := checkout
+			if name != "plain" {
+				path = jsonStringBody(t, checkout)
+			}
+			text := fmt.Sprintf(line, path)
+			// Split mid-line so the writer has to reassemble the stream before
+			// scanning it, exactly as a real pipe delivers it.
+			half := len(text) / 2
+			for _, chunk := range []string{text[:half], text[half:]} {
+				if _, err := io.WriteString(w, chunk); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w.Flush()
+			if want := []AgentSession{{CheckoutDirectory: checkout}}; !reflect.DeepEqual(updates, want) {
+				t.Fatalf("captured metadata = %#v, want %#v", updates, want)
+			}
+		})
+	}
+}
+
+// TestCheckoutCaptureReportsTheCheckoutOnce keeps the raw scan and the decoded
+// scan from both reporting the same path: they share one capture, so whichever
+// reads the marker first is the only one that updates the session.
+func TestCheckoutCaptureReportsTheCheckoutOnce(t *testing.T) {
+	checkout := t.TempDir()
+	var updates []AgentSession
+	capture := &checkoutCapture{onUpdate: func(update AgentSession) { updates = append(updates, update) }}
+	raw := &checkoutMarkerCaptureWriter{output: io.Discard, capture: capture}
+	decoded := &sessionMetadataCaptureWriter{output: io.Discard, checkout: capture, onUpdate: func(AgentSession) {
+		t.Fatal("the decoded scan updated the session through its own callback")
+	}}
+	marker := "GLORP_CHECKOUT_DIRECTORY=" + checkout + "\n"
+	if _, err := io.WriteString(raw, marker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(decoded, marker); err != nil {
+		t.Fatal(err)
+	}
+	if want := []AgentSession{{CheckoutDirectory: checkout}}; !reflect.DeepEqual(updates, want) {
+		t.Fatalf("captured metadata = %#v, want %#v", updates, want)
+	}
+}
+
+// TestCheckoutMarkerCaptureWriterIgnoresMarkersThatNameNoCheckout keeps the
+// raw scan from acting on the marker's own documentation: the gh-fix skill
+// text an agent may read back names a placeholder rather than a path.
+func TestCheckoutMarkerCaptureWriterIgnoresMarkersThatNameNoCheckout(t *testing.T) {
+	var updates []AgentSession
+	capture := &checkoutCapture{onUpdate: func(update AgentSession) { updates = append(updates, update) }}
+	w := &checkoutMarkerCaptureWriter{output: io.Discard, capture: capture}
+	_, _ = io.WriteString(w, `{"event":{"text":"emit GLORP_CHECKOUT_DIRECTORY=<absolute clone path>"}}`+"\n")
+	_, _ = io.WriteString(w, `{"event":{"text":"GLORP_CHECKOUT_DIRECTORY=`+jsonStringBody(t, filepath.Join(t.TempDir(), "missing"))+`"}}`+"\n")
+	w.Flush()
+	if len(updates) != 0 {
+		t.Fatalf("invalid checkout metadata was captured: %#v", updates)
+	}
+}
+
+// jsonStringBody renders a value as it appears inside a JSON string, so a test
+// fixture built by hand carries the same escaping an agent's encoder produces.
+func jsonStringBody(t *testing.T, value string) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded[1 : len(encoded)-1])
 }

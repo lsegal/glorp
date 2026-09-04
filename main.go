@@ -1787,12 +1787,123 @@ type sessionMetadataCaptureWriter struct {
 	// sessionPattern reads the session ID out of a line of agent output. It
 	// comes from the agent's definition, which is the only place the shape of
 	// a session ID is written down; a nil pattern captures nothing.
-	sessionPattern   *regexp.Regexp
-	sessionCaptured  bool
-	checkoutCaptured bool
+	sessionPattern  *regexp.Regexp
+	sessionCaptured bool
+	// checkout is shared with the raw-stream scanner so the marker is
+	// reported once no matter which of the two reads it first.
+	checkout *checkoutCapture
 }
 
 const checkoutDirectoryMarker = "GLORP_CHECKOUT_DIRECTORY="
+
+// checkoutCapture reads glorp's own GLORP_CHECKOUT_DIRECTORY marker out of a
+// line and reports the isolated checkout once. The marker is glorp's protocol
+// rather than any agent's, so the same capture is shared by every writer that
+// might see it: the decoded assistant text, where an agent that narrates the
+// path puts it, and the raw stream, where an agent that announces it through a
+// shell tool leaves it (issue #552).
+type checkoutCapture struct {
+	mu       sync.Mutex
+	captured bool
+	onUpdate func(AgentSession)
+}
+
+// capture scans one line of text for the marker.
+func (c *checkoutCapture) capture(line string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.captured {
+		return
+	}
+	marker := strings.Index(line, checkoutDirectoryMarker)
+	if marker < 0 {
+		return
+	}
+	checkout := strings.TrimSpace(line[marker+len(checkoutDirectoryMarker):])
+	checkout = strings.Trim(checkout, "`*\"' ")
+	if !filepath.IsAbs(checkout) {
+		return
+	}
+	info, err := os.Stat(checkout)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	c.captured = true
+	c.onUpdate(AgentSession{CheckoutDirectory: checkout})
+}
+
+// captureRaw scans one line of an agent's raw stream. A JSON envelope is
+// walked so a marker nested anywhere inside it is found, whichever field the
+// agent happened to put it in: cline announces the checkout through a shell
+// tool, so the marker only ever reaches glorp inside a tool result the decoder
+// does not read, and the same is true of any other agent whose definition maps
+// only text and tool names. A line that is not JSON is scanned as it is.
+func (c *checkoutCapture) captureRaw(line string) {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
+		c.capture(line)
+		return
+	}
+	var event any
+	if err := json.Unmarshal([]byte(trimmed), &event); err != nil {
+		c.capture(line)
+		return
+	}
+	c.captureValue(event)
+}
+
+// captureValue scans every string reachable in a decoded JSON value. A tool's
+// output is one string holding many lines, so each is scanned on its own.
+func (c *checkoutCapture) captureValue(value any) {
+	switch typed := value.(type) {
+	case string:
+		for _, line := range strings.Split(typed, "\n") {
+			c.capture(line)
+		}
+	case []any:
+		for _, element := range typed {
+			c.captureValue(element)
+		}
+	case map[string]any:
+		for _, element := range typed {
+			c.captureValue(element)
+		}
+	}
+}
+
+// checkoutMarkerCaptureWriter passes an agent's raw stream through untouched
+// while scanning each line for the checkout marker before any decoder has had
+// a chance to drop it.
+type checkoutMarkerCaptureWriter struct {
+	mu      sync.Mutex
+	output  io.Writer
+	buffer  []byte
+	capture *checkoutCapture
+}
+
+func (w *checkoutMarkerCaptureWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buffer = append(w.buffer, p...)
+	for {
+		newline := bytes.IndexByte(w.buffer, '\n')
+		if newline < 0 {
+			break
+		}
+		w.capture.captureRaw(string(w.buffer[:newline]))
+		w.buffer = w.buffer[newline+1:]
+	}
+	return w.output.Write(p)
+}
+
+func (w *checkoutMarkerCaptureWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buffer) != 0 {
+		w.capture.captureRaw(string(w.buffer))
+		w.buffer = nil
+	}
+}
 
 func (w *sessionMetadataCaptureWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
@@ -1820,24 +1931,10 @@ func (w *sessionMetadataCaptureWriter) captureLine(line string) {
 			w.onUpdate(AgentSession{ID: match[1]})
 		}
 	}
-	if w.checkoutCaptured {
-		return
+	if w.checkout == nil {
+		w.checkout = &checkoutCapture{onUpdate: w.onUpdate}
 	}
-	marker := strings.Index(line, checkoutDirectoryMarker)
-	if marker < 0 {
-		return
-	}
-	checkout := strings.TrimSpace(line[marker+len(checkoutDirectoryMarker):])
-	checkout = strings.Trim(checkout, "`*\"' ")
-	if !filepath.IsAbs(checkout) {
-		return
-	}
-	info, err := os.Stat(checkout)
-	if err != nil || !info.IsDir() {
-		return
-	}
-	w.checkoutCaptured = true
-	w.onUpdate(AgentSession{CheckoutDirectory: checkout})
+	w.checkout.capture(line)
 }
 
 func (w *sessionMetadataCaptureWriter) Flush() {
@@ -2157,11 +2254,15 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		fmt.Fprintln(agentOutput, versionWarning)
 	}
 	var metadataOutput *sessionMetadataCaptureWriter
+	var checkoutMarkers *checkoutMarkerCaptureWriter
+	var checkout *checkoutCapture
 	if updateSession != nil {
+		checkout = &checkoutCapture{onUpdate: updateSession}
 		metadataOutput = &sessionMetadataCaptureWriter{
 			output: agentOutput, onUpdate: updateSession,
 			captureSession: definition.CapturesSessionID() && !session.Resume,
 			sessionPattern: definition.SessionPattern(),
+			checkout:       checkout,
 		}
 		agentOutput = metadataOutput
 	}
@@ -2171,6 +2272,15 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	decoder := newOutputDecoder(definition.Output, agentOutput)
 	if decoder != nil {
 		agentOutput = decoder
+	}
+	// The checkout marker is read from the raw stream as well, upstream of the
+	// decoder, because an agent that announces the path through a shell tool
+	// leaves it in a field no definition maps. The decoded scan above still
+	// runs, since an agent whose text events stream fragments can split the
+	// marker across raw lines that only reassemble once decoded.
+	if checkout != nil {
+		checkoutMarkers = &checkoutMarkerCaptureWriter{output: agentOutput, capture: checkout}
+		agentOutput = checkoutMarkers
 	}
 	var detector *missingSessionDetector
 	if session.Resume {
@@ -2183,6 +2293,9 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		if err := decoder.Flush(); runErr == nil && err != nil {
 			runErr = err
 		}
+	}
+	if checkoutMarkers != nil {
+		checkoutMarkers.Flush()
 	}
 	if metadataOutput != nil {
 		metadataOutput.Flush()
