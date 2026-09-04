@@ -31,7 +31,9 @@ func TestLoadWithoutAConfigFile(t *testing.T) {
 // built-in replaces only the fields it mentions, so overriding one flag does
 // not mean restating the whole agent.
 func TestConfigOverridesABuiltinFieldByField(t *testing.T) {
-	path := writeConfig(t, `{"agents":[{"name":"claude","binary":"/opt/claude","models":["opus"]}]}`)
+	// The narrowed models list has to admit the default the built-in
+	// carries, so the override names one the list allows (issue #612).
+	path := writeConfig(t, `{"agents":[{"name":"claude","binary":"/opt/claude","models":["opus"],"defaultModel":"opus"}]}`)
 	registry, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -217,5 +219,40 @@ func TestConfigEmptyAllowListDeclaresNoValue(t *testing.T) {
 	// The rest of the built-in is still inherited through the merge.
 	if codex.Binary != "codex" || !codex.Supports(ModeResume) {
 		t.Fatalf("codex = %#v, want the built-in's other fields", codex)
+	}
+}
+
+// TestConfigSetsAndDropsTheDefaultModel checks a config file owns the managed
+// default (issue #612): it can point a built-in at another model, and can drop
+// the inherited one with null so the agent's own CLI chooses again.
+func TestConfigSetsAndDropsTheDefaultModel(t *testing.T) {
+	replaced, err := Load(writeConfig(t, `{"agents":[{"name":"codex","defaultModel":"gpt-5.4"}]}`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	codex, _ := replaced.Lookup("codex")
+	if got := codex.ModelOrDefault(""); got != "gpt-5.4" {
+		t.Fatalf("default model = %q, want the config's", got)
+	}
+	dropped, err := Load(writeConfig(t, `{"agents":[{"name":"codex","defaultModel":null}]}`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	codex, _ = dropped.Lookup("codex")
+	if got := codex.ModelOrDefault(""); got != "" {
+		t.Fatalf("default model = %q, want none once the config dropped it", got)
+	}
+}
+
+// TestConfigRejectsADefaultModelItsOwnAllowListDenies checks the file is told
+// which field is wrong rather than glorp running a model the same document says
+// it does not accept.
+func TestConfigRejectsADefaultModelItsOwnAllowListDenies(t *testing.T) {
+	_, err := Load(writeConfig(t, `{"agents":[{"name":"codex","models":["gpt-5.4"],"defaultModel":"gpt-5.6-sol"}]}`))
+	if err == nil {
+		t.Fatal("Load() error = nil, want the conflicting default rejected")
+	}
+	if !strings.Contains(err.Error(), "defaultModel") {
+		t.Fatalf("Load() error = %v, want it to name the field", err)
 	}
 }

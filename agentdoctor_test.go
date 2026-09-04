@@ -569,3 +569,35 @@ func TestDoctorProbeHelperProcess(t *testing.T) {
 	// for the next request, and a probe that waited with it would never return.
 	time.Sleep(30 * time.Second)
 }
+
+// TestAgentReportShowsTheManagedDefaultModel checks `glorp agents` names the
+// model an agent runs with when --agent gives it none (issue #612), qualified
+// so it can be copied straight back into --agent, and says nothing extra for an
+// agent whose definition leaves the choice to its own CLI.
+func TestAgentReportShowsTheManagedDefaultModel(t *testing.T) {
+	var out strings.Builder
+	writeAgentReports(&out, []agentReport{
+		{
+			name: "codex", binary: "codex", path: "/opt/codex", auth: doctorSignedIn,
+			defaultModel: "gpt-5.6-terra", models: []string{"codex/gpt-5.6-terra"},
+		},
+		{name: "gemini", binary: "gemini", path: "/opt/gemini", auth: doctorSignedIn},
+	})
+	text := out.String()
+	if !strings.Contains(text, "default   codex/gpt-5.6-terra") {
+		t.Errorf("report does not name the managed default:\n%s", text)
+	}
+	gemini := text[strings.Index(text, "gemini"):]
+	if strings.Contains(gemini, "default") {
+		t.Errorf("report invents a default for an agent declaring none:\n%s", gemini)
+	}
+}
+
+// TestAgentStatusCarriesTheDefaultModel checks the settings dashboard's agents
+// tab is told the same default the terminal report prints.
+func TestAgentStatusCarriesTheDefaultModel(t *testing.T) {
+	status := agentStatus(agentReport{name: "codex", path: "/opt/codex", defaultModel: "gpt-5.6-terra"})
+	if status.DefaultModel != "gpt-5.6-terra" {
+		t.Fatalf("DefaultModel = %q, want the report's", status.DefaultModel)
+	}
+}

@@ -1755,7 +1755,10 @@ func (r CommandRunner) specForSession(session AgentSession) agentSpec {
 	if value == "" {
 		value = r.Agent
 	}
-	spec, err := parseAgentSpec(value)
+	// Parsed against this runner's own registry rather than the process-wide
+	// one, so the managed default model a spec falls back to (issue #612) is
+	// the one declared by the very definition this runner dispatches with.
+	spec, err := parseAgentSpecIn(r.registry(), value)
 	if err != nil {
 		return agentSpec{Name: value}
 	}

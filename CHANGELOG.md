@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Run each agent on a managed mid-tier default model when `--agent` names none, instead of letting the CLI reach for its own largest model (issue #612). `codex` now defaults to `gpt-5.6-terra` and `claude` to `sonnet`, which is what a queue of issues gets spent on unless a run asks for something else; naming a model explicitly (`--agent codex/gpt-5.6-sol`) still wins. The default is resolved where the `--agent` spec is parsed, so the model glorp chose is the one the dispatched argv passes, the dashboard shows, and the work state persists -- a resumed session keeps the model it started with even if the default later moves. Agent definitions carry it as a new `defaultModel` field, so `--config` can point a built-in at another model or drop the default with `"defaultModel": null`; the built-ins whose model catalogs are per-account (`gemini`, `muse`, `cline`, `opencode`, `agy`) name none and still leave the choice to their CLI. `glorp agents` prints each agent's default on its own line.
 - Offer Claude's `opus`, `sonnet`, and `haiku` aliases in the WebUI Models tab, even though Claude Code has no command for listing its models (issue #608). The aliases are maintained suggestions rather than a restriction, so a full Claude model id remains selectable and dispatchable.
 - Make browser polling the default delivery mode and replace the competing `--browser` and `--poll` transport choices with `--pollmode=browser|webhook|poll`; the older switches remain as deprecated aliases for existing scripts.
 

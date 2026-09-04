@@ -236,18 +236,18 @@ func (d *agentDoctor) Report(ctx context.Context) []agentReport {
 // renders as text.
 func agentStatus(report agentReport) core.AgentStatus {
 	status := core.AgentStatus{
-		Name:        report.name,
-		Installed:   report.installed(),
-		Binary:      report.binary,
-		Version:     report.version,
-		VersionNote: report.versionNote,
-		Auth:        report.auth,
-		Quota:       describeQuota(report),
-		TracksQuota: report.tracksQuota,
+		Name:         report.name,
+		Installed:    report.installed(),
+		Binary:       report.binary,
+		Version:      report.version,
+		VersionNote:  report.versionNote,
+		Auth:         report.auth,
+		Quota:        describeQuota(report),
+		TracksQuota:  report.tracksQuota,
 		Models:       report.models,
 		ModelNote:    report.modelNote,
 		DefaultModel: report.defaultModel,
-		Status:      report.statusKey(),
+		Status:       report.statusKey(),
 	}
 	if report.quotaErr != nil {
 		status.QuotaError = report.quotaErr.Error()
