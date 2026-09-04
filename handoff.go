@@ -44,7 +44,7 @@ const ownershipWaitDuration = 2 * time.Minute
 // "does anyone have this?" handshake. Reaps run repeatedly (issue #239), so
 // without this the handshake would be re-posted on every pass and spam
 // issues that a live instance is still working.
-const staleClaimDuration = 2 * time.Hour
+const staleClaimDuration = 5 * time.Minute
 
 const (
 	askClaimBody        = "Does anyone have this?"
