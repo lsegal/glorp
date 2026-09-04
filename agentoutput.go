@@ -1,0 +1,247 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+
+	"github.com/lsegal/glorp/agents"
+)
+
+// outputDecoder wraps the writer an agent's stdout is forwarded to, turning
+// whatever the agent prints into the human-readable lines glorp shows. Which
+// decoder a run gets is the agent definition's to say, so a CLI with its own
+// event stream is read by describing it rather than by adding another arm to
+// runOnce.
+type outputDecoder interface {
+	io.Writer
+	// Flush renders whatever the agent left without a trailing newline.
+	Flush() error
+}
+
+// newOutputDecoder builds the decoder an output block selects, or nil when the
+// agent's output is shown exactly as it is written. The definition has already
+// been validated, so a format that selects the generic decoder carries its
+// configuration.
+func newOutputDecoder(output agents.Output, w io.Writer) outputDecoder {
+	switch output.Decoder() {
+	case agents.FormatStreamJSON:
+		return newClaudeJSONOutputWriter(w)
+	case agents.FormatJSONL:
+		return newJSONLOutputWriter(w, *output.JSONL)
+	}
+	return nil
+}
+
+// lineWriter buffers writes into whole lines, since a streaming agent's output
+// arrives in chunks that do not respect event boundaries.
+type lineWriter struct {
+	mu     sync.Mutex
+	buffer []byte
+	line   func(line []byte) error
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buffer = append(w.buffer, p...)
+	for {
+		newline := bytes.IndexByte(w.buffer, '\n')
+		if newline < 0 {
+			break
+		}
+		line := append([]byte(nil), w.buffer[:newline]...)
+		w.buffer = w.buffer[newline+1:]
+		if err := w.line(line); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+func (w *lineWriter) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buffer) == 0 {
+		return nil
+	}
+	line := append([]byte(nil), w.buffer...)
+	w.buffer = nil
+	return w.line(line)
+}
+
+// jsonlOutputWriter decodes a line-delimited JSON event stream using the field
+// paths the agent's own definition names. Most agents with a --json or
+// streaming mode differ only in where the text and the tool calls live in each
+// event, which is configuration rather than code.
+type jsonlOutputWriter struct {
+	*lineWriter
+	config  agents.JSONL
+	output  io.Writer
+	ignored map[string]bool
+}
+
+func newJSONLOutputWriter(output io.Writer, config agents.JSONL) *jsonlOutputWriter {
+	w := &jsonlOutputWriter{lineWriter: &lineWriter{}, config: config, output: output}
+	if len(config.Ignore) > 0 {
+		w.ignored = make(map[string]bool, len(config.Ignore))
+		for _, event := range config.Ignore {
+			w.ignored[event] = true
+		}
+	}
+	w.lineWriter.line = w.writeLine
+	return w
+}
+
+func (w *jsonlOutputWriter) writeLine(line []byte) error {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return nil
+	}
+	var event any
+	if err := json.Unmarshal(line, &event); err != nil {
+		// A line that is not an event at all is still the agent talking:
+		// banners, warnings, and stack traces all arrive this way, and a
+		// dropped line is exactly the output someone debugging a failed run
+		// came looking for.
+		_, err = fmt.Fprintln(w.output, string(line))
+		return err
+	}
+	if w.skips(event) {
+		return nil
+	}
+	texts := jsonlStrings(event, w.config.Text)
+	for _, call := range w.toolCalls(event) {
+		texts = append(texts, "Running: "+call)
+	}
+	if len(texts) == 0 {
+		// An event of a shape the definition does not describe renders
+		// nothing, and the ones that follow it are decoded as usual.
+		return nil
+	}
+	_, err := fmt.Fprintln(w.output, strings.Join(texts, "\n"))
+	return err
+}
+
+// skips reports whether the event's type is one the definition drops.
+func (w *jsonlOutputWriter) skips(event any) bool {
+	if len(w.ignored) == 0 {
+		return false
+	}
+	for _, kind := range jsonlStrings(event, w.config.Type) {
+		if w.ignored[kind] {
+			return true
+		}
+	}
+	return false
+}
+
+// toolCalls renders the event's tool calls the way Claude's decoder renders
+// its own, so a progress line reads the same whichever agent produced it.
+func (w *jsonlOutputWriter) toolCalls(event any) []string {
+	if w.config.ToolName == "" {
+		return nil
+	}
+	// Name and input are read from the same block when their paths share a
+	// prefix, so a call is never rendered with another call's arguments.
+	prefix, name, input := splitJSONLPaths(w.config.ToolName, w.config.ToolInput)
+	var calls []string
+	for _, block := range jsonlLookup(event, prefix) {
+		tool := firstJSONLString(jsonlLookup(block, name))
+		if tool == "" {
+			continue
+		}
+		var arguments json.RawMessage
+		if values := jsonlLookup(block, input); w.config.ToolInput != "" && len(values) > 0 {
+			if encoded, err := json.Marshal(values[0]); err == nil {
+				arguments = encoded
+			}
+		}
+		calls = append(calls, claudeToolUseSummary(tool, arguments))
+	}
+	return calls
+}
+
+// splitJSONLPaths returns the longest path both fields share along with what
+// remains of each, so the shared part is walked once and its elements paired.
+func splitJSONLPaths(name, input string) (prefix, nameRest, inputRest string) {
+	if input == "" {
+		return "", name, ""
+	}
+	nameSegments, inputSegments := strings.Split(name, "."), strings.Split(input, ".")
+	shared := 0
+	for shared < len(nameSegments)-1 && shared < len(inputSegments)-1 && nameSegments[shared] == inputSegments[shared] {
+		shared++
+	}
+	return strings.Join(nameSegments[:shared], "."), strings.Join(nameSegments[shared:], "."), strings.Join(inputSegments[shared:], ".")
+}
+
+// jsonlLookup walks a field path through a decoded event, returning every
+// value it names. A key suffixed with [] steps into an array and continues
+// into each of its elements, so one path can name a value per content block.
+// An empty path names the value it was given.
+func jsonlLookup(value any, path string) []any {
+	current := []any{value}
+	if path == "" {
+		return current
+	}
+	for _, segment := range strings.Split(path, ".") {
+		key, array := strings.CutSuffix(segment, "[]")
+		var next []any
+		for _, item := range current {
+			object, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			field, ok := object[key]
+			if !ok || field == nil {
+				continue
+			}
+			if !array {
+				next = append(next, field)
+				continue
+			}
+			items, ok := field.([]any)
+			if !ok {
+				continue
+			}
+			next = append(next, items...)
+		}
+		if current = next; len(current) == 0 {
+			return nil
+		}
+	}
+	return current
+}
+
+// jsonlStrings returns the non-empty strings a path names, ignoring values of
+// any other type: a field the agent sometimes fills with an object is skipped
+// rather than rendered as Go's idea of one.
+func jsonlStrings(value any, path string) []string {
+	if path == "" {
+		return nil
+	}
+	var found []string
+	for _, item := range jsonlLookup(value, path) {
+		text, ok := item.(string)
+		if !ok {
+			continue
+		}
+		if text = strings.TrimSpace(text); text != "" {
+			found = append(found, text)
+		}
+	}
+	return found
+}
+
+func firstJSONLString(values []any) string {
+	for _, value := range values {
+		if text, ok := value.(string); ok {
+			return strings.TrimSpace(text)
+		}
+	}
+	return ""
+}

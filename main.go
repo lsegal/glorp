@@ -1732,14 +1732,12 @@ type sessionMetadataCaptureWriter struct {
 	onUpdate       func(AgentSession)
 	captureSession bool
 	// sessionPattern reads the session ID out of a line of agent output. It
-	// comes from the agent's definition; a nil pattern falls back to the
-	// shape Codex prints.
+	// comes from the agent's definition, which is the only place the shape of
+	// a session ID is written down; a nil pattern captures nothing.
 	sessionPattern   *regexp.Regexp
 	sessionCaptured  bool
 	checkoutCaptured bool
 }
-
-var codexSessionIDPattern = regexp.MustCompile(`(?i)session id:\s*([0-9a-f]{8}-[0-9a-f-]{27,})`)
 
 const checkoutDirectoryMarker = "GLORP_CHECKOUT_DIRECTORY="
 
@@ -1762,12 +1760,8 @@ func (w *sessionMetadataCaptureWriter) Write(p []byte) (int, error) {
 }
 
 func (w *sessionMetadataCaptureWriter) captureLine(line string) {
-	if w.captureSession && !w.sessionCaptured {
-		pattern := w.sessionPattern
-		if pattern == nil {
-			pattern = codexSessionIDPattern
-		}
-		match := pattern.FindStringSubmatch(line)
+	if w.captureSession && !w.sessionCaptured && w.sessionPattern != nil {
+		match := w.sessionPattern.FindStringSubmatch(line)
 		if len(match) >= 2 && match[1] != "" {
 			w.sessionCaptured = true
 			w.onUpdate(AgentSession{ID: match[1]})
@@ -1985,26 +1979,19 @@ func (r CommandRunner) binary(agent string) string {
 	return r.Binary
 }
 
-// missingSessionPatterns matches the messages agents print when asked to
-// resume a session they no longer have on disk (sessions expire, and a glorp
-// work state file routinely outlives the agent's local conversation history).
-var missingSessionPatterns = []string{
-	"no conversation found",
-	"no session found",
-	"session not found",
-	"could not find session",
-	"unable to find session",
-}
-
 // missingSessionDetector passes agent output straight through while watching
 // for a "that session does not exist" message so a failed resume can restart
 // the work instead of being reported as an agent failure. It keeps a small
 // tail of the previous chunk so a message split across writes still matches.
 type missingSessionDetector struct {
-	mu      sync.Mutex
-	output  io.Writer
-	tail    string
-	missing bool
+	mu     sync.Mutex
+	output io.Writer
+	// patterns are the agent definition's own phrases, so a CLI with a
+	// distinctive message is detected without loosening detection for every
+	// other agent. An empty list means the shared defaults.
+	patterns []string
+	tail     string
+	missing  bool
 }
 
 const missingSessionTailBytes = 128
@@ -2013,8 +2000,8 @@ func (d *missingSessionDetector) Write(p []byte) (int, error) {
 	d.mu.Lock()
 	if !d.missing {
 		window := strings.ToLower(d.tail + string(p))
-		for _, pattern := range missingSessionPatterns {
-			if strings.Contains(window, pattern) {
+		for _, pattern := range d.missingSessionPatterns() {
+			if strings.Contains(window, strings.ToLower(pattern)) {
 				d.missing = true
 				break
 			}
@@ -2026,6 +2013,13 @@ func (d *missingSessionDetector) Write(p []byte) (int, error) {
 	}
 	d.mu.Unlock()
 	return d.output.Write(p)
+}
+
+func (d *missingSessionDetector) missingSessionPatterns() []string {
+	if len(d.patterns) == 0 {
+		return agents.DefaultMissingSessionPatterns
+	}
+	return d.patterns
 }
 
 func (d *missingSessionDetector) sessionMissing() bool {
@@ -2102,20 +2096,22 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		}
 		agentOutput = metadataOutput
 	}
-	var claudeOutput *claudeJSONOutputWriter
-	if definition.Output.Format == agents.FormatStreamJSON {
-		claudeOutput = newClaudeJSONOutputWriter(agentOutput)
-		agentOutput = claudeOutput
+	// How the agent's output is read is the definition's to say: passed
+	// through, decoded as Claude's event envelope, or decoded by the generic
+	// JSONL decoder the definition configured with its own field paths.
+	decoder := newOutputDecoder(definition.Output, agentOutput)
+	if decoder != nil {
+		agentOutput = decoder
 	}
 	var detector *missingSessionDetector
 	if session.Resume {
-		detector = &missingSessionDetector{output: agentOutput}
+		detector = &missingSessionDetector{output: agentOutput, patterns: definition.MissingSessionPatterns()}
 		agentOutput = detector
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
 	runErr := process.Run(cmd)
-	if claudeOutput != nil {
-		if err := claudeOutput.Flush(); runErr == nil && err != nil {
+	if decoder != nil {
+		if err := decoder.Flush(); runErr == nil && err != nil {
 			runErr = err
 		}
 	}
