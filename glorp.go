@@ -249,6 +249,16 @@ type Glorp struct {
 	// into the Run loop, mirroring the jobActionOnce/jobActions pattern above.
 	settingsOnce     sync.Once
 	settingsRequests chan settingsRequest
+	// readyOnce/ready signal that Run has reached its dispatch select
+	// statement. ApplySettings and handleJobAction check this before
+	// blocking on settingsRequests/jobActions, which nothing reads until
+	// Run gets there -- resetFailedWork and, in webhook mode, ngrok startup
+	// and per-target webhook configuration can all still be running, and
+	// none of that has a bound on how long it takes (issue #579).
+	readyOnce sync.Once
+	ready     chan struct{}
+	// notReadyWait overrides notReadyTimeout in tests.
+	notReadyWait time.Duration
 	// agentOverride holds a live-updated set of active agent specs (issue
 	// #341, extended to a multiselect in issue #572). It is read from
 	// goroutines the Run loop spawns, so it is a pointer stored atomically
@@ -316,7 +326,44 @@ func (w *Glorp) jobActionRequests() chan jobActionRequest {
 	return w.jobActions
 }
 
+// readyChan lazily creates the channel Run closes once it reaches its
+// dispatch select statement (issue #579).
+func (w *Glorp) readyChan() chan struct{} {
+	w.readyOnce.Do(func() { w.ready = make(chan struct{}) })
+	return w.ready
+}
+
+// notReadyTimeout bounds how long ApplySettings and handleJobAction wait for
+// Run to reach its dispatch loop before failing with core.ErrNotReady.
+// Ordinary startup (loading work state, resetFailedWork's GitHub calls, and
+// in webhook mode the ngrok tunnel and per-target webhook configuration in
+// main.go's run()) reaches the loop well within this, so a request that
+// merely arrived first still succeeds once Run gets there -- this is not a
+// fail-immediately check. It only bounds the genuinely stuck case, which
+// used to block forever with no feedback (issue #579); the dashboard treats
+// the resulting error as a signal to retry, so this only needs to be short
+// enough that a retry loop notices, not a hard startup deadline.
+const notReadyTimeout = 3 * time.Second
+
+func (w *Glorp) checkReady(ctx context.Context) error {
+	wait := notReadyTimeout
+	if w.notReadyWait > 0 {
+		wait = w.notReadyWait
+	}
+	select {
+	case <-w.readyChan():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(wait):
+		return core.ErrNotReady
+	}
+}
+
 func (w *Glorp) handleJobAction(ctx context.Context, action jobAction) error {
+	if err := w.checkReady(ctx); err != nil {
+		return err
+	}
 	request := jobActionRequest{action: action, done: make(chan error, 1)}
 	select {
 	case w.jobActionRequests() <- request:
@@ -1981,6 +2028,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("issue #%d failed to respond to ownership ask: %v", event.IssueNumber, err)
 		}
 	}
+	// Signal readiness now, immediately before the first dispatch. Initial
+	// dispatch already services settingsRequestsChan itself through
+	// acquireSlot while it blocks on a full concurrency semaphore, so
+	// requests are handled correctly from here on even though the main
+	// select loop below is still a moment away. Everything above --
+	// loading work state, resetFailedWork's GitHub calls, and in webhook
+	// mode the ngrok tunnel and per-target webhook configuration in
+	// main.go's run() -- can take a real amount of time, and a settings or
+	// job-action request that lands during that window must not block on a
+	// channel nothing is reading yet (issue #579).
+	close(w.readyChan())
 	if err := poll(nil); err != nil {
 		if ctx.Err() != nil {
 			wg.Wait()

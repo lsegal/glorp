@@ -99,12 +99,64 @@ export function buildSettingsUpdate(form) {
 	return update;
 }
 
+// throwForResponse builds the error fetchSettings/submitSettings throw on a
+// non-ok response, carrying the HTTP status so a caller can tell the run
+// merely isn't ready yet (503, worth retrying) from a real failure.
+async function throwForResponse(response) {
+	const error = new Error((await response.text()) || `HTTP ${response.status}`);
+	error.status = response.status;
+	throw error;
+}
+
 export async function fetchSettings() {
 	const response = await fetch("/api/settings", { cache: "no-store" });
 	if (!response.ok) {
-		throw new Error((await response.text()) || `HTTP ${response.status}`);
+		await throwForResponse(response);
 	}
 	return response.json();
+}
+
+// settingsRetryDelaysMs backs off how often fetchSettingsWithRetry re-polls
+// while the run is still starting (issue #579): the web server accepts
+// connections well before Run reaches the point that can service a settings
+// request, and in webhook mode ngrok startup and per-target webhook
+// configuration stretch that gap to several seconds. The last delay repeats
+// for any wait longer than this list covers.
+const settingsRetryDelaysMs = [200, 400, 800, 1500, 3000];
+
+// fetchSettingsWithRetry polls fetchSettings, retrying with backoff while the
+// server reports 503 (the run hasn't reached its dispatch loop yet) instead
+// of surfacing that as a hard error the settings modal would otherwise be
+// stuck showing (issue #579). A non-503 failure -- or the signal firing --
+// stops the retry and propagates immediately.
+export async function fetchSettingsWithRetry(signal, wait = defaultWait) {
+	for (let attempt = 0; ; attempt++) {
+		if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+		try {
+			return await fetchSettings();
+		} catch (err) {
+			if (err.status !== 503) throw err;
+			const delay =
+				settingsRetryDelaysMs[
+					Math.min(attempt, settingsRetryDelaysMs.length - 1)
+				];
+			await wait(delay, signal);
+		}
+	}
+}
+
+function defaultWait(delayMs, signal) {
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(resolve, delayMs);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				reject(new DOMException("aborted", "AbortError"));
+			},
+			{ once: true },
+		);
+	});
 }
 
 export async function fetchAgentStatuses() {

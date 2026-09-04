@@ -21,7 +21,7 @@ import {
 	buildSettingsUpdate,
 	deliveryLabel,
 	fetchAgentStatuses,
-	fetchSettings,
+	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
 	modelOptionsFrom,
@@ -251,10 +251,15 @@ function SettingsModal({ onClose }) {
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
 	useEffect(() => {
-		let cancelled = false;
-		fetchSettings()
+		// The dashboard can start serving before glorp's run loop is ready to
+		// answer a settings request -- in webhook mode, ngrok startup and
+		// per-target webhook configuration can take several seconds. Retrying
+		// with backoff here keeps the modal on its loading state through that
+		// window instead of surfacing it as an error the user can't act on
+		// (issue #579).
+		const controller = new AbortController();
+		fetchSettingsWithRetry(controller.signal)
 			.then((snapshot) => {
-				if (cancelled) return;
 				setModelOptions(modelOptionsFrom(snapshot));
 				setReadyStateDefault(snapshot.readyStateDefault ?? "");
 				setForm({
@@ -264,16 +269,18 @@ function SettingsModal({ onClose }) {
 					activeAgents: snapshot.configuredAgents ?? [],
 				});
 			})
-			.catch((err) => !cancelled && setError(err.message));
+			.catch((err) => err.name !== "AbortError" && setError(err.message));
 		fetchAgentStatuses()
-			.then((statuses) => !cancelled && setAgentStatuses(statuses))
+			.then(
+				(statuses) => !controller.signal.aborted && setAgentStatuses(statuses),
+			)
 			.catch(() => {
 				// The agents tab's status column is a diagnostic on top of the
 				// settings it lets you edit; a probe failure leaves it showing
 				// "probing..." rather than blocking the form.
 			});
 		return () => {
-			cancelled = true;
+			controller.abort();
 		};
 	}, []);
 	const update = (field) => (event) =>
