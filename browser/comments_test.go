@@ -329,6 +329,21 @@ func TestCommentsPostThroughTheAPI(t *testing.T) {
 	}
 }
 
+// Reacting has the same "no page affordance" shape as posting: GitHub's
+// conversation page offers nothing to drive it, so it always goes through
+// the wrapped API client (issue #581).
+func TestCommentsReactThroughTheAPI(t *testing.T) {
+	api := newFakeCommentClient()
+	source := newTestCommentSource(&fakeCommentPage{}, api, nil)
+
+	if err := source.AddReaction(context.Background(), "owner/repo", 42, "eyes"); err != nil {
+		t.Fatalf("AddReaction: %v", err)
+	}
+	if len(api.reactions) != 1 || api.reactions[0] != "42:eyes" {
+		t.Fatalf("reactions = %v, want [42:eyes]", api.reactions)
+	}
+}
+
 // The reaps that negotiate contested issues run concurrently, and they all read
 // through the one shared tab: without serialization they navigate it out from
 // under each other.
@@ -379,12 +394,13 @@ func TestCommentsCancelledReadStops(t *testing.T) {
 // a conversation cannot be read off the page, counting the reads and posts that
 // reached it so a test can tell a page read from a fallback.
 type fakeCommentClient struct {
-	mu       sync.Mutex
-	comments map[string][]core.Comment
-	posts    int
-	lists    int
-	postErr  error
-	listErr  error
+	mu        sync.Mutex
+	comments  map[string][]core.Comment
+	posts     int
+	lists     int
+	postErr   error
+	listErr   error
+	reactions []string
 }
 
 func newFakeCommentClient() *fakeCommentClient {
@@ -418,4 +434,11 @@ func (f *fakeCommentClient) ListComments(_ context.Context, repo string, number 
 	out := make([]core.Comment, len(f.comments[key]))
 	copy(out, f.comments[key])
 	return out, nil
+}
+
+func (f *fakeCommentClient) AddReaction(_ context.Context, _ string, commentID int64, content string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reactions = append(f.reactions, fmt.Sprintf("%d:%s", commentID, content))
+	return nil
 }

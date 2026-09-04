@@ -28,10 +28,11 @@ func newIdentity() (Identity, error) {
 // The comment types live in package core so the browser driver can implement
 // CommentClient without importing the root package.
 type (
-	Comment       = core.Comment
-	CommentPoster = core.CommentPoster
-	CommentLister = core.CommentLister
-	CommentClient = core.CommentClient
+	Comment        = core.Comment
+	CommentPoster  = core.CommentPoster
+	CommentLister  = core.CommentLister
+	CommentClient  = core.CommentClient
+	CommentReactor = core.CommentReactor
 )
 
 // ownershipWaitDuration is the minimum grace period a reaping instance must

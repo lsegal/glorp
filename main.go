@@ -1339,6 +1339,16 @@ func (g GHCLI) PostComment(ctx context.Context, repo string, number int, body st
 	return nil
 }
 
+// AddReaction adds an emoji reaction to a specific comment, used to
+// acknowledge a direct mention was read (issue #581).
+func (g GHCLI) AddReaction(ctx context.Context, repo string, commentID int64, content string) error {
+	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/comments/"+strconv.FormatInt(commentID, 10)+"/reactions", "-f", "content="+content)
+	if err != nil {
+		return fmt.Errorf("react to comment %d: %w: %s", commentID, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func (g GHCLI) ListComments(ctx context.Context, repo string, number int) ([]Comment, error) {
 	public := g.isPublicRepo(ctx, repo)
 	output, err := g.apiGETPaginated(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments")

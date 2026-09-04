@@ -75,12 +75,20 @@ func TestClaimedByOtherIgnoresAskComments(t *testing.T) {
 }
 
 type fakeCommentClient struct {
-	mu       sync.Mutex
-	comments map[string][]Comment
-	posts    int
-	lists    int
-	postErr  error
-	listErr  error
+	mu        sync.Mutex
+	comments  map[string][]Comment
+	posts     int
+	lists     int
+	postErr   error
+	listErr   error
+	reactions []fakeReaction
+	reactErr  error
+}
+
+type fakeReaction struct {
+	Repo      string
+	CommentID int64
+	Content   string
 }
 
 func newFakeCommentClient() *fakeCommentClient {
@@ -129,6 +137,24 @@ func (f *fakeCommentClient) inject(repo string, number int, comment Comment) {
 	defer f.mu.Unlock()
 	key := f.key(repo, number)
 	f.comments[key] = append(f.comments[key], comment)
+}
+
+func (f *fakeCommentClient) AddReaction(_ context.Context, repo string, commentID int64, content string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reactErr != nil {
+		return f.reactErr
+	}
+	f.reactions = append(f.reactions, fakeReaction{Repo: repo, CommentID: commentID, Content: content})
+	return nil
+}
+
+func (f *fakeCommentClient) reactionsSnapshot() []fakeReaction {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]fakeReaction, len(f.reactions))
+	copy(out, f.reactions)
+	return out
 }
 
 func TestNegotiateOwnershipClaimsWhenUncontested(t *testing.T) {

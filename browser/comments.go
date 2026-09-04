@@ -106,6 +106,17 @@ func (s *CommentSource) PostComment(ctx context.Context, repo string, number int
 	return s.api.PostComment(ctx, repo, number, body)
 }
 
+// AddReaction writes through the API client, same as PostComment: the
+// conversation page offers no affordance glorp could drive to react with. It
+// is a no-op when the wrapped client has no reaction capability.
+func (s *CommentSource) AddReaction(ctx context.Context, repo string, commentID int64, content string) error {
+	reactor, ok := s.api.(core.CommentReactor)
+	if !ok {
+		return nil
+	}
+	return reactor.AddReaction(ctx, repo, commentID, content)
+}
+
 // commentsURL is the conversation page for an issue or a pull request.
 // GitHub redirects /issues/N to /pull/N for a pull request, so the issue form
 // reaches both, which matters because the handoff protocol negotiates ownership
