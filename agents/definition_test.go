@@ -147,7 +147,7 @@ func TestRenderSkipsUnknownMode(t *testing.T) {
 func TestInvalidDefinitionsNameTheirField(t *testing.T) {
 	valid := func() Definition {
 		return Definition{
-			Name: "muse", Binary: "muse",
+			Name: "acme", Binary: "acme",
 			Args:    Args{Run: []Fragment{{Args: []string{"{prompt}"}}}, Resume: []Fragment{{Args: []string{"{session}"}}}},
 			Session: Session{Assign: AssignGlorp},
 			Output:  Output{Format: FormatText},
@@ -277,7 +277,7 @@ func requireRegistered(t *testing.T, registry *Registry, names ...string) {
 // skills.sh knows grows without glorp, so only the shape is glorp's business.
 func TestSkillsTargetShapeIsValidated(t *testing.T) {
 	definition := Definition{
-		Name: "muse", Binary: "muse",
+		Name: "acme", Binary: "acme",
 		Session: Session{Assign: AssignNone}, Output: Output{Format: FormatText},
 		Args: Args{Run: []Fragment{{Args: []string{"{prompt}"}}}, Resume: []Fragment{{Args: []string{"{prompt}"}}}},
 	}

@@ -372,7 +372,7 @@ func TestConfiguredAgentDefinitionIsDispatchable(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, agents.DefaultConfigPath)
 	document := fmt.Sprintf(`{"agents":[{
-		"name": "muse",
+		"name": "acme",
 		"binary": %q,
 		"levels": ["fast", "thorough"],
 		"session": {"assign": "capture", "capture": "conversation ([0-9a-z-]+)", "clearOnResumeFailure": true},
@@ -389,17 +389,17 @@ func TestConfiguredAgentDefinitionIsDispatchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	spec, err := parseAgentSpecIn(registry, "muse:thorough")
+	spec, err := parseAgentSpecIn(registry, "acme:thorough")
 	if err != nil {
-		t.Fatalf("--agent muse:thorough was rejected: %v", err)
+		t.Fatalf("--agent acme:thorough was rejected: %v", err)
 	}
-	if want := (agentSpec{Name: "muse", Level: "thorough"}); spec != want {
+	if want := (agentSpec{Name: "acme", Level: "thorough"}); spec != want {
 		t.Fatalf("spec = %#v, want %#v", spec, want)
 	}
-	if _, err := parseAgentSpecIn(registry, "muse:high"); err == nil {
+	if _, err := parseAgentSpecIn(registry, "acme:high"); err == nil {
 		t.Fatal("a level outside the definition's own list was accepted")
 	}
-	definition, ok := registry.Lookup("muse")
+	definition, ok := registry.Lookup("acme")
 	if !ok {
 		t.Fatal("the configured agent was not registered")
 	}
