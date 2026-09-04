@@ -318,7 +318,7 @@ func (m dashboard) View() string {
 	tokens := quotaText(m.snapshot)
 	push := deliveryText(m.snapshot)
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
-	footer := renderStatusBar([]string{counts, tokens, push, targets})
+	footer := renderStatusBar(m.width, []string{counts, tokens, push, targets})
 	sections := []string{logs, footer}
 	if grid != "" {
 		sections = append([]string{grid}, sections...)
@@ -443,12 +443,60 @@ func joinVerticalWithGap(items []string, gap int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-func renderStatusBar(items []string) string {
+func renderStatusBar(width int, items []string) string {
+	items = fitStatusBarItems(items, width)
 	cells := make([]string, len(items))
 	for i, item := range items {
 		cells[i] = statusBars[i%len(statusBars)].Render(item)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, cells...)
+}
+
+// statusBarCellPadding is the horizontal padding statusBars adds to every cell
+// but the first, which fitStatusBarItems has to count as spent width.
+const statusBarCellPadding = 2
+
+// fitStatusBarItems shrinks the status bar's cells until the whole bar fits
+// the terminal. The quota cell grows with every agent a run is configured
+// with (issue #489), so a four-agent run would otherwise push the bar past
+// the terminal width and wrap it onto a second line, shoving the job grid up.
+// The widest cell is truncated first and repeatedly, so a long quota list
+// gives way before the counts and the targets beside it.
+func fitStatusBarItems(items []string, width int) []string {
+	if width < 1 || len(items) == 0 {
+		return items
+	}
+	fitted := append([]string(nil), items...)
+	spent := func() int {
+		total := 0
+		for i, item := range fitted {
+			total += lipgloss.Width(item)
+			if i > 0 {
+				total += statusBarCellPadding
+			}
+		}
+		return total
+	}
+	for spent() > width {
+		widest := 0
+		for i, item := range fitted {
+			if lipgloss.Width(item) > lipgloss.Width(fitted[widest]) {
+				widest = i
+			}
+		}
+		room := lipgloss.Width(fitted[widest]) - (spent() - width)
+		if room < 1 {
+			// Every cell is already as short as it can usefully be; leave the
+			// rest rather than looping on zero-width cells.
+			room = 1
+		}
+		shrunk := truncate(fitted[widest], room)
+		if shrunk == fitted[widest] {
+			break
+		}
+		fitted[widest] = shrunk
+	}
+	return fitted
 }
 
 type dashboardWriter struct{ ui *TerminalUI }

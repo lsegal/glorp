@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -453,6 +454,110 @@ func TestOpencodeDefinitionRendersModelLevelAndVision(t *testing.T) {
 	}
 }
 
+// TestGeminiDefinitionContract proves the shipped gemini definition. Gemini
+// CLI takes a caller-supplied UUID with --session-id and resumes it by that
+// same UUID with --resume, so glorp assigns the ID exactly as it does for
+// Claude. Its headless mode refuses to run in a directory the user has not
+// trusted interactively, which every glorp run is -- the work happens in a
+// fresh clone -- so the definition carries GEMINI_CLI_TRUST_WORKSPACE rather
+// than passing --skip-trust, and the child process is checked for it here.
+// Its --output-format stream-json emits its own event shape rather than
+// Claude's, so the definition asks for text until the generic decoder from
+// #488 lands.
+func TestGeminiDefinitionContract(t *testing.T) {
+	agentContract{
+		Definition: builtinDefinition(t, "gemini"),
+		Repo:       "o/r",
+		Number:     7,
+		SessionID:  "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+		Stdout:     "working on it",
+		WantRun: []string{
+			"--session-id", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--approval-mode", "auto_edit", "--output-format", "text",
+			"-p", freshPrompt("o/r", 7),
+		},
+		WantResume: []string{
+			"--resume", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--approval-mode", "auto_edit", "--output-format", "text",
+			"-p", resumePrompt(),
+		},
+		WantEnv:    map[string]string{"GEMINI_CLI_TRUST_WORKSPACE": "true"},
+		WantOutput: "working on it",
+	}.check(t)
+}
+
+// TestGeminiDefinitionYoloContract pins the other half of the approval
+// switch: --yolo replaces --approval-mode auto_edit rather than being added
+// alongside it, which Gemini CLI would reject as contradictory.
+func TestGeminiDefinitionYoloContract(t *testing.T) {
+	agentContract{
+		Definition: builtinDefinition(t, "gemini"),
+		Repo:       "o/r",
+		Number:     7,
+		SessionID:  "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+		Yolo:       true,
+		Stdout:     "working on it",
+		WantRun: []string{
+			"--session-id", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--yolo", "--output-format", "text", "-p", freshPrompt("o/r", 7),
+		},
+		WantResume: []string{
+			"--resume", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--yolo", "--output-format", "text", "-p", resumePrompt(),
+		},
+		WantEnv:    map[string]string{"GEMINI_CLI_TRUST_WORKSPACE": "true"},
+		WantOutput: "working on it",
+	}.check(t)
+}
+
+// TestGeminiVisionArgsNameTheImageInThePrompt pins the one-shot browser-board
+// read. Gemini CLI has no --image flag, so the screenshot is handed over the
+// way Claude's is, by the path the vision prompt already names, which its
+// read_file tool loads as an image part.
+func TestGeminiVisionArgsNameTheImageInThePrompt(t *testing.T) {
+	definition := builtinDefinition(t, "gemini")
+	args := definition.Render(agents.ModeVision, agents.Values{
+		Prompt: "look at /tmp/shot.png", Image: "/tmp/shot.png", Model: "gemini-2.5-pro",
+	})
+	want := []string{"--approval-mode", "auto_edit", "--model", "gemini-2.5-pro", "-p", "look at /tmp/shot.png"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("vision argv = %#v, want %#v", args, want)
+	}
+	for _, arg := range args {
+		if arg == "--image" {
+			t.Fatal("gemini has no --image flag; the screenshot is named in the prompt")
+		}
+	}
+}
+
+// TestGeminiResumeFailureMessagesRestartTheWork pins the wordings Gemini CLI
+// prints when the recorded session is gone -- one for a project with no
+// session history and one for a project whose history does not hold that
+// UUID -- against the messages glorp watches for. Without them a resume of an
+// expired session is reported as an agent failure instead of restarting.
+func TestGeminiResumeFailureMessagesRestartTheWork(t *testing.T) {
+	for _, message := range []string{
+		"Error resuming session: No previous sessions found for this project.",
+		"Error resuming session: Invalid session identifier " +
+			`"3f2504e0-4f89-11d3-9a0c-0305e82c3301".` +
+			"\n  Searched for sessions in /tmp/chats.\n  Use --list-sessions to see available sessions,",
+	} {
+		// The wordings are gemini's own, so the detector is given the same
+		// patterns a gemini run gives it: the shared defaults plus the ones
+		// its definition names.
+		detector := &missingSessionDetector{
+			output:   io.Discard,
+			patterns: builtinDefinition(t, "gemini").MissingSessionPatterns(),
+		}
+		if _, err := detector.Write([]byte(message)); err != nil {
+			t.Fatal(err)
+		}
+		if !detector.sessionMissing() {
+			t.Fatalf("glorp does not recognise %q as a session it can no longer resume", message)
+		}
+	}
+}
+
 // TestConfiguredAgentDefinitionIsDispatchable proves the whole path an agent
 // nobody built in takes: declared in .glorp.config.json, accepted by --agent,
 // and dispatched through the executable its own definition names.
@@ -550,9 +655,9 @@ func TestAgentDefinitionCapturesCheckoutDirectory(t *testing.T) {
 // agent the registry no longer defines fails with a message listing what it
 // does define, instead of spawning whatever the binary flags happen to hold.
 func TestUnknownAgentIsReportedRatherThanRun(t *testing.T) {
-	runner := CommandRunner{Agent: "gemini", Definitions: agents.MustBuiltin(), Repo: "o/r"}
+	runner := CommandRunner{Agent: "nosuchagent", Definitions: agents.MustBuiltin(), Repo: "o/r"}
 	err := runner.Run(context.Background(), Issue{Number: 7, Target: "o/r"})
-	if err == nil || !strings.Contains(err.Error(), `unknown agent "gemini"`) {
+	if err == nil || !strings.Contains(err.Error(), `unknown agent "nosuchagent"`) {
 		t.Fatalf("error = %v, want it to name the unknown agent", err)
 	}
 	for _, name := range agents.MustBuiltin().Names() {
@@ -600,10 +705,10 @@ func TestJSONLAgentDefinitionContract(t *testing.T) {
 	}.check(t)
 }
 
-// TestJSONLAgentKeepsForeignMissingSessionPhrasesToItself proves the other
-// half of a per-agent list: an agent that names its own phrase is not restarted
-// by a shared default it never prints, so a genuine failure is still reported.
-func TestJSONLAgentDoesNotRestartOnAForeignMissingSessionPhrase(t *testing.T) {
+// TestJSONLAgentDoesNotRestartOnAnOrdinaryFailure proves the other half of the
+// detector: output that names no missing-session phrase at all is reported as
+// the agent failure it is rather than restarting the work.
+func TestJSONLAgentDoesNotRestartOnAnOrdinaryFailure(t *testing.T) {
 	definition := agents.Definition{
 		Name: "streamer", Binary: "streamer",
 		Session:        agents.Session{Assign: agents.AssignNone},
@@ -616,11 +721,11 @@ func TestJSONLAgentDoesNotRestartOnAForeignMissingSessionPhrase(t *testing.T) {
 	}
 	contract := agentContract{Definition: definition, Repo: "o/r", Number: 7}
 	runner, record := contract.runner(t, fakeAgentRun{
-		MissingOn: invocation(0), MissingText: "error: session not found",
+		MissingOn: invocation(0), MissingText: "error: model overloaded, try again",
 	})
 	session := AgentSession{Agent: definition.Name, Resume: true}
 	if err := runner.RunSession(context.Background(), contract.issue(), session, func(AgentSession) {}); err == nil {
-		t.Fatal("a failure phrase this agent's definition does not name was treated as a missing session")
+		t.Fatal("an ordinary agent failure was treated as a missing session")
 	}
 	if got := fakeAgentInvocationRecords(t, record); len(got) != 1 {
 		t.Fatalf("agent invocations = %d, want no restart", len(got))

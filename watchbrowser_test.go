@@ -18,7 +18,7 @@ func parseWatchFlags(t *testing.T, args ...string) *flag.FlagSet {
 	t.Helper()
 	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
 	filter := filterFlag{values: []string{defaultIssueFilter}}
-	flags := watchFlagSet(&agents, &filter)
+	flags := watchFlagSet(&agents, &agentBinaryFlag{}, &filter)
 	flags.Init("watch", flag.ContinueOnError)
 	if err := flags.Parse(args); err != nil {
 		t.Fatalf("parse %v: %v", args, err)

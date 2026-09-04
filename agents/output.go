@@ -64,11 +64,14 @@ func (j JSONL) validate() error {
 
 // MissingSessionPatterns are the phrases that mean the agent no longer holds
 // the session it was asked to resume, so the work is restarted rather than
-// reported as a failure. A definition that names none is detected by the
-// shared defaults.
+// reported as a failure. The shared defaults always apply; a definition's own
+// phrases are added to them, which is what keeps one agent's distinctive
+// wording out of every other agent's detection.
 func (d Definition) MissingSessionPatterns() []string {
 	if len(d.MissingSession) == 0 {
 		return DefaultMissingSessionPatterns
 	}
-	return d.MissingSession
+	patterns := make([]string, 0, len(DefaultMissingSessionPatterns)+len(d.MissingSession))
+	patterns = append(patterns, DefaultMissingSessionPatterns...)
+	return append(patterns, d.MissingSession...)
 }

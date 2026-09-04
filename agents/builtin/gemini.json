@@ -1,0 +1,32 @@
+{
+  "name": "gemini",
+  "binary": "gemini",
+  "env": {"GEMINI_CLI_TRUST_WORKSPACE": "true"},
+  "session": {"assign": "glorp"},
+  "output": {"format": "text"},
+  "missingSession": ["no previous sessions found", "invalid session identifier"],
+  "skills": {"target": "gemini-cli"},
+  "args": {
+    "run": [
+      {"when": "session", "args": ["--session-id", "{session}"]},
+      {"when": "yolo", "args": ["--yolo"]},
+      {"when": "!yolo", "args": ["--approval-mode", "auto_edit"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"args": ["--output-format", "text"]},
+      {"args": ["-p", "{prompt}"]}
+    ],
+    "resume": [
+      {"args": ["--resume", "{session}"]},
+      {"when": "yolo", "args": ["--yolo"]},
+      {"when": "!yolo", "args": ["--approval-mode", "auto_edit"]},
+      {"args": ["--output-format", "text"]},
+      {"args": ["-p", "{prompt}"]}
+    ],
+    "vision": [
+      {"when": "yolo", "args": ["--yolo"]},
+      {"when": "!yolo", "args": ["--approval-mode", "auto_edit"]},
+      {"when": "model", "args": ["--model", "{model}"]},
+      {"args": ["-p", "{prompt}"]}
+    ]
+  }
+}

@@ -118,3 +118,48 @@ export async function submitSettings(update) {
 	}
 	return response.json();
 }
+
+// agentOptionsFrom normalises the settings snapshot's agent list. The
+// registry-backed agentOptions carry each agent's model and level allow-lists
+// (issue #489); the plain agents array is the same set without them, and is
+// what an older glorp reports.
+export function agentOptionsFrom(snapshot) {
+	if (snapshot?.agentOptions?.length) return snapshot.agentOptions;
+	return (snapshot?.agents || []).map((name) => ({ name }));
+}
+
+// agentSpecOptions expands the registry's agents into the concrete --agent
+// values the selector offers: the bare name, and one entry per model and per
+// level the agent declares. An agent with no allow-list contributes only its
+// name, because any model or level is accepted for it.
+export function agentSpecOptions(agentOptions) {
+	const specs = [];
+	for (const option of agentOptions || []) {
+		if (!option || !option.name) continue;
+		specs.push(option.name);
+		for (const model of option.models || [])
+			specs.push(`${option.name}/${model}`);
+		for (const level of option.levels || [])
+			specs.push(`${option.name}:${level}`);
+	}
+	return specs;
+}
+
+// agentOptionHint describes what the agent currently typed into the field
+// accepts, so a rejected model or level is visible before the form is
+// submitted rather than only in the error the settings API returns.
+export function agentOptionHint(agentOptions, value) {
+	const name = String(value || "")
+		.trim()
+		.split(":")[0]
+		.split("/")[0];
+	if (!name) return "";
+	const option = (agentOptions || []).find(
+		(entry) => entry && entry.name === name,
+	);
+	if (!option) return "";
+	const parts = [];
+	if (option.models?.length) parts.push(`models: ${option.models.join(", ")}`);
+	if (option.levels?.length) parts.push(`levels: ${option.levels.join(", ")}`);
+	return parts.join(" · ");
+}

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lsegal/glorp/agents"
 	"github.com/lsegal/glorp/core"
 )
 
@@ -188,7 +189,12 @@ type Glorp struct {
 	probeInterval time.Duration
 	Status        IssueStatuser
 	UI            UIReporter
-	Quota         func(context.Context) map[string]string
+	// Registry is the agent registry this run was configured with. The
+	// settings API reports the agents it holds, so the dashboard's agent
+	// selector offers a config-defined agent without a code change. A nil
+	// registry falls back to the run's own.
+	Registry *agents.Registry
+	Quota    func(context.Context) map[string]string
 	// Identity names this instance in cooperative handoff comments. It is
 	// generated once at startup and never persisted.
 	Identity Identity

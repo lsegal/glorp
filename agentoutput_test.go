@@ -166,9 +166,12 @@ func TestNewOutputDecoderSelectsByFormat(t *testing.T) {
 	}
 }
 
-// A definition's own missing-session phrase is what its runs are matched
-// against; the shared defaults apply only to a definition that names none.
+// A definition's own missing-session phrase is matched for its runs on top of
+// the shared defaults, which every agent keeps.
 func TestMissingSessionDetectorUsesTheDefinitionsOwnPatterns(t *testing.T) {
+	ownPatterns := func(phrases ...string) []string {
+		return agents.Definition{MissingSession: phrases}.MissingSessionPatterns()
+	}
 	for _, test := range []struct {
 		name     string
 		patterns []string
@@ -176,9 +179,9 @@ func TestMissingSessionDetectorUsesTheDefinitionsOwnPatterns(t *testing.T) {
 		want     bool
 	}{
 		{name: "default list", output: "error: No conversation found", want: true},
-		{name: "own phrase", patterns: []string{"Thread has expired"}, output: "thread has expired\n", want: true},
-		{name: "own phrase replaces the defaults", patterns: []string{"Thread has expired"}, output: "no conversation found"},
-		{name: "unrelated failure", patterns: []string{"Thread has expired"}, output: "compilation failed"},
+		{name: "own phrase", patterns: ownPatterns("Thread has expired"), output: "thread has expired\n", want: true},
+		{name: "shared defaults still apply", patterns: ownPatterns("Thread has expired"), output: "no conversation found", want: true},
+		{name: "unrelated failure", patterns: ownPatterns("Thread has expired"), output: "compilation failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			detector := &missingSessionDetector{output: io.Discard, patterns: test.patterns}

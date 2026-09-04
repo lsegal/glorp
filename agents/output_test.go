@@ -81,16 +81,17 @@ func TestJSONLPathsAcceptArrayStepsAndNesting(t *testing.T) {
 }
 
 // A definition that names no missing-session phrases is detected by the shared
-// list; one that names its own is detected by exactly those, so a distinctive
-// message is added without loosening detection for every other agent.
+// list; one that names its own is detected by those as well, so a distinctive
+// message is added for that agent without loosening detection for the others.
 func TestMissingSessionPatternsDefaultToTheSharedList(t *testing.T) {
 	definition := definitionWithOutput(Output{Format: FormatText})
 	if got := definition.MissingSessionPatterns(); !reflect.DeepEqual(got, DefaultMissingSessionPatterns) {
 		t.Fatalf("patterns = %#v, want the shared defaults %#v", got, DefaultMissingSessionPatterns)
 	}
 	definition.MissingSession = []string{"Thread has expired"}
-	if got := definition.MissingSessionPatterns(); !reflect.DeepEqual(got, []string{"Thread has expired"}) {
-		t.Fatalf("patterns = %#v, want only the definition's own", got)
+	want := append(append([]string(nil), DefaultMissingSessionPatterns...), "Thread has expired")
+	if got := definition.MissingSessionPatterns(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("patterns = %#v, want the shared defaults plus the definition's own %#v", got, want)
 	}
 	definition.MissingSession = []string{" "}
 	if err := definition.Validate(); err == nil {
@@ -112,6 +113,31 @@ func TestBuiltinOutputDecoders(t *testing.T) {
 		}
 		if got := definition.MissingSessionPatterns(); !reflect.DeepEqual(got, DefaultMissingSessionPatterns) {
 			t.Fatalf("%s missing-session patterns = %#v, want the shared defaults", name, got)
+		}
+	}
+}
+
+// Gemini prints two wordings no other agent does, which is exactly what a
+// per-agent list is for: they are detected for gemini and for nothing else.
+func TestGeminiNamesItsOwnMissingSessionPhrases(t *testing.T) {
+	registry := MustBuiltin()
+	gemini, ok := registry.Lookup("gemini")
+	if !ok {
+		t.Skip("no gemini definition in this build")
+	}
+	patterns := strings.Join(gemini.MissingSessionPatterns(), "|")
+	for _, want := range append(append([]string(nil), DefaultMissingSessionPatterns...), "no previous sessions found", "invalid session identifier") {
+		if !strings.Contains(patterns, want) {
+			t.Fatalf("gemini patterns = %v, want them to include %q", gemini.MissingSessionPatterns(), want)
+		}
+	}
+	for _, name := range registry.Names() {
+		definition, _ := registry.Lookup(name)
+		if name == "gemini" {
+			continue
+		}
+		if strings.Contains(strings.Join(definition.MissingSessionPatterns(), "|"), "no previous sessions found") {
+			t.Fatalf("%s is detected by gemini's own wording", name)
 		}
 	}
 }
