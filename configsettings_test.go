@@ -84,8 +84,10 @@ func TestConfigSettingsSupplyWatchDefaults(t *testing.T) {
 	if got := flagValue[string](parsed.flags, "ready-state"); got != "Queued" {
 		t.Errorf("ready-state = %q, want %q", got, "Queued")
 	}
-	if got := strings.Join(parsed.specs.specs(), ","); got != "claude/opus,codex" {
-		t.Errorf("agents = %q, want %q", got, "claude/opus,codex")
+	// A configured agent naming no model picks up its definition's managed
+	// default (issue #612), so the parsed spec carries it.
+	if want := "claude/opus,codex/" + codexDefaultModel; strings.Join(parsed.specs.specs(), ",") != want {
+		t.Errorf("agents = %q, want %q", strings.Join(parsed.specs.specs(), ","), want)
 	}
 	if got := len(parsed.filter.values); got != 2 {
 		t.Errorf("filters = %d, want 2", got)
@@ -103,8 +105,8 @@ func TestCommandLineBeatsConfigSettings(t *testing.T) {
 	if got := flagValue[int](parsed.flags, "concurrency"); got != 2 {
 		t.Errorf("concurrency = %d, want 2 from the command line", got)
 	}
-	if got := strings.Join(parsed.specs.specs(), ","); got != "codex" {
-		t.Errorf("agents = %q, want %q from the command line", got, "codex")
+	if want := "codex/" + codexDefaultModel; strings.Join(parsed.specs.specs(), ",") != want {
+		t.Errorf("agents = %q, want %q from the command line", strings.Join(parsed.specs.specs(), ","), want)
 	}
 	if got := flagValue[string](parsed.flags, "pollmode"); got != "poll" {
 		t.Errorf("pollmode = %q, want %q from the file", got, "poll")
@@ -228,8 +230,8 @@ func TestSaveConfigSettingsMergesIntoFile(t *testing.T) {
 	if got := flagValue[int](parsed.flags, "concurrency"); got != 9 {
 		t.Errorf("reloaded concurrency = %d, want 9", got)
 	}
-	if got := strings.Join(parsed.specs.specs(), ","); got != "claude,codex" {
-		t.Errorf("reloaded agents = %q, want %q", got, "claude,codex")
+	if want := "claude/" + claudeDefaultModel + ",codex/" + codexDefaultModel; strings.Join(parsed.specs.specs(), ",") != want {
+		t.Errorf("reloaded agents = %q, want %q", strings.Join(parsed.specs.specs(), ","), want)
 	}
 }
 
