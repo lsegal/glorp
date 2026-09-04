@@ -410,13 +410,23 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "binary": "opencode",
   "levels": ["low", "medium", "high"],
   "session": {"assign": "none"},
-  "output": {"format": "text"},
+  "output": {
+    "format": "jsonl",
+    "jsonl": {
+      "type": "type",
+      "text": "part.text",
+      "toolName": "part.tool",
+      "toolInput": "part.state.input",
+      "ignore": ["step_start", "step_finish"]
+    }
+  },
   "skills": {"target": "opencode"},
   "args": {
     "run": [
       {"args": ["run", "--auto"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--variant", "{level}"]},
+      {"args": ["--format", "json"]},
       {"args": ["{prompt}"]}
     ],
     "vision": [
@@ -437,13 +447,22 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "binary": "cline",
   "levels": ["none", "low", "medium", "high", "xhigh"],
   "session": {"assign": "none"},
-  "output": {"format": "text"},
+  "output": {
+    "format": "jsonl",
+    "jsonl": {
+      "type": "event.type",
+      "text": "event.text",
+      "toolName": "event.toolName",
+      "ignore": ["content_start", "iteration_start", "iteration_end", "usage", "done"]
+    }
+  },
   "skills": {"target": "cline"},
   "args": {
     "run": [
       {"args": ["--auto-approve", "true"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--thinking", "{level}"]},
+      {"args": ["--json"]},
       {"args": ["{prompt}"]}
     ],
     "vision": [

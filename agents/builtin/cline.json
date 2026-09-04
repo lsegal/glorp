@@ -3,13 +3,22 @@
   "binary": "cline",
   "levels": ["none", "low", "medium", "high", "xhigh"],
   "session": {"assign": "none"},
-  "output": {"format": "text"},
+  "output": {
+    "format": "jsonl",
+    "jsonl": {
+      "type": "event.type",
+      "text": "event.text",
+      "toolName": "event.toolName",
+      "ignore": ["content_start", "iteration_start", "iteration_end", "usage", "done"]
+    }
+  },
   "skills": {"target": "cline"},
   "args": {
     "run": [
       {"args": ["--auto-approve", "true"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--thinking", "{level}"]},
+      {"args": ["--json"]},
       {"args": ["{prompt}"]}
     ],
     "vision": [

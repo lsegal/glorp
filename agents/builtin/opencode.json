@@ -3,13 +3,23 @@
   "binary": "opencode",
   "levels": ["low", "medium", "high"],
   "session": {"assign": "none"},
-  "output": {"format": "text"},
+  "output": {
+    "format": "jsonl",
+    "jsonl": {
+      "type": "type",
+      "text": "part.text",
+      "toolName": "part.tool",
+      "toolInput": "part.state.input",
+      "ignore": ["step_start", "step_finish"]
+    }
+  },
   "skills": {"target": "opencode"},
   "args": {
     "run": [
       {"args": ["run", "--auto"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["--variant", "{level}"]},
+      {"args": ["--format", "json"]},
       {"args": ["{prompt}"]}
     ],
     "vision": [

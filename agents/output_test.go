@@ -103,7 +103,10 @@ func TestMissingSessionPatternsDefaultToTheSharedList(t *testing.T) {
 // declarable, since their rendered output is what the existing tests pin.
 func TestBuiltinOutputDecoders(t *testing.T) {
 	registry := MustBuiltin()
-	for name, want := range map[string]string{"claude": FormatStreamJSON, "codex": FormatText, "cline": FormatText} {
+	for name, want := range map[string]string{
+		"claude": FormatStreamJSON, "codex": FormatText, "muse": FormatText,
+		"cline": FormatJSONL, "opencode": FormatJSONL,
+	} {
 		definition, ok := registry.Lookup(name)
 		if !ok {
 			t.Fatalf("no built-in definition for %q", name)
