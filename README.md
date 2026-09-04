@@ -17,8 +17,8 @@ Install and configure these tools before installing glorp:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with access to every repository glorp will watch.
 - [Node.js](https://nodejs.org/) and `npx`. The installer uses `npx` to install the bundled `gh-fix` and `gh-discuss` skills through skills.sh.
-- [ngrok](https://ngrok.com/) for the default webhook mode. Installing it is optional: glorp runs `npx ngrok` when no `ngrok` is on `PATH`, so the Node.js above is enough. Configure ngrok authentication before starting glorp either way. ngrok is not required with `--poll`.
-- A Chromium-based browser ([Chrome](https://www.google.com/chrome/), Chromium, or Edge) for `--browser` mode. Only required with `--browser`, which needs no ngrok tunnel and no extra token. Safari cannot be used: it does not speak the DevTools Protocol. Browser mode reads GitHub as a signed-in user would, and glorp's browser profile starts signed out, so run `glorp auth` once before watching anything private; see [`glorp auth`](#glorp-auth).
+- [ngrok](https://ngrok.com/) for `--pollmode=webhook`. Installing it is optional: glorp runs `npx ngrok` when no `ngrok` is on `PATH`, so the Node.js above is enough. Configure ngrok authentication before starting glorp either way.
+- A Chromium-based browser ([Chrome](https://www.google.com/chrome/), Chromium, or Edge) for the default `--pollmode=browser`. Safari cannot be used: it does not speak the DevTools Protocol. Browser mode reads GitHub as a signed-in user would, and glorp's browser profile starts signed out, so run `glorp auth` once before watching anything private; see [`glorp auth`](#glorp-auth).
 - At least one supported coding agent. glorp ships definitions for [Codex CLI](https://developers.openai.com/codex/cli/) (`codex`), [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`), [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`), [Meta Muse Code](https://dev.meta.ai/docs/muse-code) (`muse`), [opencode](https://opencode.ai) (`opencode`), [Cline](https://cline.bot) (`cline`), and [Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`). Any other compatible CLI can be added without waiting for a glorp release by declaring it in `.glorp.config.json`; see the [agent definitions reference](https://lsegal.github.io/glorp/agents/).
 
 The Unix installer also requires `curl` and standard archive tools. The Windows installer requires PowerShell.
@@ -38,7 +38,7 @@ glorp auth --status # confirm it took
 
 The session is stored in the profile directory and survives later runs, so this is a one-time step per profile.
 
-Repository targets require permission to read issues, manage glorp's labels, and manage webhooks unless `--poll` is used. GitHub Project targets require the `read:project` scope to list items and the `project` scope to update their status. Push mode for organization-owned Projects also requires organization-owner access and the `admin:org_hook` scope:
+Repository targets in webhook mode require permission to read issues, manage glorp's labels, and manage webhooks. GitHub Project targets require the `read:project` scope to list items and the `project` scope to update their status. Push mode for organization-owned Projects also requires organization-owner access and the `admin:org_hook` scope:
 
 ```sh
 gh auth refresh -s read:project -s project
@@ -105,7 +105,7 @@ Every glorp invocation starts with a subcommand:
 
 Options must appear before the first target. A target can be an `OWNER/REPO`, a GitHub repository URL, a GitHub Project URL, or a GitHub Discussions board URL.
 
-Watch a repository using the default Codex agent and webhook mode:
+Watch a repository using the default Codex agent and browser mode:
 
 ```sh
 glorp watch owner/repo
@@ -123,10 +123,10 @@ Select issues using GitHub issue-search syntax:
 glorp watch --filter "assignee:@me" --filter "-label:blocked" owner/repo
 ```
 
-Run without ngrok or managed webhooks by polling every 30 seconds:
+Use API polling without a browser, ngrok, or managed webhooks:
 
 ```sh
-glorp watch --poll --interval 30s owner/repo
+glorp watch --pollmode=poll --interval 30s owner/repo
 ```
 
 The terminal dashboard and the browser dashboard are both shown by default when stdout is a terminal. The browser dashboard is available at `http://localhost:8765` by default; if that port is occupied, glorp uses the next available port and logs the selected URL. Choose a different starting port, or disable either dashboard:
@@ -181,7 +181,7 @@ Only deliveries that can change which issues are dispatchable cause a refresh. C
 
 ## How it works
 
-In the default mode, glorp:
+With `--pollmode=webhook`, glorp:
 
 1. Starts a webhook listener on a randomly assigned available port.
 2. Starts an ngrok tunnel for that listener.
@@ -191,9 +191,9 @@ In the default mode, glorp:
 
 For repository targets, opening an issue yourself and assigning it to yourself marks it eligible for pickup; glorp's default filter only dispatches open issues that the authenticated user both authored and is assigned to, so somebody else assigning you their issue cannot start a run. Ownership of a claimed issue is tracked entirely through the comment-based handoff protocol below rather than a label. Project items are moved through their configured status as work starts and finishes.
 
-Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes, plus a narrow `issues`/`issue_comment` webhook on each repository backing the board so a change to an issue an agent is already working reaches it straight away. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--poll` to avoid starting an unused webhook tunnel for those targets.
+Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes, plus a narrow `issues`/`issue_comment` webhook on each repository backing the board so a change to an issue an agent is already working reaches it straight away. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--pollmode=poll` to avoid starting an unused webhook tunnel for those targets.
 
-`--browser` selects a different transport for the same loop. The default mode reaches GitHub through the API: webhook deliveries arrive over an ngrok tunnel for instant refreshes, and `--interval` polling through `gh` (30s by default) covers everything webhooks do not. Browser mode instead launches one headless Chromium-based browser for the whole run, gives each target a tab on it, and reloads those pages on a short loop, reading what a signed-in user would see. There is no webhook server, no ngrok tunnel, and no API rate limit to stay under, which is why the interval defaults to 20s rather than 30s. Reading the pages a signed-in user sees means the browser profile has to be signed in: it starts empty, and a private repository or board renders as a 404, a 403, or a login wall until it has a session. `glorp auth` opens a visible window on that same profile so you can sign in once; `glorp watch` itself never opens a window, and Chrome allows only one process per profile directory, so signing in is a separate step rather than something a running watch does on the side. `glorp auth --status` reports the profile's current state without opening anything. Because it always polls, `--browser` is rejected rather than silently ignored when combined with `--listen`, `--webhook-path`, `--webhook-secret`, or `--ngrok-binary`, and a browser that cannot be launched is a fatal error instead of a quiet fallback to the API path.
+`--pollmode` selects the transport for the same loop. The default `browser` mode launches one headless Chromium-based browser for the whole run, gives each target a tab on it, and reloads those pages on a short loop, reading what a signed-in user would see. There is no webhook server, no ngrok tunnel, and no API rate limit to stay under, which is why the interval defaults to 20s rather than 30s. `webhook` reaches GitHub through the API: webhook deliveries arrive over an ngrok tunnel for instant refreshes, and `--interval` polling through `gh` (30s by default) covers everything webhooks do not. `poll` uses the same API reads without the webhooks or tunnel. Reading the pages a signed-in user sees means the browser profile has to be signed in: it starts empty, and a private repository or board renders as a 404, a 403, or a login wall until it has a session. `glorp auth` opens a visible window on that same profile so you can sign in once; `glorp watch` itself never opens a window, and Chrome allows only one process per profile directory, so signing in is a separate step rather than something a running watch does on the side. `glorp auth --status` reports the profile's current state without opening anything. Because browser mode always polls, it is rejected rather than silently ignored when combined with `--listen`, `--webhook-path`, `--webhook-secret`, or `--ngrok-binary`, and a browser that cannot be launched is a fatal error instead of a quiet fallback to the API path.
 
 That profile has to be signed in to GitHub, once: `--browser-profile` defaults to a directory of glorp's own, and a fresh one is signed out. It matters more than it looks, because the default `--filter` is written in terms of `@me`. A signed-out session resolves `@me` to nobody, so GitHub answers with a real, correctly empty search result rather than an error, and the run would otherwise poll a repository full of ready work forever without dispatching any of it. glorp checks for this on any page that comes back with no rows and stops with the profile directory and a pointer to `glorp auth`, rather than reporting zero issues.
 
@@ -243,7 +243,8 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--agent-binary NAME=PATH` | the definition's own `binary` | Executable to invoke one agent through, overriding the `binary` its definition names. Repeatable, once per agent, and the only way to point a `--config` agent at a different install. It outranks `--claude-binary` and `--codex-binary`, and the executable it names is used for the agent's quota command as well as its runs. An unregistered agent name is rejected with the agents that do exist. |
 | `--all-issues` | `false` | Disable the default issue-search filter and consider all open issues. The `is:issue state:open` qualifiers glorp always adds still apply. |
 | `--allowed-commenters LOGINS` | the authenticated `gh` user | Comma-separated GitHub logins allowed to trigger a direct `@/glorp:ID` mention run. |
-| `--browser` | `false` | Read GitHub through a headless Chromium-based browser instead of the GitHub API. Implies `--poll`, so no webhook server and no ngrok tunnel are started, and it cannot be combined with `--listen`, `--webhook-path`, `--webhook-secret`, or `--ngrok-binary`. Unless `--interval` is given explicitly it also shortens the interval to `20s`. |
+| `--pollmode MODE` | `browser` | Delivery mode: `browser` reads GitHub through a headless Chromium-based browser; `webhook` uses the GitHub API with ngrok-managed webhooks; `poll` uses API polling without webhooks. Browser mode starts no webhook server or ngrok tunnel, cannot be combined with `--listen`, `--webhook-path`, `--webhook-secret`, or `--ngrok-binary`, and defaults to a `20s` interval unless `--interval` is explicit. |
+| `--browser` | `false` | Deprecated alias for `--pollmode=browser`. |
 | `--browser-binary PATH` | auto-detected | Chromium-based browser executable for `--browser`. Resolved through `PATH`, so a bare name works as well as a full path. By default glorp looks for `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`, or `msedge`, then the usual per-platform install locations. |
 | `--browser-profile PATH` | `<config dir>/glorp/browser-data` | Browser profile directory for `--browser`. Defaults to glorp's own profile, kept separate from your everyday browsing profile: `~/Library/Application Support/glorp/browser-data` on macOS, `%AppData%\glorp\browser-data` on Windows, and `~/.config/glorp/browser-data` on Linux. |
 | `--browser-vision` | `false` | In `--browser` mode only, let an agent read a screenshot of an issues page whose markup glorp no longer recognises. Off by default and never used on the success path: it fires only on the extraction failure above, at most once per target per 10 minutes and at most 3 times per run, after which it disables itself for the rest of the run. The agent is asked for a bare JSON list of issue numbers and anything else is discarded without a retry. It is a bridge until the page extractor is fixed in code, not a replacement for it.
@@ -258,7 +259,7 @@ If no `TARGET` is given, glorp uses the current directory's `origin` git remote 
 | `--ngrok-binary PATH` | `ngrok` | ngrok executable name or path. Left at its default, glorp falls back to `npx --yes ngrok` when no `ngrok` is installed; set to anything else, the named executable must exist. |
 | `--no-tui` | `false` | Disable the interactive terminal dashboard; it is otherwise shown by default when stdout is a terminal. |
 | `--no-webui` | `false` | Disable the browser dashboard; it is otherwise shown by default. |
-| `--poll` | `false` | Use polling without starting ngrok or configuring GitHub webhooks. |
+| `--poll` | `false` | Deprecated alias for `--pollmode=poll`. |
 | `--ready-state NAME` | auto (`Todo` or `Ready`) | Project status that marks an issue ready for an agent; matching is case-insensitive. |
 | `--remote-control` | `false` | Ask Claude runs to start Remote Control so a headless agent is viewable, and steerable, from the Claude mobile app and claude.ai/code. Claude receives `--settings {"remoteControlAtStartup":true}`, layered on top of your own settings, plus `--rc "glorp owner/repo#N"` so concurrent runs are told apart by issue instead of sharing a host name. **Claude does not honour this under `-p`**: measured against Claude Code 2.1.248, a headless run started with exactly these arguments starts no bridge and never reaches the app, which is why the flag is off by default. It is kept as an opt-in so a Claude release that reads the setting in print mode needs no change here. **No substitute lever exists either** (issue #506): `autoUploadSessions`, the hoped-for view-only mirror, is not a Claude Code setting at all — it is absent from the settings reference, and a `-p` run with every debug category on makes no upload or session-share request of any kind. `claude remote-control`, the separate server mode, hosts only the sessions it creates itself: its `--session-id` takes a server-side code session rather than a local session UUID, so reattaching to a run glorp started is rejected as `invalid session ID: must be a cse_… or session_… tagged ID`, and it also refuses to start until the workspace trust dialog has been accepted interactively — which a `-p` run never triggers, because print mode skips that dialog — and then asks `Enable Remote Control? (y/n)` on the terminal. The remaining answer is a Claude Code change, filed upstream as [anthropics/claude-code#91906](https://github.com/anthropics/claude-code/issues/91906); until it lands, a run is followed in glorp's own dashboard, which is localhost only, and turning the flag on prints that once at startup rather than silently reaching nobody. Codex runs are unaffected and stay viewable in glorp's own dashboard only, so opting in on a watch that has Codex configured prints that once at startup rather than leaving the run's absence from the phone unexplained. `codex exec` takes no Remote Control argument, and Codex's separate `codex remote-control` daemon is not a way around that: it is the app-server hosting the threads it starts itself, so glorp has nothing to hand it an already-running `codex exec`, its `start`, `stop`, and `pair` commands run on Unix only, and pairing a device to it is a manual step. Reaching Codex runs from a phone would mean driving Codex over the app-server protocol instead of `codex exec` altogether. |
 | `--state PATH` | `.glorp.json` | File used to persist handled issues and active session state. |

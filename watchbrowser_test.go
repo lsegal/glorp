@@ -28,13 +28,61 @@ func parseWatchFlags(t *testing.T, args ...string) *flag.FlagSet {
 
 func TestWatchFlagSetHasBrowserFlags(t *testing.T) {
 	flags := commandFlags("watch")
-	for _, name := range []string{"browser", "browser-profile", "browser-binary", "no-headless"} {
+	for _, name := range []string{"pollmode", "browser", "browser-profile", "browser-binary", "no-headless"} {
 		found := flags.Lookup(name)
 		if found == nil {
 			t.Fatalf("watch flag %q is missing", name)
 		}
 		if strings.TrimSpace(found.Usage) == "" {
 			t.Fatalf("watch flag %q has no help text", name)
+		}
+	}
+}
+
+func TestResolveBrowserWatchDefaultsToBrowserMode(t *testing.T) {
+	flags := parseWatchFlags(t, "owner/repo")
+	options, interval, poll, err := resolveBrowserWatch(flags, 30*time.Second, false)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !options.Enabled || !poll || interval != browserWatchInterval {
+		t.Fatalf("options = %+v, poll = %v, interval = %v", options, poll, interval)
+	}
+}
+
+func TestResolveBrowserWatchSelectsEachPollMode(t *testing.T) {
+	for _, test := range []struct {
+		mode    string
+		browser bool
+		poll    bool
+	}{
+		{"browser", true, true},
+		{"webhook", false, false},
+		{"poll", false, true},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			flags := parseWatchFlags(t, "--pollmode", test.mode, "owner/repo")
+			options, _, poll, err := resolveBrowserWatch(flags, 30*time.Second, false)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if options.Enabled != test.browser || poll != test.poll {
+				t.Fatalf("browser = %v, poll = %v", options.Enabled, poll)
+			}
+		})
+	}
+}
+
+func TestResolveBrowserWatchRejectsInvalidOrConflictingModes(t *testing.T) {
+	for _, args := range [][]string{
+		{"--pollmode", "other", "owner/repo"},
+		{"--pollmode", "webhook", "--browser", "owner/repo"},
+		{"--pollmode", "webhook", "--poll", "owner/repo"},
+		{"--browser", "--poll", "owner/repo"},
+	} {
+		flags := parseWatchFlags(t, args...)
+		if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
+			t.Fatalf("resolve %v: expected an error", args)
 		}
 	}
 }
@@ -116,8 +164,8 @@ func TestResolveBrowserWatchReportsEveryConflictingFlag(t *testing.T) {
 // Without -browser the resolver must be inert: the webhook flags stay legal,
 // the interval and poll settings pass through, and browser mode stays off so
 // nothing in runWatch launches a browser.
-func TestResolveBrowserWatchLeavesApiModeUntouched(t *testing.T) {
-	flags := parseWatchFlags(t, "--listen", ":8080", "--ngrok-binary", "ngrok", "owner/repo")
+func TestResolveBrowserWatchLeavesWebhookModeUntouched(t *testing.T) {
+	flags := parseWatchFlags(t, "--pollmode", "webhook", "--listen", ":8080", "--ngrok-binary", "ngrok", "owner/repo")
 	options, interval, poll, err := resolveBrowserWatch(flags, 30*time.Second, false)
 	if err != nil {
 		t.Fatalf("resolveBrowserWatch: %v", err)
@@ -178,7 +226,7 @@ func TestResolveBrowserWatchVision(t *testing.T) {
 }
 
 func TestResolveBrowserWatchRejectsVisionWithoutBrowserMode(t *testing.T) {
-	flags := parseWatchFlags(t, "--browser-vision", "owner/repo")
+	flags := parseWatchFlags(t, "--pollmode", "poll", "--browser-vision", "owner/repo")
 	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
 		t.Fatal("expected -browser-vision without -browser to be rejected")
 	}
@@ -239,7 +287,7 @@ func TestResolveBrowserWatchNoHeadlessKeepsBrowserModeIntact(t *testing.T) {
 }
 
 func TestResolveBrowserWatchRejectsNoHeadlessWithoutBrowserMode(t *testing.T) {
-	flags := parseWatchFlags(t, "--no-headless", "owner/repo")
+	flags := parseWatchFlags(t, "--pollmode", "poll", "--no-headless", "owner/repo")
 	if _, _, _, err := resolveBrowserWatch(flags, 30*time.Second, false); err == nil {
 		t.Fatal("expected -no-headless without -browser to be rejected")
 	}
