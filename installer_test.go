@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -107,7 +108,7 @@ func TestAgentsSkillsCommandPrintsTheRegistryTargets(t *testing.T) {
 func TestSkillsTargetsMergeConfigAndDeduplicate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), agents.DefaultConfigPath)
 	document := `{"agents":[
-		{"name":"muse","binary":"muse","skills":{"target":"universal"},
+		{"name":"acme","binary":"acme","skills":{"target":"universal"},
 		 "session":{"assign":"none"},"output":{"format":"text"},
 		 "args":{"run":[{"args":["run","{prompt}"]}],"resume":[{"args":["run","{prompt}"]}]}},
 		{"name":"claude-next","binary":"claude","skills":{"target":"claude-code"},
@@ -121,8 +122,24 @@ func TestSkillsTargetsMergeConfigAndDeduplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.SkillsTargets(), []string{"claude-code", "codex", "universal"}; !reflect.DeepEqual(got, want) {
+	// The expectation is the built-in targets plus the config's own, rather
+	// than a written-out list, so an agent definition added later does not
+	// have to edit a test about deduplication to say so.
+	want := uniqueSorted(append(agents.MustBuiltin().SkillsTargets(), "universal"))
+	got := registry.SkillsTargets()
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("targets = %v, want %v", got, want)
+	}
+	// claude-next names the same target as the built-in claude, which is the
+	// duplicate this test exists to catch.
+	seen := 0
+	for _, target := range got {
+		if target == "claude-code" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("targets = %v, want claude-code exactly once", got)
 	}
 }
 
@@ -143,4 +160,18 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return string(out)
+}
+
+// uniqueSorted is the shape SkillsTargets() returns: sorted with duplicates
+// dropped. A test's expectation is built with it so naming a target a built-in
+// already declares stays a statement about deduplication rather than a failure.
+func uniqueSorted(values []string) []string {
+	sort.Strings(values)
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if len(unique) == 0 || value != unique[len(unique)-1] {
+			unique = append(unique, value)
+		}
+	}
+	return unique
 }

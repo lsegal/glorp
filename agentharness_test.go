@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -361,6 +362,188 @@ func TestClaudeDefinitionContract(t *testing.T) {
 	}.check(t)
 }
 
+// TestOpencodeDefinitionContract proves the shipped opencode definition. The
+// CLI has no session ID glorp can either assign or read back -- `opencode run`
+// prints none in its default output format, and `--session` only accepts an ID
+// opencode itself minted -- so the definition declares no session at all and a
+// resume is rendered as a plain `opencode run` carrying the recovery prompt.
+// The gh-fix workflow is re-entrant and adopts the draft pull request already
+// open, so restarting is the intended behaviour rather than a lost job.
+func TestOpencodeDefinitionContract(t *testing.T) {
+	agentContract{
+		Definition: builtinDefinition(t, "opencode"),
+		Repo:       "o/r",
+		Number:     7,
+		Stdout:     "working on it",
+		// --auto is unconditional rather than gated on the run's --yolo:
+		// `opencode run` cannot prompt, so anything it would have asked about
+		// -- reaching the isolated clone outside the working directory, above
+		// all -- is auto-rejected without it, and the job dies on a permission
+		// nobody can grant. This is the same reason claude gets
+		// --permission-mode auto when the run is not in yolo mode.
+		WantRun:    []string{"run", "--auto", freshPrompt("o/r", 7)},
+		WantResume: []string{"run", "--auto", resumePrompt()},
+		WantOutput: "working on it",
+	}.check(t)
+}
+
+// TestOpencodeDefinitionRendersModelLevelAndVision pins the rest of the
+// opencode argv: the model is a provider/model pair, the reasoning level is a
+// model variant, and a vision call hands the screenshot over with --file,
+// which opencode reads through its own read tool and attaches as an image.
+func TestOpencodeDefinitionRendersModelLevelAndVision(t *testing.T) {
+	definition := builtinDefinition(t, "opencode")
+	prompt := "/gh-fix o/r#7"
+	for _, test := range []struct {
+		name   string
+		mode   agents.Mode
+		values agents.Values
+		want   []string
+	}{
+		{
+			name: "run with model and level", mode: agents.ModeRun,
+			values: agents.Values{Prompt: prompt, Model: "anthropic/claude-opus-5", Level: "high"},
+			want:   []string{"run", "--auto", "--model", "anthropic/claude-opus-5", "--variant", "high", prompt},
+		},
+		{
+			// The run's own --yolo adds nothing: --auto is already the only
+			// permission mode a non-interactive opencode can work in.
+			name: "run in yolo mode", mode: agents.ModeRun,
+			values: agents.Values{Prompt: prompt, Yolo: true},
+			want:   []string{"run", "--auto", prompt},
+		},
+		{
+			// opencode reads no remote-control settings, so the run's flag
+			// reaches its argv not at all.
+			name: "run ignores remote control", mode: agents.ModeRun,
+			values: agents.Values{Prompt: prompt, RemoteControl: true, Settings: `{"remoteControlAtStartup":true}`, SessionName: "glorp o/r#7"},
+			want:   []string{"run", "--auto", prompt},
+		},
+		{
+			// A session ID glorp happens to be holding is never rendered: the
+			// definition assigns none, so there is nothing to resume by.
+			name: "resume carries no session", mode: agents.ModeResume,
+			values: agents.Values{Prompt: prompt, Session: "ses_1a2b3c"},
+			want:   []string{"run", "--auto", prompt},
+		},
+		{
+			name: "vision", mode: agents.ModeVision,
+			values: agents.Values{Prompt: prompt, Image: "/tmp/shot.png", Model: "anthropic/claude-opus-5"},
+			want:   []string{"run", "--auto", "--file", "/tmp/shot.png", "--model", "anthropic/claude-opus-5", prompt},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := definition.Render(test.mode, test.values); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("argv = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+	if definition.AssignsSessionID() || definition.CapturesSessionID() {
+		t.Fatal("opencode declares a session ID glorp can neither assign nor capture")
+	}
+	if !definition.AcceptsLevel("high") || definition.AcceptsLevel("ultra") {
+		t.Fatal("opencode levels are not validated against the definition")
+	}
+}
+
+// TestGeminiDefinitionContract proves the shipped gemini definition. Gemini
+// CLI takes a caller-supplied UUID with --session-id and resumes it by that
+// same UUID with --resume, so glorp assigns the ID exactly as it does for
+// Claude. Its headless mode refuses to run in a directory the user has not
+// trusted interactively, which every glorp run is -- the work happens in a
+// fresh clone -- so the definition carries GEMINI_CLI_TRUST_WORKSPACE rather
+// than passing --skip-trust, and the child process is checked for it here.
+// Its --output-format stream-json emits its own event shape rather than
+// Claude's, so the definition asks for text until the generic decoder from
+// #488 lands.
+func TestGeminiDefinitionContract(t *testing.T) {
+	agentContract{
+		Definition: builtinDefinition(t, "gemini"),
+		Repo:       "o/r",
+		Number:     7,
+		SessionID:  "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+		Stdout:     "working on it",
+		WantRun: []string{
+			"--session-id", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--approval-mode", "auto_edit", "--output-format", "text",
+			"-p", freshPrompt("o/r", 7),
+		},
+		WantResume: []string{
+			"--resume", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--approval-mode", "auto_edit", "--output-format", "text",
+			"-p", resumePrompt(),
+		},
+		WantEnv:    map[string]string{"GEMINI_CLI_TRUST_WORKSPACE": "true"},
+		WantOutput: "working on it",
+	}.check(t)
+}
+
+// TestGeminiDefinitionYoloContract pins the other half of the approval
+// switch: --yolo replaces --approval-mode auto_edit rather than being added
+// alongside it, which Gemini CLI would reject as contradictory.
+func TestGeminiDefinitionYoloContract(t *testing.T) {
+	agentContract{
+		Definition: builtinDefinition(t, "gemini"),
+		Repo:       "o/r",
+		Number:     7,
+		SessionID:  "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+		Yolo:       true,
+		Stdout:     "working on it",
+		WantRun: []string{
+			"--session-id", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--yolo", "--output-format", "text", "-p", freshPrompt("o/r", 7),
+		},
+		WantResume: []string{
+			"--resume", "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+			"--yolo", "--output-format", "text", "-p", resumePrompt(),
+		},
+		WantEnv:    map[string]string{"GEMINI_CLI_TRUST_WORKSPACE": "true"},
+		WantOutput: "working on it",
+	}.check(t)
+}
+
+// TestGeminiVisionArgsNameTheImageInThePrompt pins the one-shot browser-board
+// read. Gemini CLI has no --image flag, so the screenshot is handed over the
+// way Claude's is, by the path the vision prompt already names, which its
+// read_file tool loads as an image part.
+func TestGeminiVisionArgsNameTheImageInThePrompt(t *testing.T) {
+	definition := builtinDefinition(t, "gemini")
+	args := definition.Render(agents.ModeVision, agents.Values{
+		Prompt: "look at /tmp/shot.png", Image: "/tmp/shot.png", Model: "gemini-2.5-pro",
+	})
+	want := []string{"--approval-mode", "auto_edit", "--model", "gemini-2.5-pro", "-p", "look at /tmp/shot.png"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("vision argv = %#v, want %#v", args, want)
+	}
+	for _, arg := range args {
+		if arg == "--image" {
+			t.Fatal("gemini has no --image flag; the screenshot is named in the prompt")
+		}
+	}
+}
+
+// TestGeminiResumeFailureMessagesRestartTheWork pins the wordings Gemini CLI
+// prints when the recorded session is gone -- one for a project with no
+// session history and one for a project whose history does not hold that
+// UUID -- against the messages glorp watches for. Without them a resume of an
+// expired session is reported as an agent failure instead of restarting.
+func TestGeminiResumeFailureMessagesRestartTheWork(t *testing.T) {
+	for _, message := range []string{
+		"Error resuming session: No previous sessions found for this project.",
+		"Error resuming session: Invalid session identifier " +
+			`"3f2504e0-4f89-11d3-9a0c-0305e82c3301".` +
+			"\n  Searched for sessions in /tmp/chats.\n  Use --list-sessions to see available sessions,",
+	} {
+		detector := &missingSessionDetector{output: io.Discard}
+		if _, err := detector.Write([]byte(message)); err != nil {
+			t.Fatal(err)
+		}
+		if !detector.sessionMissing() {
+			t.Fatalf("glorp does not recognise %q as a session it can no longer resume", message)
+		}
+	}
+}
+
 // TestConfiguredAgentDefinitionIsDispatchable proves the whole path an agent
 // nobody built in takes: declared in .glorp.config.json, accepted by --agent,
 // and dispatched through the executable its own definition names.
@@ -372,7 +555,7 @@ func TestConfiguredAgentDefinitionIsDispatchable(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, agents.DefaultConfigPath)
 	document := fmt.Sprintf(`{"agents":[{
-		"name": "muse",
+		"name": "acme",
 		"binary": %q,
 		"levels": ["fast", "thorough"],
 		"session": {"assign": "capture", "capture": "conversation ([0-9a-z-]+)", "clearOnResumeFailure": true},
@@ -389,17 +572,17 @@ func TestConfiguredAgentDefinitionIsDispatchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	spec, err := parseAgentSpecIn(registry, "muse:thorough")
+	spec, err := parseAgentSpecIn(registry, "acme:thorough")
 	if err != nil {
-		t.Fatalf("--agent muse:thorough was rejected: %v", err)
+		t.Fatalf("--agent acme:thorough was rejected: %v", err)
 	}
-	if want := (agentSpec{Name: "muse", Level: "thorough"}); spec != want {
+	if want := (agentSpec{Name: "acme", Level: "thorough"}); spec != want {
 		t.Fatalf("spec = %#v, want %#v", spec, want)
 	}
-	if _, err := parseAgentSpecIn(registry, "muse:high"); err == nil {
+	if _, err := parseAgentSpecIn(registry, "acme:high"); err == nil {
 		t.Fatal("a level outside the definition's own list was accepted")
 	}
-	definition, ok := registry.Lookup("muse")
+	definition, ok := registry.Lookup("acme")
 	if !ok {
 		t.Fatal("the configured agent was not registered")
 	}
@@ -458,12 +641,14 @@ func TestAgentDefinitionCapturesCheckoutDirectory(t *testing.T) {
 // agent the registry no longer defines fails with a message listing what it
 // does define, instead of spawning whatever the binary flags happen to hold.
 func TestUnknownAgentIsReportedRatherThanRun(t *testing.T) {
-	runner := CommandRunner{Agent: "gemini", Definitions: agents.MustBuiltin(), Repo: "o/r"}
+	runner := CommandRunner{Agent: "nosuchagent", Definitions: agents.MustBuiltin(), Repo: "o/r"}
 	err := runner.Run(context.Background(), Issue{Number: 7, Target: "o/r"})
-	if err == nil || !strings.Contains(err.Error(), `unknown agent "gemini"`) {
+	if err == nil || !strings.Contains(err.Error(), `unknown agent "nosuchagent"`) {
 		t.Fatalf("error = %v, want it to name the unknown agent", err)
 	}
-	if !strings.Contains(err.Error(), "claude, codex") {
-		t.Fatalf("error = %v, want it to list the known agents", err)
+	for _, name := range agents.MustBuiltin().Names() {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("error = %v, want it to list the known agent %q", err, name)
+		}
 	}
 }

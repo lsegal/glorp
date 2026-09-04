@@ -506,7 +506,7 @@ func TestVisionCapHoldsAcrossConcurrentTargets(t *testing.T) {
 // hardcoded when a new CLI is declared in configuration.
 func TestVisionArgsComeFromTheAgentDefinition(t *testing.T) {
 	definition := agents.Definition{
-		Name: "muse", Binary: "muse",
+		Name: "acme", Binary: "acme",
 		Args: agents.Args{
 			Run:    []agents.Fragment{{Args: []string{"{prompt}"}}},
 			Resume: []agents.Fragment{{Args: []string{"{prompt}"}}},
@@ -515,7 +515,7 @@ func TestVisionArgsComeFromTheAgentDefinition(t *testing.T) {
 		Session: agents.Session{Assign: agents.AssignNone},
 		Output:  agents.Output{Format: agents.FormatText},
 	}
-	args := visionArgs(AgentSpec{Name: "muse", Definition: &definition, Level: "thorough"}, "/tmp/shot.png", "https://github.com/o/r/issues", false)
+	args := visionArgs(AgentSpec{Name: "acme", Definition: &definition, Level: "thorough"}, "/tmp/shot.png", "https://github.com/o/r/issues", false)
 	if len(args) != 6 || args[0] != "look" || args[1] != "--picture" || args[2] != "/tmp/shot.png" || args[3] != "--care" || args[4] != "thorough" {
 		t.Fatalf("vision args = %#v, want the definition's own template", args)
 	}
@@ -525,7 +525,7 @@ func TestVisionArgsComeFromTheAgentDefinition(t *testing.T) {
 	// An agent with no vision template renders nothing rather than being run
 	// with a bare prompt.
 	definition.Args.Vision = nil
-	if got := visionArgs(AgentSpec{Name: "muse", Definition: &definition}, "/tmp/shot.png", "https://github.com/o/r/issues", false); got != nil {
+	if got := visionArgs(AgentSpec{Name: "acme", Definition: &definition}, "/tmp/shot.png", "https://github.com/o/r/issues", false); got != nil {
 		t.Fatalf("vision args = %#v, want none", got)
 	}
 	// A spec that names an unknown agent and carries no definition renders

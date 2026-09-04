@@ -24,9 +24,7 @@ func TestLoadWithoutAConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("agents = %v, want the built-ins %v", got, want)
-	}
+	requireRegistered(t, registry, "claude", "codex")
 }
 
 // TestConfigOverridesABuiltinFieldByField checks a definition that names a
@@ -55,9 +53,7 @@ func TestConfigOverridesABuiltinFieldByField(t *testing.T) {
 	if got := claude.Render(ModeRun, Values{Prompt: "go"}); !reflect.DeepEqual(got, []string{"-p", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose", "go"}) {
 		t.Fatalf("argv = %#v, want the built-in template", got)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("agents = %v, want %v", got, want)
-	}
+	requireRegistered(t, registry, "claude", "codex")
 }
 
 // TestConfigNullClearsAnInheritedField checks the documented way to remove
@@ -85,7 +81,7 @@ func TestConfigNullClearsAnInheritedField(t *testing.T) {
 // than being rejected for not being one of the built-ins.
 func TestConfigRegistersANewAgent(t *testing.T) {
 	path := writeConfig(t, `{"agents":[{
-		"name":"muse","binary":"muse",
+		"name":"acme","binary":"acme",
 		"session":{"assign":"none"},"output":{"format":"text"},
 		"args":{"run":[{"args":["run","{prompt}"]}],"resume":[{"args":["run","{prompt}"]}]}
 	}]}`)
@@ -93,11 +89,9 @@ func TestConfigRegistersANewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := registry.Names(), []string{"claude", "codex", "muse"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("agents = %v, want %v", got, want)
-	}
-	muse, _ := registry.Lookup("muse")
-	if got := muse.Render(ModeRun, Values{Prompt: "go"}); !reflect.DeepEqual(got, []string{"run", "go"}) {
+	requireRegistered(t, registry, "claude", "codex", "acme")
+	acme, _ := registry.Lookup("acme")
+	if got := acme.Render(ModeRun, Values{Prompt: "go"}); !reflect.DeepEqual(got, []string{"run", "go"}) {
 		t.Fatalf("argv = %#v, want the configured template", got)
 	}
 }
@@ -147,13 +141,13 @@ func TestConfigErrorsNameTheFileTheAgentAndTheField(t *testing.T) {
 		},
 		{
 			name:     "nameless definition",
-			document: `{"agents":[{"binary":"muse"}]}`,
+			document: `{"agents":[{"binary":"acme"}]}`,
 			wantSubs: []string{"agents[0]", `"name"`},
 		},
 		{
 			name:     "key and name disagree",
-			document: `{"agents":{"muse":{"name":"cline"}}}`,
-			wantSubs: []string{`"muse"`, `"cline"`},
+			document: `{"agents":{"acme":{"name":"cline"}}}`,
+			wantSubs: []string{`"acme"`, `"cline"`},
 		},
 		{
 			name:     "unknown section",

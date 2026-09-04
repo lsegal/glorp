@@ -2046,6 +2046,10 @@ var missingSessionPatterns = []string{
 	"session not found",
 	"could not find session",
 	"unable to find session",
+	// Gemini CLI's two wordings: the project has no session history at all,
+	// and it has some but none with the ID glorp recorded.
+	"no previous sessions found",
+	"invalid session identifier",
 }
 
 // missingSessionDetector passes agent output straight through while watching

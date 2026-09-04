@@ -41,7 +41,7 @@ func TestConfigPathIsReadBeforeTheFlagsAre(t *testing.T) {
 // would not survive the next save.
 func TestWorkStateFileWithAgentDefinitionsIsRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".glorp.json")
-	if err := os.WriteFile(path, []byte(`{"agents":[{"name":"muse"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"agents":[{"name":"acme"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	err := guardWorkStateFile(path)
@@ -69,11 +69,12 @@ func TestWorkStateFileWithAgentDefinitionsIsRejected(t *testing.T) {
 // TestUnknownAgentSpecListsTheKnownAgents checks the error --agent gives is
 // built from the registry rather than from a hardcoded pair of names.
 func TestUnknownAgentSpecListsTheKnownAgents(t *testing.T) {
-	_, err := parseAgentSpec("gemini")
+	_, err := parseAgentSpec("nosuchagent")
 	if err == nil {
 		t.Fatal("an unknown agent was accepted")
 	}
-	for _, want := range []string{`unknown agent "gemini"`, "claude, codex"} {
+	want := append([]string{`unknown agent "nosuchagent"`}, agents.MustBuiltin().Names()...)
+	for _, want := range want {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want it to mention %s", err, want)
 		}
@@ -89,7 +90,7 @@ func TestAgentLevelErrorComesFromTheDefinition(t *testing.T) {
 		t.Fatalf("error = %v, want the built-in levels", err)
 	}
 	registry, err := agents.NewRegistry(agents.Definition{
-		Name: "muse", Binary: "muse", Levels: []string{"fast", "thorough"},
+		Name: "acme", Binary: "acme", Levels: []string{"fast", "thorough"},
 		Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
 		Session: agents.Session{Assign: agents.AssignNone},
 		Output:  agents.Output{Format: agents.FormatText},
@@ -97,10 +98,10 @@ func TestAgentLevelErrorComesFromTheDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseAgentSpecIn(registry, "muse:high"); err == nil || !strings.Contains(err.Error(), "fast or thorough") {
+	if _, err := parseAgentSpecIn(registry, "acme:high"); err == nil || !strings.Contains(err.Error(), "fast or thorough") {
 		t.Fatalf("error = %v, want the definition's own levels", err)
 	}
-	if _, err := parseAgentSpecIn(registry, "muse:fast"); err != nil {
+	if _, err := parseAgentSpecIn(registry, "acme:fast"); err != nil {
 		t.Fatalf("a level the definition lists was rejected: %v", err)
 	}
 }
@@ -110,7 +111,7 @@ func TestAgentLevelErrorComesFromTheDefinition(t *testing.T) {
 // none, keep accepting any model.
 func TestAgentModelAllowListIsEnforced(t *testing.T) {
 	registry, err := agents.NewRegistry(agents.Definition{
-		Name: "muse", Binary: "muse", Models: []string{"muse-1"},
+		Name: "acme", Binary: "acme", Models: []string{"acme-1"},
 		Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
 		Session: agents.Session{Assign: agents.AssignNone},
 		Output:  agents.Output{Format: agents.FormatText},
@@ -118,7 +119,7 @@ func TestAgentModelAllowListIsEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseAgentSpecIn(registry, "muse/muse-2"); err == nil || !strings.Contains(err.Error(), "muse-1") {
+	if _, err := parseAgentSpecIn(registry, "acme/acme-2"); err == nil || !strings.Contains(err.Error(), "acme-1") {
 		t.Fatalf("error = %v, want the definition's own models", err)
 	}
 	if _, err := parseAgentSpec("claude/anything-at-all"); err != nil {
@@ -167,7 +168,7 @@ func TestDefinitionEnvIsStable(t *testing.T) {
 // a configured agent runnable at all.
 func TestBinaryFallsBackToTheDefinition(t *testing.T) {
 	registry, err := agents.NewRegistry(agents.Definition{
-		Name: "muse", Binary: "/opt/muse",
+		Name: "acme", Binary: "/opt/acme",
 		Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
 		Session: agents.Session{Assign: agents.AssignNone},
 		Output:  agents.Output{Format: agents.FormatText},
@@ -175,14 +176,14 @@ func TestBinaryFallsBackToTheDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := CommandRunner{Agent: "muse", Definitions: registry}
-	if got := runner.binary("muse"); got != "/opt/muse" {
+	runner := CommandRunner{Agent: "acme", Definitions: registry}
+	if got := runner.binary("acme"); got != "/opt/acme" {
 		t.Fatalf("binary = %q, want the definition's own", got)
 	}
 	// Binary holds the default agent's executable, so it does not stand in for
 	// the configured agent's own.
 	runner.Binary = "codex"
-	if got := runner.binary("muse"); got != "/opt/muse" {
+	if got := runner.binary("acme"); got != "/opt/acme" {
 		t.Fatalf("binary = %q, want the definition's own rather than the default agent's", got)
 	}
 	// The agents that do have a flag of their own still take it.
