@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Offer Claude's `opus`, `sonnet`, and `haiku` aliases in the WebUI Models tab, even though Claude Code has no command for listing its models (issue #608). The aliases are maintained suggestions rather than a restriction, so a full Claude model id remains selectable and dispatchable.
 - Make browser polling the default delivery mode and replace the competing `--browser` and `--poll` transport choices with `--pollmode=browser|webhook|poll`; the older switches remain as deprecated aliases for existing scripts.
 
 - Show the local web-dashboard URL on a persistent bottom line in the terminal dashboard whenever the web UI is enabled, so it can be opened without finding the startup log (issue #604).
