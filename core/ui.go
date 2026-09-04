@@ -74,7 +74,11 @@ type SettingsUpdate struct {
 	Concurrency       *int      `json:"concurrency,omitempty"`
 	ReadyState        *string   `json:"readyState,omitempty"`
 	AllowedCommenters *[]string `json:"allowedCommenters,omitempty"`
-	Agent             *string   `json:"agent,omitempty"`
+	// ActiveAgents replaces the live set of agent specs new dispatches
+	// round-robin across (issue #572), overriding what --agent configured at
+	// startup. When given it must name at least one valid agent spec; the
+	// result is reported back as SettingsSnapshot.ConfiguredAgents.
+	ActiveAgents *[]string `json:"activeAgents,omitempty"`
 }
 
 // AgentOption describes one agent the registry knows, so the dashboard's
@@ -95,14 +99,40 @@ type SettingsSnapshot struct {
 	ReadyState        string   `json:"readyState"`
 	ReadyStateDefault string   `json:"readyStateDefault"`
 	AllowedCommenters []string `json:"allowedCommenters"`
-	Agent             string   `json:"agent"`
 	// Agents lists every agent the run's registry defines, built-in and
-	// config-defined alike, which is the set Agent may be set to.
+	// config-defined alike, which is the set ActiveAgents may be set from.
 	Agents []string `json:"agents"`
 	// AgentOptions carries the same agents with their model and level
 	// allow-lists, for a selector that offers more than a bare name.
 	AgentOptions []AgentOption `json:"agentOptions,omitempty"`
 	// ConfiguredAgents lists the agent specs this run dispatches with, which
-	// is a subset of Agents chosen by --agent.
+	// is a subset of Agents chosen by --agent or the live ActiveAgents
+	// override (issue #572).
 	ConfiguredAgents []string `json:"configuredAgents"`
+}
+
+// AgentStatus reports one registered agent's install, sign-in, and quota
+// state, mirroring what `glorp agents` prints, for the settings dashboard's
+// agents tab (issue #572).
+type AgentStatus struct {
+	Name        string `json:"name"`
+	Installed   bool   `json:"installed"`
+	Binary      string `json:"binary"`
+	Version     string `json:"version,omitempty"`
+	VersionNote string `json:"versionNote,omitempty"`
+	Auth        string `json:"auth"`
+	Quota       string `json:"quota"`
+	// TracksQuota says the definition names a quota source at all, telling an
+	// agent that reports no quota by design apart from one whose reader
+	// could not answer -- the same distinction describeQuota draws for the
+	// terminal report.
+	TracksQuota bool   `json:"tracksQuota"`
+	QuotaError  string `json:"quotaError,omitempty"`
+	// Models are the fully qualified agent/model names --agent accepts, and
+	// ModelNote explains a missing or partial list.
+	Models    []string `json:"models,omitempty"`
+	ModelNote string   `json:"modelNote,omitempty"`
+	// Status is one of "ok", "warn", or "missing", matching the marker
+	// `glorp agents` prefixes each block with.
+	Status string `json:"status"`
 }

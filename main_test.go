@@ -50,7 +50,8 @@ func TestStartWebUIWiresHandlersBeforeServing(t *testing.T) {
 		func(context.Context, core.JobAction) error { return nil },
 		func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error) {
 			return core.SettingsSnapshot{Concurrency: 3}, nil
-		})
+		},
+		func(context.Context) ([]core.AgentStatus, error) { return nil, nil })
 
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/settings", port))
 	if err != nil {
@@ -168,6 +169,30 @@ func TestGHCLIPostCommentReturnsError(t *testing.T) {
 		return []byte("boom"), errors.New("exit status 1")
 	}}
 	if err := gh.PostComment(context.Background(), "owner/repo", 7, "hi"); err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
+func TestGHCLIAddReaction(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return []byte(`{}`), nil
+	}}
+	if err := gh.AddReaction(context.Background(), "owner/repo", 42, "eyes"); err != nil {
+		t.Fatalf("AddReaction: %v", err)
+	}
+	want := []string{"api", "repos/owner/repo/issues/comments/42/reactions", "-f", "content=eyes"}
+	if !reflect.DeepEqual(calls[0], want) {
+		t.Fatalf("call = %#v, want %#v", calls[0], want)
+	}
+}
+
+func TestGHCLIAddReactionReturnsError(t *testing.T) {
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte("boom"), errors.New("exit status 1")
+	}}
+	if err := gh.AddReaction(context.Background(), "owner/repo", 42, "eyes"); err == nil {
 		t.Fatal("expected an error")
 	}
 }

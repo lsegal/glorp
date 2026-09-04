@@ -259,10 +259,11 @@ type Glorp struct {
 	ready     chan struct{}
 	// notReadyWait overrides notReadyTimeout in tests.
 	notReadyWait time.Duration
-	// agentOverride holds a live-updated primary agent spec (issue #341). It
-	// is read from goroutines the Run loop spawns, so it is a pointer stored
-	// atomically rather than a plain field owned by the loop's goroutine.
-	agentOverride atomic.Pointer[string]
+	// agentOverride holds a live-updated set of active agent specs (issue
+	// #341, extended to a multiselect in issue #572). It is read from
+	// goroutines the Run loop spawns, so it is a pointer stored atomically
+	// rather than a plain field owned by the loop's goroutine.
+	agentOverride atomic.Pointer[[]string]
 	// handledIssues snapshots the issue keys this instance already has in
 	// flight or has finished, taken from .glorp.json and the active set at
 	// the top of every poll. Browser mode reads it through issueHandled to
@@ -2252,6 +2253,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}
 			}
 			if event.Kind == "issue_comment" && event.Action == "created" && mentionedIdentity(event.CommentBody, w.Identity) {
+				// Acknowledge the mention was read regardless of whether it goes on
+				// to authorize a run (issue #581): a human watching the thread should
+				// see the eyes reaction even when the mention is stale or from an
+				// unauthorized commenter, since either way this instance saw it.
+				if reactor, ok := w.Comments.(CommentReactor); ok && event.CommentID != 0 {
+					if err := reactor.AddReaction(ctx, event.Repository, event.CommentID, "eyes"); err != nil {
+						w.logf("issue #%d failed to react to mention of instance %s: %v", event.IssueNumber, w.Identity, err)
+					}
+				}
 				// A mention in the webhook payload alone is not enough to trigger a
 				// run (issue #294): the mentioning comment must also be the current
 				// last comment and come from an allowed commenter, both reverified

@@ -29,3 +29,11 @@ type CommentClient interface {
 	CommentPoster
 	CommentLister
 }
+
+// CommentReactor adds an emoji reaction to a specific comment, identified by
+// its GitHub comment ID. It is kept separate from CommentClient so a driver
+// with no reaction affordance (a fake in a test, or a future comment source
+// with no API to react through) is not forced to implement it (issue #581).
+type CommentReactor interface {
+	AddReaction(ctx context.Context, repo string, commentID int64, content string) error
+}

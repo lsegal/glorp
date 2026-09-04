@@ -85,17 +85,17 @@ export function parseAllowedCommenters(text) {
 }
 
 // buildSettingsUpdate turns the settings modal's form state into the partial
-// update the /api/settings endpoint expects. agent is omitted when blank so
-// an instance with no configured runner doesn't fail validation just for
-// reporting its other settings back unchanged.
+// update the /api/settings endpoint expects. activeAgents is omitted when
+// empty (issue #572) so an instance with no configured runner doesn't fail
+// validation just for reporting its other settings back unchanged.
 export function buildSettingsUpdate(form) {
 	const update = {
 		concurrency: Number(form.concurrency),
 		readyState: form.readyState,
 		allowedCommenters: parseAllowedCommenters(form.allowedCommenters),
 	};
-	const agent = form.agent.trim();
-	if (agent) update.agent = agent;
+	const activeAgents = (form.activeAgents || []).filter(Boolean);
+	if (activeAgents.length) update.activeAgents = activeAgents;
 	return update;
 }
 
@@ -159,6 +159,14 @@ function defaultWait(delayMs, signal) {
 	});
 }
 
+export async function fetchAgentStatuses() {
+	const response = await fetch("/api/agents", { cache: "no-store" });
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+	return response.json();
+}
+
 export async function submitSettings(update) {
 	const response = await fetch("/api/settings", {
 		method: "POST",
@@ -180,38 +188,56 @@ export function agentOptionsFrom(snapshot) {
 	return (snapshot?.agents || []).map((name) => ({ name }));
 }
 
-// agentSpecOptions expands the registry's agents into the concrete --agent
-// values the selector offers: the bare name, and one entry per model and per
-// level the agent declares. An agent with no allow-list contributes only its
-// name, because any model or level is accepted for it.
-export function agentSpecOptions(agentOptions) {
-	const specs = [];
-	for (const option of agentOptions || []) {
-		if (!option || !option.name) continue;
-		specs.push(option.name);
-		for (const model of option.models || [])
-			specs.push(`${option.name}/${model}`);
-		for (const level of option.levels || [])
-			specs.push(`${option.name}:${level}`);
-	}
-	return specs;
-}
-
-// agentOptionHint describes what the agent currently typed into the field
-// accepts, so a rejected model or level is visible before the form is
-// submitted rather than only in the error the settings API returns.
-export function agentOptionHint(agentOptions, value) {
-	const name = String(value || "")
+// specAgentName extracts the agent name from a bare agent name or a full
+// agent/model:level spec, so callers can look up state that's shared across
+// every model a given agent offers (issue #582).
+function specAgentName(value) {
+	return String(value || "")
 		.trim()
 		.split(":")[0]
 		.split("/")[0];
-	if (!name) return "";
-	const option = (agentOptions || []).find(
-		(entry) => entry && entry.name === name,
-	);
-	if (!option) return "";
-	const parts = [];
-	if (option.models?.length) parts.push(`models: ${option.models.join(", ")}`);
-	if (option.levels?.length) parts.push(`levels: ${option.levels.join(", ")}`);
-	return parts.join(" · ");
+}
+
+// modelOptionsFrom flattens the settings snapshot's agent list into one
+// selectable entry per agent/model pair (issue #582): a fix for #572, which
+// put the multiselect on agents even though picking an agent alone can't
+// choose a model. Selecting a model drives which agent dispatches, so the
+// multiselect belongs here instead. An agent with no declared model
+// allow-list offers itself as a single bare entry, the same spec --agent
+// accepts unqualified.
+export function modelOptionsFrom(snapshot) {
+	const agentOptions = agentOptionsFrom(snapshot);
+	const options = [];
+	for (const option of agentOptions) {
+		if (!option?.name) continue;
+		if (option.models?.length) {
+			for (const model of option.models) {
+				options.push({
+					value: `${option.name}/${model}`,
+					agent: option.name,
+					model,
+				});
+			}
+		} else {
+			options.push({ value: option.name, agent: option.name, model: "" });
+		}
+	}
+	return options;
+}
+
+// agentStatusFor finds the probe result for the agent behind a model option's
+// value in the list /api/agents returns, so a model chip (issue #582) can
+// show its agent's auth and quota reading.
+export function agentStatusFor(statuses, value) {
+	const agent = specAgentName(value);
+	return (statuses || []).find((status) => status && status.name === agent);
+}
+
+// toggleActiveModel adds or removes value from the multiselect's checked set
+// (issue #582), used as the models tab's chip click handler.
+export function toggleActiveModel(activeAgents, value, checked) {
+	const set = new Set(activeAgents || []);
+	if (checked) set.add(value);
+	else set.delete(value);
+	return Array.from(set);
 }

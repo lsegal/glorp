@@ -17,16 +17,17 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-	agentOptionHint,
-	agentOptionsFrom,
-	agentSpecOptions,
+	agentStatusFor,
 	buildSettingsUpdate,
 	deliveryLabel,
+	fetchAgentStatuses,
 	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
+	modelOptionsFrom,
 	submitJobAction,
 	submitSettings,
+	toggleActiveModel,
 } from "./dashboard";
 import "./index.css";
 
@@ -213,9 +214,39 @@ function StatusBar({ snapshot, connected }) {
 	);
 }
 
+// ModelChip renders one selectable agent/model entry as a toggle chip (issue
+// #582), annotated with the auth and quota state /api/agents reports for its
+// agent, so toggling which models are active reads the same information
+// `glorp agents` prints to the terminal.
+function ModelChip({ option, checked, onToggle, status }) {
+	const title = status
+		? `auth: ${status.auth} · quota: ${status.quota}${status.installed ? "" : " · not installed"}`
+		: "probing...";
+	return (
+		<button
+			type="button"
+			className={`model-chip${checked ? " active" : ""}`}
+			aria-pressed={checked}
+			title={title}
+			onClick={() => onToggle(option.value, !checked)}
+		>
+			{option.model ? (
+				<>
+					<span className="model-chip-agent">{option.agent}</span>/
+					{option.model}
+				</>
+			) : (
+				option.agent
+			)}
+		</button>
+	);
+}
+
 function SettingsModal({ onClose }) {
+	const [tab, setTab] = useState("general");
 	const [form, setForm] = useState(null);
-	const [agentOptions, setAgentOptions] = useState([]);
+	const [modelOptions, setModelOptions] = useState([]);
+	const [agentStatuses, setAgentStatuses] = useState([]);
 	const [readyStateDefault, setReadyStateDefault] = useState("");
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -229,22 +260,36 @@ function SettingsModal({ onClose }) {
 		const controller = new AbortController();
 		fetchSettingsWithRetry(controller.signal)
 			.then((snapshot) => {
-				setAgentOptions(agentOptionsFrom(snapshot));
+				setModelOptions(modelOptionsFrom(snapshot));
 				setReadyStateDefault(snapshot.readyStateDefault ?? "");
 				setForm({
 					concurrency: String(snapshot.concurrency ?? ""),
 					readyState: snapshot.readyState ?? "",
 					allowedCommenters: (snapshot.allowedCommenters || []).join(", "),
-					agent: snapshot.agent ?? "",
+					activeAgents: snapshot.configuredAgents ?? [],
 				});
 			})
 			.catch((err) => err.name !== "AbortError" && setError(err.message));
+		fetchAgentStatuses()
+			.then(
+				(statuses) => !controller.signal.aborted && setAgentStatuses(statuses),
+			)
+			.catch(() => {
+				// The agents tab's status column is a diagnostic on top of the
+				// settings it lets you edit; a probe failure leaves it showing
+				// "probing..." rather than blocking the form.
+			});
 		return () => {
 			controller.abort();
 		};
 	}, []);
 	const update = (field) => (event) =>
 		setForm({ ...form, [field]: event.target.value });
+	const toggleModel = (value, checked) =>
+		setForm({
+			...form,
+			activeAgents: toggleActiveModel(form.activeAgents, value, checked),
+		});
 	const submit = async (event) => {
 		event.preventDefault();
 		setSaving(true);
@@ -281,61 +326,79 @@ function SettingsModal({ onClose }) {
 					<p className="modal-loading">{error || "loading settings..."}</p>
 				) : (
 					<form onSubmit={submit} className="modal-body">
-						<label htmlFor="settings-concurrency">
-							Concurrency
-							<input
-								id="settings-concurrency"
-								type="number"
-								min="1"
-								max="256"
-								value={form.concurrency}
-								onChange={update("concurrency")}
-							/>
-						</label>
-						<label htmlFor="settings-agent">
-							Agent
-							<input
-								id="settings-agent"
-								type="text"
-								value={form.agent}
-								onChange={update("agent")}
-								list={
-									agentOptions.length > 0 ? "settings-agent-options" : undefined
-								}
-								placeholder="codex, claude, claude/opus:high, ..."
-							/>
-							{agentOptions.length > 0 && (
-								<datalist id="settings-agent-options">
-									{agentSpecOptions(agentOptions).map((spec) => (
-										<option key={spec} value={spec} />
+						<div className="modal-tabs" role="tablist">
+							<button
+								type="button"
+								role="tab"
+								aria-selected={tab === "general"}
+								className={tab === "general" ? "active" : ""}
+								onClick={() => setTab("general")}
+							>
+								General
+							</button>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={tab === "models"}
+								className={tab === "models" ? "active" : ""}
+								onClick={() => setTab("models")}
+							>
+								Models
+							</button>
+						</div>
+						{tab === "general" && (
+							<>
+								<label htmlFor="settings-concurrency">
+									Concurrency
+									<input
+										id="settings-concurrency"
+										type="number"
+										min="1"
+										max="256"
+										value={form.concurrency}
+										onChange={update("concurrency")}
+									/>
+								</label>
+								<label htmlFor="settings-ready-state">
+									Ready state label
+									<input
+										id="settings-ready-state"
+										type="text"
+										value={form.readyState}
+										onChange={update("readyState")}
+										placeholder={readyStateDefault || undefined}
+									/>
+								</label>
+								<label htmlFor="settings-allowed-commenters">
+									Allowed commenters (comma separated)
+									<input
+										id="settings-allowed-commenters"
+										type="text"
+										value={form.allowedCommenters}
+										onChange={update("allowedCommenters")}
+									/>
+								</label>
+							</>
+						)}
+						{tab === "models" && (
+							<fieldset className="model-list">
+								<legend className="sr-only">Active models</legend>
+								{modelOptions.length === 0 && (
+									<p className="modal-loading">no agents registered</p>
+								)}
+								<div className="model-chips">
+									{modelOptions.map((option) => (
+										<ModelChip
+											key={option.value}
+											option={option}
+											checked={form.activeAgents.includes(option.value)}
+											onToggle={toggleModel}
+											status={agentStatusFor(agentStatuses, option.value)}
+										/>
 									))}
-								</datalist>
-							)}
-							{agentOptionHint(agentOptions, form.agent) && (
-								<small className="settings-hint">
-									{agentOptionHint(agentOptions, form.agent)}
-								</small>
-							)}
-						</label>
-						<label htmlFor="settings-ready-state">
-							Ready state label
-							<input
-								id="settings-ready-state"
-								type="text"
-								value={form.readyState}
-								onChange={update("readyState")}
-								placeholder={readyStateDefault || undefined}
-							/>
-						</label>
-						<label htmlFor="settings-allowed-commenters">
-							Allowed commenters (comma separated)
-							<input
-								id="settings-allowed-commenters"
-								type="text"
-								value={form.allowedCommenters}
-								onChange={update("allowedCommenters")}
-							/>
-						</label>
+								</div>
+							</fieldset>
+						)}
 						{error && <p className="modal-error">{error}</p>}
 						<div className="modal-actions">
 							<button type="button" onClick={onClose} disabled={saving}>

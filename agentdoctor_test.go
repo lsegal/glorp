@@ -315,6 +315,67 @@ func TestDescribeQuotaTellsUntrackedFromUnavailable(t *testing.T) {
 	}
 }
 
+// TestAgentStatusConvertsReportFields checks the settings dashboard's agents
+// tab (issue #572) reads the same probe results the terminal report renders,
+// including the quota error text and the machine-readable status key.
+func TestAgentStatusConvertsReportFields(t *testing.T) {
+	report := agentReport{
+		name: "codex", binary: "codex", path: "/opt/codex",
+		version: "1.2.3", auth: doctorSignedIn,
+		quota: "week 40% left", tracksQuota: true,
+		models: []string{"codex/gpt-5"}, modelNote: "note",
+	}
+	status := agentStatus(report)
+	if status.Name != "codex" || !status.Installed || status.Auth != doctorSignedIn {
+		t.Fatalf("status = %#v", status)
+	}
+	if status.Quota != "week 40% left" || !status.TracksQuota {
+		t.Fatalf("quota fields = %#v", status)
+	}
+	if len(status.Models) != 1 || status.Models[0] != "codex/gpt-5" || status.ModelNote != "note" {
+		t.Fatalf("model fields = %#v", status)
+	}
+	if status.Status != "ok" {
+		t.Fatalf("status.Status = %q, want %q", status.Status, "ok")
+	}
+	if status.QuotaError != "" {
+		t.Fatalf("quotaError = %q, want empty for a successful read", status.QuotaError)
+	}
+}
+
+// TestAgentStatusReportsQuotaError checks a quota reader's failure survives
+// the conversion to JSON, so the agents tab can show why "unavailable" wasn't
+// just silence.
+func TestAgentStatusReportsQuotaError(t *testing.T) {
+	report := agentReport{name: "codex", path: "/opt/codex", tracksQuota: true, quotaErr: errors.New("boom")}
+	status := agentStatus(report)
+	if status.QuotaError != "boom" {
+		t.Fatalf("quotaError = %q, want %q", status.QuotaError, "boom")
+	}
+	if status.Quota != "unavailable: boom" {
+		t.Fatalf("quota = %q", status.Quota)
+	}
+}
+
+// TestAgentStatusesReportsMissingAgentAsSuch checks the status key an
+// uninstalled agent's CLI gets, which the dashboard uses to grey it out
+// rather than parsing the ASCII marker the terminal report uses.
+func TestAgentStatusesReportsMissingAgentAsSuch(t *testing.T) {
+	doctor := stubDoctor(t, nil, noProbe, noProbe, noProbe, nil)
+	statuses, err := agentStatuses(context.Background(), doctor.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != len(doctor.registry.Names()) {
+		t.Fatalf("statuses has %d entries, want %d", len(statuses), len(doctor.registry.Names()))
+	}
+	for _, status := range statuses {
+		if status.Installed || status.Status != "missing" {
+			t.Fatalf("status for %q = %#v, want missing on a machine with no CLIs installed", status.Name, status)
+		}
+	}
+}
+
 // TestWriteAgentReportsRendersEveryField checks the rendered report carries
 // what the command exists to show, with each model on a line of its own so it
 // can be copied straight into --agent.

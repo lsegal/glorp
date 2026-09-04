@@ -82,9 +82,11 @@ func TestValidateSettingsUpdateRejectsBadValues(t *testing.T) {
 	}{
 		{"concurrency too low", SettingsUpdate{Concurrency: intPtr(0)}},
 		{"concurrency too high", SettingsUpdate{Concurrency: intPtr(maxConcurrencyPermits + 1)}},
-		{"empty agent", SettingsUpdate{Agent: strPtr("   ")}},
-		{"unknown agent provider", SettingsUpdate{Agent: strPtr("bogus")}},
-		{"bad agent level", SettingsUpdate{Agent: strPtr("codex:extreme")}},
+		{"no active agents", SettingsUpdate{ActiveAgents: agentsPtr()}},
+		{"empty agent", SettingsUpdate{ActiveAgents: agentsPtr("   ")}},
+		{"unknown agent provider", SettingsUpdate{ActiveAgents: agentsPtr("bogus")}},
+		{"bad agent level", SettingsUpdate{ActiveAgents: agentsPtr("codex:extreme")}},
+		{"one good one bad agent", SettingsUpdate{ActiveAgents: agentsPtr("codex", "bogus")}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,7 +256,7 @@ func TestGlorpRunnerAppliesLiveAgentOverride(t *testing.T) {
 	if got := w.runner().(CommandRunner).AgentName(); got != "codex" {
 		t.Fatalf("agent before override = %q", got)
 	}
-	override := "claude/opus"
+	override := []string{"claude/opus"}
 	w.agentOverride.Store(&override)
 	runner, ok := w.runner().(CommandRunner)
 	if !ok {
@@ -262,6 +264,21 @@ func TestGlorpRunnerAppliesLiveAgentOverride(t *testing.T) {
 	}
 	if got := runner.AgentName(); got != "claude/opus" {
 		t.Fatalf("agent after override = %q, want claude/opus", got)
+	}
+}
+
+// TestGlorpRunnerAppliesLiveMultiAgentOverride checks a multiselect override
+// (issue #572) round robins across every agent it names, not just the first.
+func TestGlorpRunnerAppliesLiveMultiAgentOverride(t *testing.T) {
+	w := &Glorp{Runner: CommandRunner{Agent: "codex", Agents: []string{"codex"}}}
+	override := []string{"codex", "claude/opus", "muse"}
+	w.agentOverride.Store(&override)
+	runner, ok := w.runner().(CommandRunner)
+	if !ok {
+		t.Fatal("runner() did not return a CommandRunner")
+	}
+	if got := strings.Join(runner.Agents, ","); got != "codex,claude/opus,muse" {
+		t.Fatalf("runner.Agents = %q, want every overridden agent", got)
 	}
 }
 
@@ -322,8 +339,9 @@ func TestWebUIRejectsInvalidSettingsUpdate(t *testing.T) {
 	}
 }
 
-func intPtr(v int) *int       { return &v }
-func strPtr(v string) *string { return &v }
+func intPtr(v int) *int               { return &v }
+func strPtr(v string) *string         { return &v }
+func agentsPtr(v ...string) *[]string { return &v }
 
 func TestGlorpAgentStillConfigured(t *testing.T) {
 	commandRunner := CommandRunner{Agent: "codex", Agents: []string{"codex", "claude/opus:high"}}
@@ -348,7 +366,7 @@ func TestGlorpAgentStillConfigured(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			if test.override != "" {
-				override := test.override
+				override := []string{test.override}
 				test.glorp.agentOverride.Store(&override)
 			}
 			if got := test.glorp.agentStillConfigured(test.agent); got != test.want {
@@ -415,17 +433,17 @@ func TestSettingsSnapshotListsEveryRegisteredAgent(t *testing.T) {
 // same way the command line does.
 func TestSettingsValidatesAgainstTheRunsRegistry(t *testing.T) {
 	registry := registryForSettings(t)
-	if err := validateSettingsUpdate(registry, SettingsUpdate{Agent: strPtr("muse/muse-2")}); err != nil {
+	if err := validateSettingsUpdate(registry, SettingsUpdate{ActiveAgents: agentsPtr("muse/muse-2")}); err != nil {
 		t.Fatalf("config-defined agent rejected: %v", err)
 	}
-	err := validateSettingsUpdate(registry, SettingsUpdate{Agent: strPtr("claude")})
+	err := validateSettingsUpdate(registry, SettingsUpdate{ActiveAgents: agentsPtr("claude")})
 	if err == nil {
 		t.Fatal("expected an agent outside the run's registry to be rejected")
 	}
 	if !strings.Contains(err.Error(), "known agents are codex, muse") {
 		t.Fatalf("error = %v, want it to list the registry's agents", err)
 	}
-	if err := validateSettingsUpdate(registry, SettingsUpdate{Agent: strPtr("muse/muse-9")}); err == nil {
+	if err := validateSettingsUpdate(registry, SettingsUpdate{ActiveAgents: agentsPtr("muse/muse-9")}); err == nil {
 		t.Fatal("expected a model outside the agent's list to be rejected")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/lsegal/glorp/agents"
+	"github.com/lsegal/glorp/core"
 	"github.com/lsegal/glorp/process"
 )
 
@@ -69,14 +70,28 @@ type agentReport struct {
 // installed reports whether the agent's CLI was found on PATH.
 func (r agentReport) installed() bool { return r.path != "" }
 
+// statusKey is the machine-readable form of status(), for a JSON consumer
+// such as the settings dashboard's agents tab (issue #572) rather than the
+// terminal's ASCII marker.
+func (r agentReport) statusKey() string {
+	switch {
+	case !r.installed():
+		return "missing"
+	case r.versionNote != "" || r.auth == doctorSignedOut:
+		return "warn"
+	default:
+		return "ok"
+	}
+}
+
 // status is the marker the agent's line is prefixed with: missing when the CLI
 // is not installed, a warning when it is installed but something about it needs
 // attention, and ready otherwise.
 func (r agentReport) status() string {
-	switch {
-	case !r.installed():
+	switch r.statusKey() {
+	case "missing":
 		return statusMissing
-	case r.versionNote != "" || r.auth == doctorSignedOut:
+	case "warn":
 		return statusWarn
 	default:
 		return statusReady
@@ -211,6 +226,40 @@ func (d *agentDoctor) Report(ctx context.Context) []agentReport {
 	}
 	wait.Wait()
 	return reports
+}
+
+// agentStatus converts an agentReport into the wire format the settings
+// dashboard's agents tab reads (issue #572) -- the same probe `glorp agents`
+// renders as text.
+func agentStatus(report agentReport) core.AgentStatus {
+	status := core.AgentStatus{
+		Name:        report.name,
+		Installed:   report.installed(),
+		Binary:      report.binary,
+		Version:     report.version,
+		VersionNote: report.versionNote,
+		Auth:        report.auth,
+		Quota:       describeQuota(report),
+		TracksQuota: report.tracksQuota,
+		Models:      report.models,
+		ModelNote:   report.modelNote,
+		Status:      report.statusKey(),
+	}
+	if report.quotaErr != nil {
+		status.QuotaError = report.quotaErr.Error()
+	}
+	return status
+}
+
+// agentStatuses probes every agent in registry and reports it in the shape
+// the settings dashboard's agents tab reads (issue #572).
+func agentStatuses(ctx context.Context, registry *agents.Registry) ([]core.AgentStatus, error) {
+	reports := newAgentDoctor(registry).Report(ctx)
+	statuses := make([]core.AgentStatus, len(reports))
+	for i, report := range reports {
+		statuses[i] = agentStatus(report)
+	}
+	return statuses, nil
 }
 
 // reportAgent probes one agent. Nothing is run when its CLI is not installed:

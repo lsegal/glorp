@@ -136,15 +136,20 @@ func validateSettingsUpdate(registry *agents.Registry, update SettingsUpdate) er
 	if update.Concurrency != nil && (*update.Concurrency < 1 || *update.Concurrency > maxConcurrencyPermits) {
 		return fmt.Errorf("concurrency must be between 1 and %d", maxConcurrencyPermits)
 	}
-	if update.Agent != nil {
-		if strings.TrimSpace(*update.Agent) == "" {
-			return fmt.Errorf("agent must not be empty")
+	if update.ActiveAgents != nil {
+		if len(*update.ActiveAgents) == 0 {
+			return fmt.Errorf("activeAgents must not be empty")
 		}
-		// The registry answers an unknown agent with the agents that do
-		// exist, so the dashboard and the settings API reject a typo with the
-		// same list the CLI prints.
-		if _, err := parseAgentSpecIn(registry, *update.Agent); err != nil {
-			return err
+		for _, spec := range *update.ActiveAgents {
+			if strings.TrimSpace(spec) == "" {
+				return fmt.Errorf("agent must not be empty")
+			}
+			// The registry answers an unknown agent with the agents that do
+			// exist, so the dashboard and the settings API reject a typo with
+			// the same list the CLI prints.
+			if _, err := parseAgentSpecIn(registry, spec); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -167,9 +172,12 @@ func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySema
 	if update.AllowedCommenters != nil {
 		w.AllowedCommenters = splitAllowedCommenters(strings.Join(*update.AllowedCommenters, ","))
 	}
-	if update.Agent != nil {
-		agent := strings.TrimSpace(*update.Agent)
-		w.agentOverride.Store(&agent)
+	if update.ActiveAgents != nil {
+		trimmed := make([]string, len(*update.ActiveAgents))
+		for i, spec := range *update.ActiveAgents {
+			trimmed[i] = strings.TrimSpace(spec)
+		}
+		w.agentOverride.Store(&trimmed)
 	}
 	return settingsResult{snapshot: w.settingsSnapshot()}
 }
@@ -209,13 +217,6 @@ func (w *Glorp) agentOptions() []core.AgentOption {
 // settingsSnapshot reads the fields applySettingsRequest owns. Like that
 // function, it must only be called from the Run loop's goroutine.
 func (w *Glorp) settingsSnapshot() SettingsSnapshot {
-	var agent string
-	if runner, ok := w.Runner.(CommandRunner); ok {
-		agent = runner.Agent
-	}
-	if override := w.agentOverride.Load(); override != nil && *override != "" {
-		agent = *override
-	}
 	return SettingsSnapshot{
 		Concurrency: w.Concurrency,
 		ReadyState:  w.ReadyState,
@@ -224,7 +225,6 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		// what's actually in effect instead of leaving the field blank.
 		ReadyStateDefault: projectReadyState(w.ReadyState, ""),
 		AllowedCommenters: append([]string(nil), w.AllowedCommenters...),
-		Agent:             agent,
 		Agents:            w.registry().Names(),
 		AgentOptions:      w.agentOptions(),
 		ConfiguredAgents:  w.configuredAgents(),
@@ -239,12 +239,12 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 // ownership.
 func (w *Glorp) runner() AgentRunner {
 	override := w.agentOverride.Load()
-	if override == nil || *override == "" {
+	if override == nil || len(*override) == 0 {
 		return w.Runner
 	}
 	if runner, ok := w.Runner.(CommandRunner); ok {
-		runner.Agent = *override
-		runner.Agents = []string{*override}
+		runner.Agent = (*override)[0]
+		runner.Agents = append([]string(nil), *override...)
 		return runner
 	}
 	return w.Runner
@@ -254,8 +254,8 @@ func (w *Glorp) runner() AgentRunner {
 // override when one is set, otherwise the CommandRunner's configured agents.
 // It reports nothing for runners that carry no agent configuration at all.
 func (w *Glorp) configuredAgents() []string {
-	if override := w.agentOverride.Load(); override != nil && *override != "" {
-		return []string{*override}
+	if override := w.agentOverride.Load(); override != nil && len(*override) > 0 {
+		return append([]string(nil), *override...)
 	}
 	runner, ok := w.Runner.(CommandRunner)
 	if !ok {

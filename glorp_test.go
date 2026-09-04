@@ -517,6 +517,58 @@ func TestGlorpIgnoresDirectMentionFromDisallowedCommenter(t *testing.T) {
 	}
 }
 
+// A mention should be acknowledged with an eyes reaction just for being read,
+// even when it goes on to be rejected as unauthorized to trigger a run
+// (issue #581): the reaction tells a human watching the thread that this
+// instance saw the mention, independent of whether it acted on it.
+func TestGlorpReactsToDirectMentionEvenWhenUnauthorized(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}, {{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
+	events := make(chan WebhookEvent, 1)
+	comments := newFakeCommentClient()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF", AllowedCommenters: []string{"trusted"},
+		Comments: comments,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentID: 42, CommentBody: "Please revisit this @/glorp:SELF", CommentAuthor: "impersonator"}
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("mention from a disallowed commenter should not redispatch issue, got #%d", n)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	deadline := time.Now().Add(time.Second)
+	var reactions []fakeReaction
+	for time.Now().Before(deadline) {
+		reactions = comments.reactionsSnapshot()
+		if len(reactions) > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(reactions) != 1 || reactions[0] != (fakeReaction{Repo: "o/r", CommentID: 42, Content: "eyes"}) {
+		t.Fatalf("reactions = %#v, want a single eyes reaction on comment 42", reactions)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGlorpIgnoresDirectMentionThatIsNotTheLastComment(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}, {{Number: 7}}}}

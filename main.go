@@ -288,7 +288,10 @@ func runWatch(args []string) int {
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
 	if webUI != nil {
-		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, w.ApplySettings)
+		agentsHandler := func(ctx context.Context) ([]core.AgentStatus, error) {
+			return agentStatuses(ctx, w.registry())
+		}
+		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, w.ApplySettings, agentsHandler)
 	}
 	var server *http.Server
 	if !poll {
@@ -362,9 +365,10 @@ func runWatch(args []string) int {
 // starts accepting connections: a request that lands in the gap sees the
 // handler as unset and gets a spurious "unavailable" response, which the
 // settings modal has no retry for and so is left stuck (issue #571).
-func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)) {
+func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error)) {
 	webUI.SetJobActionHandler(jobActionHandler)
 	webUI.SetSettingsHandler(settingsHandler)
+	webUI.SetAgentsHandler(agentsHandler)
 	go func() {
 		if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
@@ -1331,6 +1335,16 @@ func (g GHCLI) PostComment(ctx context.Context, repo string, number int, body st
 	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/comments", "-f", "body="+body)
 	if err != nil {
 		return fmt.Errorf("post comment on #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// AddReaction adds an emoji reaction to a specific comment, used to
+// acknowledge a direct mention was read (issue #581).
+func (g GHCLI) AddReaction(ctx context.Context, repo string, commentID int64, content string) error {
+	output, err := g.run(ctx, "api", "repos/"+repo+"/issues/comments/"+strconv.FormatInt(commentID, 10)+"/reactions", "-f", "content="+content)
+	if err != nil {
+		return fmt.Errorf("react to comment %d: %w: %s", commentID, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
