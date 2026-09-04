@@ -11,7 +11,7 @@ This page is the reference for that file and that schema.
 
 ## The agents glorp ships
 
-`glorp agents` prints the agents in force for the current configuration, and `glorp agents -skills` prints the skills.sh target ids they install skills for. The built-in set is:
+`glorp agents` reports on the agents in force for the current configuration -- whether each CLI is installed, its version, whether it is signed in, its quota, and the `agent/model` names `--agent` accepts. `glorp agents -names` prints one name per line instead, and `glorp agents -skills` prints the skills.sh target ids they install skills for. The built-in set is:
 
 | `--agent` | CLI | Levels accepted | Session resume | Quota | skills.sh target |
 | --- | --- | --- | --- | --- | --- |
@@ -91,6 +91,7 @@ Anything wrong with the file stops the run, naming the file, the agent, and the 
 | `missingSession` | array of string | no | none | Extra phrases that mean "the session you asked me to resume is gone". See [`missingSession`](#missingsession). |
 | `quota` | object | no | `{"reader": "none"}` | Where the status bar's quota reading comes from. See [`quota`](#quota). |
 | `skills` | object | no | none | The skills.sh target the agent's skills install for. See [`skills`](#skills). |
+| `doctor` | object | no | none | The read-only probes `glorp agents` runs to report on the agent. See [`doctor`](#doctor). |
 
 ### Allow-lists
 
@@ -247,6 +248,25 @@ The installers derive their `skills add --agent` list from the registry, so a bu
 
 The set of ids skills.sh knows grows without glorp, so the shape of the id is checked and its value is not — an id glorp has never heard of is yours to pass on.
 
+### `doctor`
+
+`glorp agents` reports on each registered agent: whether its CLI is installed and which version, whether it is signed in, how much quota is left, and which models it accepts, written as the fully qualified `agent/model` names `--agent` takes. Most of that it can answer from the definition it already has. The two things it cannot are whether the CLI is signed in, and what a provider-agnostic CLI's model list is today — no static allow-list keeps up with a CLI that fronts dozens of models. `doctor` names the commands that answer them.
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `doctor.auth` | array of string | no | none | The argv whose exit status reports whether the CLI is signed in. `{binary}` substitutes the executable the agent was resolved to, so `--agent-binary` reaches the probe too. No argument may be empty. |
+| `doctor.signedIn` | regular expression | no | none | What the auth command's output has to match for the agent to count as signed in, for the CLIs that report a signed-out account on a zero exit status. Needs `doctor.auth`. |
+| `doctor.models` | array of string | no | none | The argv that lists the models the agent accepts, one per line on its stdout. `{binary}` substitutes as above. |
+| `doctor.modelPattern` | regular expression | no | none | Narrows what counts as a model in that output, for a command that decorates its list. Only a matching line is a model, and its first capture group, when it has one, is the model id. Needs `doctor.models`. |
+| `doctor.timeout` | duration string | no | `20s` | Bounds one probe. The report is a diagnostic, so a CLI that hangs is reported as unknown rather than allowed to hold the listing up. Must be positive. |
+
+Both probes are optional, and neither is ever run by a dispatch — `glorp agents` is the only caller. An agent that declares nothing here still appears in the report: what it could not answer is shown as `unknown`, and its models come from its `models` allow-list, or from a note saying the CLI accepts any model, or that it accepts none. A field belonging to a probe the definition does not declare is rejected rather than ignored, for the same reason the `quota` block rejects one.
+
+Sign-in has a fallback that costs nothing: an agent with no `doctor.auth` whose quota could be read is reported as signed in, because every quota reader asks the CLI something only a signed-in account can answer.
+
+A probe must be non-interactive and must not change anything. A CLI whose only sign-in check starts a device-code flow has no usable probe and is better left undeclared, so the report says the state is unknown — which is true — instead of logging somebody in for asking. That is why only `codex` and `opencode` ship one.
+
+
 ## The built-in definitions
 
 These are the shipped documents, verbatim, and they are the best worked examples of the schema.
@@ -266,6 +286,10 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "output": {"format": "text"},
   "quota": {"reader": "codex"},
   "skills": {"target": "codex"},
+  "doctor": {
+    "auth": ["{binary}", "login", "status"],
+    "signedIn": "(?im)^\\s*Logged in"
+  },
   "args": {
     "run": [
       {"args": ["exec"]},
@@ -445,6 +469,12 @@ These are the shipped documents, verbatim, and they are the best worked examples
     }
   },
   "skills": {"target": "opencode"},
+  "doctor": {
+    "auth": ["{binary}", "auth", "list"],
+    "signedIn": "[1-9][0-9]* credential",
+    "models": ["{binary}", "models"],
+    "modelPattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$"
+  },
   "args": {
     "run": [
       {"args": ["run", "--auto"]},
@@ -628,7 +658,20 @@ If `robo usage --json` prints `{"limits": {"used_pct": 41, "resets": "2026-09-04
 
 `{binary}` substitutes whatever the agent was resolved to, so `--agent-binary robo=/opt/robo/bin/robo` reaches the quota call as well as the runs. Leave the block out entirely if there is nothing to read.
 
-### 7. Point the binary somewhere else, per run
+### 7. Let `glorp agents` report on it
+
+`glorp agents` already knows `robo`'s binary, version, and quota. Two commands tell it the rest. If `robo whoami` exits non-zero when signed out, and `robo models` prints one model per line:
+
+```json
+"doctor": {
+  "auth": ["{binary}", "whoami"],
+  "models": ["{binary}", "models"]
+}
+```
+
+`robo/gpt-5.6` and the rest of that list then appear in the report as names you can paste straight into `--agent`. Add `"signedIn"` if `whoami` exits zero while reporting a signed-out account, and `"modelPattern"` if the list comes with headers or decoration. Leave the block out if the CLI has no non-interactive way to answer: the report says `unknown`, which is better than a probe that opens a browser every time somebody runs `glorp agents`.
+
+### 8. Point the binary somewhere else, per run
 
 The definition names the default; `--agent-binary` overrides it without editing the file:
 
@@ -636,7 +679,7 @@ The definition names the default; `--agent-binary` overrides it without editing 
 glorp watch --agent robo --agent-binary robo=/opt/robo/bin/robo owner/repo
 ```
 
-### 8. Install the skills for it
+### 9. Install the skills for it
 
 A dispatch sends `/gh-fix ISSUE_NUMBER`, so `robo` needs the skills installed. Declare the target:
 
@@ -653,7 +696,7 @@ npx --yes skills add lsegal/glorp@gh-discuss --global --agent universal -y
 
 `glorp agents -skills` prints the targets in force, including this one.
 
-### 9. Override a built-in instead
+### 10. Override a built-in instead
 
 The same file overrides a shipped definition field by field. Pointing `claude` at a different install and adding an environment variable is the whole document:
 
@@ -697,5 +740,9 @@ Run `glorp agents` after every edit; it loads the same registry `glorp watch` do
 **A resume restarted instead of continuing.** Two ordinary causes. The agent no longer holds the session — glorp matches the shared phrases plus the definition's own `missingSession` list, and restarts. Or the agent that ran the issue is no longer configured: work state pinned to an agent the current `--agent` set does not include is dropped, logged as `discarded persisted agent "NAME"; it is no longer configured`, and redispatched to a configured agent with a fresh session.
 
 **Confirming the skills are installed.** `glorp agents -skills` prints the target ids the registry declares. Compare that with what skills.sh has for the agent, and install any missing pair with the two `skills add` commands above. An agent whose definition declares no `skills.target` is skipped by the installers entirely.
+
+**`glorp agents` reports `unknown` or `not installed`.** `not installed` means the definition's `binary` is not on glorp's `PATH`; install the CLI, or point that agent at its install with `--agent-binary NAME=PATH`. `unknown` under `auth` means the definition declares no `doctor.auth` probe and no quota reading was available, so nothing could prove the CLI is signed in either way -- it is not a claim that it is signed out. Under `models` it means the CLI's own model command failed; run that argv by hand to see what it printed.
+
+**`glorp agents` prints a report where a script wanted a list.** Use `glorp agents -names` for one agent name per line and `glorp agents -skills` for the skills.sh targets. Both print exactly what they always did and run no probe.
 
 **The status bar shows no quota.** That is the default: an agent with no `quota` block reports untracked, and costs no process on any poll. If you declared `"reader": "command"` and still see nothing, run the `command` argv by hand and check its stdout is JSON with the paths `percentUsed` and `resetAt` name. A read that fails leaves the previous good value in place rather than blanking the bar.
