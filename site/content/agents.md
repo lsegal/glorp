@@ -579,7 +579,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "skills": {"target": "antigravity-cli"},
   "doctor": {
     "models": ["{binary}", "models"],
-    "modelPattern": "^[A-Za-z0-9][A-Za-z0-9 ._/:()-]*$"
+    "modelPattern": "^([A-Za-z0-9][A-Za-z0-9._/:-]*)\\t"
   },
   "args": {
     "run": [

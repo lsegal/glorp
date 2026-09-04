@@ -186,3 +186,42 @@ func TestBuiltinDoctorProbesAreDeclaredOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestAgyModelsFromRealProbeOutput pins the `agy` definition's filtering to
+// what `agy models` really prints, captured from agy 1.1.26: a
+// `Fetching available models...` progress line, then one model per line as a
+// tab-separated id and display name. The pattern the definition shipped with
+// allowed spaces but not tabs, so it rejected every model line and kept only
+// the progress line, and the report offered `agy/Fetching available models...`
+// as something to paste into --agent.
+func TestAgyModelsFromRealProbeOutput(t *testing.T) {
+	agy, ok := MustBuiltin().Lookup("agy")
+	if !ok {
+		t.Fatal("builtin registry has no agy definition")
+	}
+	output := strings.Join([]string{
+		"Fetching available models...",
+		"gemini-3.8-flash-high\tGemini 3.8 Flash (High)",
+		"gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
+		"gemini-3.1-pro-high\tGemini 3.1 Pro (High)",
+		"claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)",
+		"gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
+		"",
+	}, "\n")
+	want := []string{
+		"gemini-3.8-flash-high",
+		"gemini-3.8-flash-medium",
+		"gemini-3.1-pro-high",
+		"claude-opus-4-6-thinking",
+		"gpt-oss-120b-medium",
+	}
+	got := agy.Doctor.ModelsFrom(output)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ModelsFrom() = %v, want %v", got, want)
+	}
+	for _, model := range got {
+		if strings.Contains(model, " ") {
+			t.Errorf("ModelsFrom() reported %q, want no status or progress line as a model", model)
+		}
+	}
+}
