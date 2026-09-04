@@ -63,7 +63,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.String("claude-binary", "claude", "Claude executable (alias for --agent-binary claude=PATH)")
 	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (nothing honours the request under -p yet and no alternative lever exists, so this is off by default and currently reaches nobody)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
-	flags.String("config", agents.DefaultConfigPath, "agent definition file; read only, never written, and separate from --state")
+	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
 	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
@@ -112,6 +112,19 @@ func runWatch(args []string) int {
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	// The config file's "settings" section fills in every switch the command
+	// line left alone (issue #614), so a run's usual configuration lives in
+	// the file rather than in a shell alias. It is applied after Parse so an
+	// explicit switch always wins over the file.
+	configSettings, err := loadConfigSettings(configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if err := applyConfigSettings(flags, configPath, configSettings); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 	interval := flagValue[time.Duration](flags, "interval")
@@ -296,7 +309,7 @@ func runWatch(args []string) int {
 		agentsHandler := func(ctx context.Context) ([]core.AgentStatus, error) {
 			return agentStatuses(ctx, w.registry())
 		}
-		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, w.ApplySettings, agentsHandler)
+		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler)
 	}
 	var server *http.Server
 	if !poll {
@@ -382,6 +395,28 @@ func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listen
 	webURL := fmt.Sprintf("http://localhost:%d", port)
 	fmt.Fprintf(output, "web UI listening on %s\n", webURL)
 	webUI.Log("web UI listening on " + webURL)
+}
+
+// persistingSettingsHandler writes a dashboard settings change back to the
+// config file's settings section after the running instance has accepted it
+// (issue #614), so a setting changed in the browser survives a restart. The
+// live change has already taken effect by then, so a file that cannot be
+// written is logged rather than reported as a failed update.
+func persistingSettingsHandler(apply func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), configPath string, logf func(string, ...interface{})) func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error) {
+	return func(ctx context.Context, update core.SettingsUpdate) (core.SettingsSnapshot, error) {
+		snapshot, err := apply(ctx, update)
+		if err != nil {
+			return snapshot, err
+		}
+		values := settingsUpdateFlags(update)
+		if len(values) == 0 {
+			return snapshot, nil
+		}
+		if err := saveConfigSettings(configPath, values); err != nil && logf != nil {
+			logf("save settings to %s: %v", configPath, err)
+		}
+		return snapshot, nil
+	}
 }
 
 // splitAllowedCommenters parses the comma-separated --allowed-commenters
