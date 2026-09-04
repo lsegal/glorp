@@ -186,6 +186,10 @@ func formatClaudeQuota(usageText string) string {
 	return strings.Join(parts, ", ")
 }
 
+// quotaCommandWaitDelay is how long a cancelled quota command is given to let
+// go of its output pipe before the read gives up on it.
+const quotaCommandWaitDelay = time.Second
+
 // commandQuotaReader is the generic quota source: it runs the argv a
 // definition names, reads the JSON that argv prints, and renders the fields
 // the definition points at into the definition's own template. It is what
@@ -223,7 +227,12 @@ func readCommandQuota(ctx context.Context, binary string, spec agents.Quota) (st
 	}
 	ctx, cancel := context.WithTimeout(ctx, spec.TimeoutDuration())
 	defer cancel()
-	out, err := process.Output(exec.CommandContext(ctx, argv[0], argv[1:]...))
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// Cancelling kills the command, but a grandchild it left holding the
+	// output pipe would keep the read waiting on a process that is already
+	// gone. WaitDelay closes the pipe behind it so the timeout is the timeout.
+	cmd.WaitDelay = quotaCommandWaitDelay
+	out, err := process.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("run quota command %s: %w", argv[0], err)
 	}

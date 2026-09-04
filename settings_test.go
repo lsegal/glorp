@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/lsegal/glorp/agents"
 	"github.com/lsegal/glorp/webui"
 
 	"bytes"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -297,5 +299,107 @@ func TestGlorpAgentStillConfigured(t *testing.T) {
 				t.Fatalf("agentStillConfigured(%q) = %t, want %t", test.agent, got, test.want)
 			}
 		})
+	}
+}
+
+// registryForSettings builds a registry holding a built-in agent and one an
+// imaginary config file added, so the settings surfaces can be checked to
+// report both.
+func registryForSettings(t *testing.T) *agents.Registry {
+	t.Helper()
+	definition := func(name string) agents.Definition {
+		return agents.Definition{
+			Name: name, Binary: name,
+			Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
+			Session: agents.Session{Assign: agents.AssignNone},
+			Output:  agents.Output{Format: agents.FormatText},
+		}
+	}
+	codex := definition("codex")
+	codex.Levels = []string{"low", "medium", "high"}
+	muse := definition("muse")
+	muse.Models = []string{"muse-1", "muse-2"}
+	registry, err := agents.NewRegistry(codex, muse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
+}
+
+// TestSettingsSnapshotListsEveryRegisteredAgent checks the settings API
+// reports the registry rather than the agents this run happens to dispatch
+// with, which is what makes a .glorp.config.json agent selectable in the
+// dashboard with no code change (issue #489).
+func TestSettingsSnapshotListsEveryRegisteredAgent(t *testing.T) {
+	w := &Glorp{
+		Registry: registryForSettings(t),
+		Runner:   CommandRunner{Agent: "codex", Agents: []string{"codex"}},
+	}
+	snapshot := w.settingsSnapshot()
+	if got := strings.Join(snapshot.Agents, ","); got != "codex,muse" {
+		t.Fatalf("agents = %q, want every registered agent", got)
+	}
+	if got := strings.Join(snapshot.ConfiguredAgents, ","); got != "codex" {
+		t.Fatalf("configuredAgents = %q, want only what --agent selected", got)
+	}
+	if len(snapshot.AgentOptions) != 2 {
+		t.Fatalf("agentOptions = %v, want one per registered agent", snapshot.AgentOptions)
+	}
+	if got := strings.Join(snapshot.AgentOptions[0].Levels, ","); got != "low,medium,high" {
+		t.Fatalf("codex levels = %q", got)
+	}
+	if got := strings.Join(snapshot.AgentOptions[1].Models, ","); got != "muse-1,muse-2" {
+		t.Fatalf("muse models = %q", got)
+	}
+}
+
+// TestSettingsValidatesAgainstTheRunsRegistry checks the live --agent override
+// accepts a config-defined agent and rejects an unknown one with the list the
+// CLI would print, so the dashboard and the settings API answer a typo the
+// same way the command line does.
+func TestSettingsValidatesAgainstTheRunsRegistry(t *testing.T) {
+	registry := registryForSettings(t)
+	if err := validateSettingsUpdate(registry, SettingsUpdate{Agent: strPtr("muse/muse-2")}); err != nil {
+		t.Fatalf("config-defined agent rejected: %v", err)
+	}
+	err := validateSettingsUpdate(registry, SettingsUpdate{Agent: strPtr("claude")})
+	if err == nil {
+		t.Fatal("expected an agent outside the run's registry to be rejected")
+	}
+	if !strings.Contains(err.Error(), "known agents are codex, muse") {
+		t.Fatalf("error = %v, want it to list the registry's agents", err)
+	}
+	if err := validateSettingsUpdate(registry, SettingsUpdate{Agent: strPtr("muse/muse-9")}); err == nil {
+		t.Fatal("expected a model outside the agent's list to be rejected")
+	}
+}
+
+// TestAgentStillConfiguredIgnoresTheRegistry checks the resume path keeps
+// asking what --agent selected rather than what the registry defines (issue
+// #489). An agent that is still registered but is no longer dispatched to must
+// not hold a persisted session, and an agent a config file dropped entirely
+// must not either.
+func TestAgentStillConfiguredIgnoresTheRegistry(t *testing.T) {
+	w := &Glorp{
+		Registry: registryForSettings(t),
+		Runner:   CommandRunner{Agent: "codex", Agents: []string{"codex"}},
+	}
+	if w.agentStillConfigured("muse") {
+		t.Fatal("a registered agent absent from --agent should not keep a session")
+	}
+	if !w.agentStillConfigured("codex") {
+		t.Fatal("the configured agent should keep its session")
+	}
+	// A config-defined agent that disappeared from config is gone from the
+	// registry too, and is likewise not configured.
+	dropped := &Glorp{Runner: CommandRunner{Agent: "codex", Agents: []string{"codex"}}}
+	if dropped.agentStillConfigured("muse") {
+		t.Fatal("an agent no longer in config should not keep a session")
+	}
+	// It is still dispatchable while --agent names it, registry or not: the
+	// registry rejects it at parse time, not here.
+	kept := &Glorp{Runner: CommandRunner{Agent: "muse", Agents: []string{"muse"}}}
+	if !kept.agentStillConfigured("muse") {
+		t.Fatal("an agent --agent still names should keep its session")
 	}
 }

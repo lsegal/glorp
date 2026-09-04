@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBuiltinDefinitionsLoad checks the embedded documents parse and validate.
@@ -282,5 +283,111 @@ func TestSkillsTargetShapeIsValidated(t *testing.T) {
 	definition.Skills = Skills{}
 	if err := definition.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v, want an absent target accepted", err)
+	}
+}
+
+// TestQuotaValidation covers the quota block the registry-driven quota reader
+// selects on (issue #489). A block that names a reader glorp does not have, or
+// that carries generic-reader fields the chosen reader would ignore, is
+// rejected rather than silently doing nothing: a quota that never appears
+// looks exactly like an agent that has none.
+func TestQuotaValidation(t *testing.T) {
+	base := Definition{
+		Name: "muse", Binary: "muse",
+		Args:    Args{Run: []Fragment{{Args: []string{"{prompt}"}}}, Resume: []Fragment{{Args: []string{"{prompt}"}}}},
+		Session: Session{Assign: AssignNone},
+		Output:  Output{Format: FormatText},
+	}
+	valid := []struct {
+		name  string
+		quota Quota
+	}{
+		{name: "none by default", quota: Quota{}},
+		{name: "explicit none", quota: Quota{Reader: QuotaNone}},
+		{name: "built-in codex", quota: Quota{Reader: QuotaCodex}},
+		{name: "built-in claude", quota: Quota{Reader: QuotaClaude}},
+		{name: "command", quota: Quota{Reader: QuotaCommand, Command: []string{"{binary}", "usage"}, PercentUsed: "used"}},
+		{name: "command with reset", quota: Quota{
+			Reader: QuotaCommand, Command: []string{"muse", "usage"},
+			PercentUsed: "a.b", ResetAt: "a.c", Format: "{percentLeft}% until {resetAt}", Timeout: "5s",
+		}},
+	}
+	for _, test := range valid {
+		t.Run(test.name, func(t *testing.T) {
+			definition := base
+			definition.Quota = test.quota
+			if err := definition.Validate(); err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+	invalid := []struct {
+		name  string
+		quota Quota
+		want  string
+	}{
+		{name: "unknown reader", quota: Quota{Reader: "gemini"}, want: `"quota.reader"`},
+		{name: "command without argv", quota: Quota{Reader: QuotaCommand}, want: `"quota.command" is required`},
+		{name: "empty argument", quota: Quota{Reader: QuotaCommand, Command: []string{"muse", " "}, PercentUsed: "used"}, want: "empty argument"},
+		{name: "unknown placeholder", quota: Quota{Reader: QuotaCommand, Command: []string{"muse"}, PercentUsed: "used", Format: "{tokens} left"}, want: "unknown placeholder"},
+		{name: "percent without field", quota: Quota{Reader: QuotaCommand, Command: []string{"muse"}}, want: `"quota.percentUsed" is required`},
+		{name: "reset without field", quota: Quota{Reader: QuotaCommand, Command: []string{"muse"}, PercentUsed: "used", Format: "{resetAt}"}, want: `"quota.resetAt" is required`},
+		{name: "bad timeout", quota: Quota{Reader: QuotaCommand, Command: []string{"muse"}, PercentUsed: "used", Timeout: "soon"}, want: `"quota.timeout"`},
+		{name: "zero timeout", quota: Quota{Reader: QuotaCommand, Command: []string{"muse"}, PercentUsed: "used", Timeout: "0s"}, want: "must be positive"},
+		{name: "command field on codex", quota: Quota{Reader: QuotaCodex, Command: []string{"codex"}}, want: `only meaningful when "quota.reader" is "command"`},
+		{name: "format on none", quota: Quota{Format: "{percentLeft}%"}, want: `only meaningful when "quota.reader" is "command"`},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			definition := base
+			definition.Quota = test.quota
+			err := definition.Validate()
+			if err == nil {
+				t.Fatal("Validate() = nil, want an error")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() = %v, want it to mention %q", err, test.want)
+			}
+		})
+	}
+}
+
+// TestQuotaDefaults pins the values the generic reader falls back to when a
+// definition names only the field it reads.
+func TestQuotaDefaults(t *testing.T) {
+	quota := Quota{Reader: QuotaCommand, Command: []string{"{binary}", "usage", "--for={binary}"}, PercentUsed: "used"}
+	if got := quota.ReaderName(); got != QuotaCommand {
+		t.Fatalf("ReaderName() = %q", got)
+	}
+	if got := (Quota{}).ReaderName(); got != QuotaNone {
+		t.Fatalf("empty ReaderName() = %q, want %q", got, QuotaNone)
+	}
+	if got := quota.FormatTemplate(); got != "{percentLeft}% left" {
+		t.Fatalf("FormatTemplate() = %q", got)
+	}
+	if got := quota.TimeoutDuration(); got != DefaultQuotaTimeout {
+		t.Fatalf("TimeoutDuration() = %s, want %s", got, DefaultQuotaTimeout)
+	}
+	quota.Timeout = "250ms"
+	if got := quota.TimeoutDuration(); got != 250*time.Millisecond {
+		t.Fatalf("TimeoutDuration() = %s", got)
+	}
+	if got := strings.Join(quota.Argv("/opt/muse"), " "); got != "/opt/muse usage --for=/opt/muse" {
+		t.Fatalf("Argv() = %q, want {binary} substituted", got)
+	}
+}
+
+// TestBuiltinAgentsKeepTheirQuotaReaders checks the definitions glorp ships
+// still select the readers whose status-bar strings the UI tests pin.
+func TestBuiltinAgentsKeepTheirQuotaReaders(t *testing.T) {
+	registry := MustBuiltin()
+	for name, want := range map[string]string{"codex": QuotaCodex, "claude": QuotaClaude} {
+		definition, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("built-in agent %q is missing", name)
+		}
+		if got := definition.Quota.ReaderName(); got != want {
+			t.Fatalf("%s quota reader = %q, want %q", name, got, want)
+		}
 	}
 }

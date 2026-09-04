@@ -319,7 +319,7 @@ func TestTruncateKeepsDisplayWidthWithinLimit(t *testing.T) {
 }
 
 func TestStatusBarUsesRaisedBackground(t *testing.T) {
-	view := renderStatusBar([]string{"jobs"})
+	view := renderStatusBar(80, []string{"jobs"})
 	if strings.Contains(view, "┏") || strings.Contains(view, "╋") {
 		t.Fatalf("status bar should not use borders: %q", view)
 	}
@@ -370,11 +370,44 @@ func TestDashboardShowsQuota(t *testing.T) {
 
 func TestDashboardShowsAllNamedQuotas(t *testing.T) {
 	m := newDashboard()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	// Wide enough that the whole quota cell fits: the status bar truncates
+	// rather than wraps (issue #489), so a narrower terminal would shorten
+	// this list rather than show all of it.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Quotas: map[string]string{"codex": "weekly 87% left", "claude": ""}}))
 	view := updated.(dashboard).View()
 	if !strings.Contains(view, "quota: claude: not tracked, codex: weekly 87% left") {
 		t.Fatalf("dashboard did not show all named quotas: %s", view)
+	}
+}
+
+// TestDashboardTruncatesTheStatusBarWithManyAgents checks a run configured
+// with four agents keeps the status bar on one line. The quota cell grows with
+// every agent, and a bar wider than the terminal used to wrap onto a second
+// line and shove the job grid up the screen.
+func TestDashboardTruncatesTheStatusBarWithManyAgents(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{
+		Targets: []string{"lsegal/glorp"},
+		Quotas: map[string]string{
+			"claude": "session 95% left, week 94% left",
+			"codex":  "weekly 87% left",
+			"muse":   "day 40% left",
+			"opal":   "",
+		},
+	}))
+	lines := strings.Split(updated.(dashboard).View(), "\n")
+	footer := lines[len(lines)-1]
+	if width := lipgloss.Width(footer); width > 100 {
+		t.Fatalf("status bar width = %d, want it truncated to the terminal's 100", width)
+	}
+	// Truncation shortens the widest cell rather than dropping cells, so every
+	// section is still identifiable.
+	for _, want := range []string{"jobs:", "quota:", "targets:"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("status bar %q lost the %q section", footer, want)
+		}
 	}
 }
 
@@ -529,7 +562,7 @@ func TestJobCountCellBackgroundCoversEveryCharacter(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
 
-	cell := renderStatusBar([]string{renderJobCounts(GlorpSnapshot{
+	cell := renderStatusBar(80, []string{renderJobCounts(GlorpSnapshot{
 		Concurrency: 3,
 		Running:     1,
 		Completed:   2,

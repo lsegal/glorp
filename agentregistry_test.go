@@ -194,3 +194,117 @@ func TestBinaryFallsBackToTheDefinition(t *testing.T) {
 		t.Fatalf("binary = %q, want the --codex-binary value", got)
 	}
 }
+
+// TestAgentBinaryOverridesEveryOtherSource pins the resolution order
+// --agent-binary, legacy alias flag, definition binary, run default (issue
+// #489). --agent-binary is the only source that can reach a config-defined
+// agent, so it has to outrank the two flags that predate it.
+func TestAgentBinaryOverridesEveryOtherSource(t *testing.T) {
+	registry, err := agents.NewRegistry(
+		agents.Definition{
+			Name: "muse", Binary: "/opt/muse",
+			Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
+			Session: agents.Session{Assign: agents.AssignNone},
+			Output:  agents.Output{Format: agents.FormatText},
+		},
+		agents.Definition{
+			Name: "codex", Binary: "codex",
+			Args:    agents.Args{Run: []agents.Fragment{{Args: []string{"{prompt}"}}}, Resume: []agents.Fragment{{Args: []string{"{prompt}"}}}},
+			Session: agents.Session{Assign: agents.AssignNone},
+			Output:  agents.Output{Format: agents.FormatText},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := CommandRunner{
+		Agent: "codex", Binary: "run-default", CodexBinary: "codex-bin", Definitions: registry,
+		AgentBinaries: map[string]string{"codex": "/opt/codex-nightly", "muse": "/opt/muse-nightly"},
+	}
+	if got := runner.binary("codex"); got != "/opt/codex-nightly" {
+		t.Fatalf("binary = %q, want --agent-binary to outrank --codex-binary", got)
+	}
+	if got := runner.binary("muse"); got != "/opt/muse-nightly" {
+		t.Fatalf("binary = %q, want --agent-binary to reach a config-defined agent", got)
+	}
+	// Without an override the legacy flag, then the definition, then the run
+	// default still answer in that order.
+	runner.AgentBinaries = nil
+	if got := runner.binary("codex"); got != "codex-bin" {
+		t.Fatalf("binary = %q, want the legacy alias flag", got)
+	}
+	if got := runner.binary("muse"); got != "/opt/muse" {
+		t.Fatalf("binary = %q, want the definition's own", got)
+	}
+	if got := runner.binary("stranger"); got != "run-default" {
+		t.Fatalf("binary = %q, want the run default for an agent no definition covers", got)
+	}
+}
+
+// TestAgentBinaryFlagParsesNameEqualsPath covers the flag itself: the value
+// has to name a registered agent, so a typo is reported where it is written
+// rather than by the wrong executable running later.
+func TestAgentBinaryFlagParsesNameEqualsPath(t *testing.T) {
+	var flag agentBinaryFlag
+	if err := flag.Set("claude=/opt/claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := flag.Set("codex=/opt/codex"); err != nil {
+		t.Fatal(err)
+	}
+	// A repeat replaces rather than accumulates, matching every other flag.
+	if err := flag.Set("claude=/usr/bin/claude"); err != nil {
+		t.Fatal(err)
+	}
+	values := flag.values()
+	if values["claude"] != "/usr/bin/claude" || values["codex"] != "/opt/codex" {
+		t.Fatalf("values = %v", values)
+	}
+	if got := flag.String(); got != "claude=/usr/bin/claude,codex=/opt/codex" {
+		t.Fatalf("String() = %q", got)
+	}
+	if (&agentBinaryFlag{}).values() != nil {
+		t.Fatal("an unset flag should contribute no overrides")
+	}
+	for _, bad := range []string{"claude", "=/opt/claude", "claude=", "  =  "} {
+		if err := (&agentBinaryFlag{}).Set(bad); err == nil {
+			t.Fatalf("Set(%q) accepted a malformed value", bad)
+		}
+	}
+	err := (&agentBinaryFlag{}).Set("bogus=/opt/bogus")
+	if err == nil {
+		t.Fatal("Set accepted an unregistered agent")
+	}
+	if !strings.Contains(err.Error(), "known agents are") {
+		t.Fatalf("error = %v, want it to list the known agents", err)
+	}
+}
+
+// TestWatchAcceptsAgentBinaryAndItsAliases checks the flag is wired into
+// `glorp watch` alongside the two flags it generalises, which stay documented
+// and working.
+func TestWatchAcceptsAgentBinaryAndItsAliases(t *testing.T) {
+	specs := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	binaries := agentBinaryFlag{}
+	filter := filterFlag{values: []string{defaultIssueFilter}}
+	flags := watchFlagSet(&specs, &binaries, &filter)
+	if err := flags.Parse([]string{"--agent-binary", "claude=/opt/claude", "--codex-binary", "/opt/codex", "--claude-binary", "/ignored"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := binaries.values()["claude"]; got != "/opt/claude" {
+		t.Fatalf("--agent-binary claude = %q", got)
+	}
+	if got := flagValue[string](flags, "codex-binary"); got != "/opt/codex" {
+		t.Fatalf("--codex-binary = %q", got)
+	}
+	if got := flagValue[string](flags, "claude-binary"); got != "/ignored" {
+		t.Fatalf("--claude-binary = %q", got)
+	}
+	runner := CommandRunner{CodexBinary: "/opt/codex", ClaudeBinary: "/ignored", AgentBinaries: binaries.values()}
+	if got := runner.binary("claude"); got != "/opt/claude" {
+		t.Fatalf("claude binary = %q, want --agent-binary to win over --claude-binary", got)
+	}
+	if got := runner.binary("codex"); got != "/opt/codex" {
+		t.Fatalf("codex binary = %q, want --codex-binary to still work", got)
+	}
+}
