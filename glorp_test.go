@@ -2472,8 +2472,14 @@ func TestGlorpKeepsWebhookFollowUpWhenAnotherDeliveryArrives(t *testing.T) {
 		got := append([]int(nil), r.got...)
 		r.mu.Unlock()
 		if len(got) >= 2 {
-			if !reflect.DeepEqual(got, []int{1, 2}) {
-				t.Fatalf("runner received issues %v, want [1 2]", got)
+			// Both issues dispatch as independent goroutines under
+			// Concurrency: 2, so the scheduler gives no guarantee which one
+			// appends to got first; only that both are dispatched exactly
+			// once.
+			sorted := append([]int(nil), got...)
+			slices.Sort(sorted)
+			if !reflect.DeepEqual(sorted, []int{1, 2}) {
+				t.Fatalf("runner received issues %v, want [1 2] in some order", got)
 			}
 			close(r.release)
 			cancel()
