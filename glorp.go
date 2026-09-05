@@ -1079,11 +1079,16 @@ func unclosedWorkPrompt(issue Issue) string {
 }
 
 // confirmIssueClosed asks GitHub whether the issue an agent just finished is
-// actually closed. It reports whether the issue is closed and whether GitHub
-// answered at all, so a check that could not be made is never mistaken for an
-// issue that is still open. A merge GitHub has not finished processing is
-// allowed for by re-reading once after the closure interval before the work is
-// treated as unfinished.
+// actually done. That is either the issue itself being closed, or a pull
+// request linked to it sitting open, unmerged, and past draft: a run that
+// deliberately withholds its merge for a human (a DONOTMERGE directive)
+// finishes in exactly that shape on purpose, and it must not be mistaken for
+// one that stopped early and kept alive forever waiting for a hold nothing
+// here can lift (issue #628). It reports whether the issue is done and
+// whether GitHub answered at all, so a check that could not be made is never
+// mistaken for an issue that is still open. A merge GitHub has not finished
+// processing is allowed for by re-reading once after the closure interval
+// before the work is treated as unfinished.
 func (w *Glorp) confirmIssueClosed(ctx context.Context, checker WorkClosureChecker, issue Issue) (closed, answered bool) {
 	repo := issueRepository(issue.Target, issue)
 	for attempt := 0; attempt < 2; attempt++ {
@@ -1103,11 +1108,25 @@ func (w *Glorp) confirmIssueClosed(ctx context.Context, checker WorkClosureCheck
 			continue
 		}
 		answered = true
-		if strings.EqualFold(state.IssueState, "closed") {
+		if strings.EqualFold(state.IssueState, "closed") || pullRequestHeldForReview(state) {
 			return true, true
 		}
 	}
 	return false, answered
+}
+
+// pullRequestHeldForReview reports whether state carries a pull request that
+// is open, unmerged, and no longer a draft. That is what a gh-fix run leaves
+// behind when it marks its fix ready but withholds the merge for a human, and
+// it is otherwise indistinguishable from work still in flight, so the
+// keepalive loop needs this to tell the two apart (issue #628).
+func pullRequestHeldForReview(state OriginatingWorkState) bool {
+	for _, pullRequest := range state.PullRequests {
+		if strings.EqualFold(pullRequest.State, "open") && !pullRequest.Merged && !pullRequest.IsDraft {
+			return true
+		}
+	}
+	return false
 }
 
 func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) string {

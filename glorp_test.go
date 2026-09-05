@@ -3954,6 +3954,74 @@ func TestGlorpCompletesWhenTheIssueIsActuallyClosed(t *testing.T) {
 	}
 }
 
+func TestGlorpCompletesWhenAPullRequestIsHeldReadyForReview(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	// The issue stays open on purpose -- a gh-fix run held the merge for a
+	// human -- but its pull request is open, unmerged, and past draft, which
+	// is what a deliberately withheld merge leaves behind (issue #628).
+	src.state = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open"}}}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitForSession(t, runner.sessions)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("held pull request was not recorded as completed, state=%v err=%v", state, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("a held pull request relaunched its agent: %+v", extra)
+	default:
+	}
+}
+
+func TestGlorpKeepsAnAgentAliveWhileItsDraftPullRequestIsStillInProgress(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	// A draft pull request is work still in flight, not a hold, so it must
+	// not be mistaken for a finished, deliberately withheld merge.
+	src.state = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open", IsDraft: true}}}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	first := waitForSession(t, runner.sessions)
+	if first.Resume {
+		t.Fatalf("first launch resumed: %+v", first)
+	}
+	continued := waitForSession(t, runner.sessions)
+	if !continued.Resume || continued.ID != first.ID {
+		t.Fatalf("draft pull request did not continue the same session: first=%+v continued=%+v", first, continued)
+	}
+}
+
 func TestConfirmIssueClosedReportsAnUnansweredCheck(t *testing.T) {
 	w := &Glorp{Out: &syncBuffer{}, closureInterval: time.Millisecond}
 	src := &fakeClosureSource{fakeSource: &fakeSource{}, err: errors.New("boom")}
