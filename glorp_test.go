@@ -3319,7 +3319,12 @@ func TestGlorpReleasesClaimWhenDispatchIsSkippedAfterHandshake(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	deadline := time.Now().Add(5 * time.Second)
+	// A 5-second deadline here turned a stalled goroutine into a spurious
+	// failure on a loaded CI runner (issue #630), the same failure mode
+	// webhookDispatchWait already exists to avoid (issue #558): the work
+	// itself takes microseconds, but go test -race across the whole module
+	// can starve this goroutine for well over five seconds.
+	deadline := time.Now().Add(webhookDispatchWait)
 	var posted []Comment
 	for time.Now().Before(deadline) {
 		posted, _ = comments.ListComments(context.Background(), "o/r", 7)
