@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.3.3 - 2026-09-05
+
 - Stop restarting an agent forever after it finishes a run that deliberately withheld a merge (a `donotmerge`/hold directive) (issue #628). A finished run whose issue is still open is normally treated as one that stopped early, so its session is kept alive and resumed; that keepalive did not distinguish a stall from a `gh-fix` run that had already marked its pull request ready for review and stopped on purpose to leave the merge for a human, so the agent was relaunched against a hold it could never lift. The completion check now also recognizes an open, unmerged, non-draft pull request linked to the issue as finished work, and reports the ticket as complete instead of restarting the agent.
 - Show the dispatcher's own instance id as the leftmost segment of the status bar in both the terminal dashboard and the web dashboard, so an operator watching several running instances can tell which one they are looking at (issue #624).
 
