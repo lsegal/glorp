@@ -61,6 +61,11 @@ type PullRequestWorkState struct {
 	Number int
 	State  string
 	Merged bool
+	// IsDraft reports whether the pull request is still a draft. A run that
+	// finishes with an open, unmerged, non-draft pull request left behind has
+	// deliberately marked its fix ready and is waiting on a human rather than
+	// stalled (issue #628).
+	IsDraft bool
 }
 
 // OriginatingWorkState is what a run reads back about the issue an agent is

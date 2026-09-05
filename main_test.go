@@ -117,6 +117,23 @@ func TestOriginatingWorkStateLoadsLinkedPullRequest(t *testing.T) {
 	}
 }
 
+func TestOriginatingWorkStateReadsPullRequestDraftStatus(t *testing.T) {
+	responses := [][]byte{
+		[]byte(`{"state":"OPEN"}`),
+		[]byte(`[{"event":"cross-referenced","source":{"issue":{"number":9,"body":"Closes #7","pull_request":{"merged_at":null}}}}]`),
+		[]byte(`{"state":"open","merged_at":null,"draft":false}`),
+	}
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return responses[len(calls)-1], nil
+	}}
+	state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
+	if err != nil || len(state.PullRequests) != 1 || state.PullRequests[0] != (PullRequestWorkState{Number: 9, State: "open", IsDraft: false}) {
+		t.Fatalf("OriginatingWorkState() = (%#v, %v)", state, err)
+	}
+}
+
 func TestClosedWorkReasonDistinguishesManualIssueClosureFromMerge(t *testing.T) {
 	for _, test := range []struct {
 		name       string
