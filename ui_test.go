@@ -380,6 +380,27 @@ func TestDashboardShowsQuota(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsIdentityLeftmostInStatusBar(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Identity: "BA6B21B5", Quota: "weekly 87% left"}))
+	view := ansi.Strip(updated.(dashboard).View())
+	idIndex := strings.Index(view, "id: BA6B21B5")
+	quotaIndex := strings.Index(view, "quota: weekly 87% left")
+	if idIndex < 0 || quotaIndex < 0 || idIndex > quotaIndex {
+		t.Fatalf("dashboard did not show instance id leftmost in the status bar: %s", view)
+	}
+}
+
+func TestDashboardOmitsIdentityCellWhenUnset(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Quota: "weekly 87% left"}))
+	if view := updated.(dashboard).View(); strings.Contains(view, "id: ") {
+		t.Fatalf("dashboard should not show an id cell without an instance identity: %s", view)
+	}
+}
+
 func TestDashboardShowsAllNamedQuotas(t *testing.T) {
 	m := newDashboard()
 	// Wide enough that the whole quota cell fits: the status bar truncates

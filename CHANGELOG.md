@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show the dispatcher's own instance id as the leftmost segment of the status bar in both the terminal dashboard and the web dashboard, so an operator watching several running instances can tell which one they are looking at (issue #624).
+
 ## v1.3.2 - 2026-09-04
 
 - Wrap the terminal dashboard's status bar onto more lines instead of truncating its sections into unreadable stubs. Every section now keeps at least ten columns, and the bar rolls onto another line when they cannot all fit side by side on a narrow terminal (issue #616).

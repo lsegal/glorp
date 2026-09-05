@@ -340,6 +340,9 @@ h1 .version {
 	align-items: center;
 	padding: 4px 10px;
 }
+.id {
+	background: #1e293b;
+}
 .jobs {
 	background: #075985;
 	gap: 4px;

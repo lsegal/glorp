@@ -1510,7 +1510,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if w.Quota != nil {
 			quotas = w.Quota(ctx)
 		}
-		w.UI.Snapshot(GlorpSnapshot{Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list})
+		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list})
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent
