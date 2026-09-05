@@ -360,7 +360,11 @@ func (m dashboard) View() string {
 	tokens := quotaText(m.snapshot)
 	push := deliveryText(m.snapshot)
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
-	footer := renderStatusBar(m.width, []string{counts, tokens, push, targets})
+	items := []string{counts, tokens, push, targets}
+	if m.snapshot.Identity != "" {
+		items = append([]string{"id: " + m.snapshot.Identity}, items...)
+	}
+	footer := renderStatusBar(m.width, items)
 	sections := []string{logs, footer}
 	if pages > 1 {
 		sections = append(sections, muted.Render(fmt.Sprintf(pagerHint, page+1, pages)))

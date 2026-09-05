@@ -32,6 +32,11 @@ type JobSnapshot struct {
 // in the root package and the browser dashboard in package webui both render
 // it, so it lives here rather than in either of them.
 type Snapshot struct {
+	// Identity is this dispatcher instance's own handoff ID (issue #624). The
+	// dashboards show it as the leftmost status segment so an operator
+	// watching several running instances can tell which one they are looking
+	// at without cross-referencing a terminal title or log line.
+	Identity    string
 	Targets     []string
 	IssueCounts map[string]int
 	Running     int

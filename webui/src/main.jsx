@@ -197,6 +197,9 @@ function StatusBar({ snapshot, connected }) {
 		.join(", ");
 	return (
 		<footer className="status-bar">
+			{snapshot.Identity && (
+				<div className="status-cell id">id: {snapshot.Identity}</div>
+			)}
 			<div className="status-cell jobs">
 				jobs: <span className="idle">{idle}</span> idle{" "}
 				<span className="active-text">{active}</span> active{" "}
