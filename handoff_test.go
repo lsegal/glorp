@@ -48,6 +48,22 @@ func TestParseClaimVariants(t *testing.T) {
 	}
 }
 
+func TestLastCommentMatchesOnlyTheNewestExactComment(t *testing.T) {
+	comments := newFakeCommentClient()
+	comments.inject("o/r", 1, Comment{Body: claimComment("SELF", false)})
+	w := &Glorp{Comments: comments}
+
+	matched, err := w.lastCommentMatches(context.Background(), "o/r", 1, claimComment("SELF", false))
+	if err != nil || !matched {
+		t.Fatalf("lastCommentMatches() = (%v, %v), want (true, nil)", matched, err)
+	}
+	comments.inject("o/r", 1, Comment{Body: "A newer comment"})
+	matched, err = w.lastCommentMatches(context.Background(), "o/r", 1, claimComment("SELF", false))
+	if err != nil || matched {
+		t.Fatalf("lastCommentMatches() = (%v, %v), want (false, nil)", matched, err)
+	}
+}
+
 func TestClaimedByOtherIgnoresOwnAndOldComments(t *testing.T) {
 	after := time.Now()
 	comments := []Comment{

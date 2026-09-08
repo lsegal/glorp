@@ -1698,7 +1698,14 @@ func (w *Glorp) Run(ctx context.Context) error {
 			// announce ownership so other instances know it's spoken for.
 			if w.Comments != nil && !session.Resume && !pending.contested {
 				repo := issueRepository(issue.Target, issue)
-				if err := w.Comments.PostComment(ctx, repo, issue.Number, claimComment(w.Identity, false)); err != nil {
+				claim := claimComment(w.Identity, false)
+				alreadyLast, err := w.lastCommentMatches(ctx, repo, issue.Number, claim)
+				if err != nil {
+					w.logf("issue #%d failed to check its latest ownership claim: %v", issue.Number, err)
+				}
+				if alreadyLast {
+					w.logf("issue #%d picked up uncontested; its ownership claim is already the latest comment", issue.Number)
+				} else if err := w.Comments.PostComment(ctx, repo, issue.Number, claim); err != nil {
 					w.logf("issue #%d failed to post ownership claim: %v", issue.Number, err)
 				} else {
 					w.logf("issue #%d picked up uncontested; claimed it as %s (%q)", issue.Number, w.Identity, startingClaimBody)
