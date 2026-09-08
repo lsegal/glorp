@@ -100,6 +100,19 @@ func TestGhFixTreatsIdentityMentionsAsThreadedInstructions(t *testing.T) {
 	}
 }
 
+func TestGhFixKeepsGitHubIssueReferencesDistinctFromExternalTrackers(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"GitHub-style `#NNN` references",
+		"Never substitute an ambient external tracker identifier such as `ABCD-123`",
+		"branches, commits, PR bodies, comments, and follow-ups",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not preserve GitHub issue formatting %q", required)
+		}
+	}
+}
+
 func TestGhFixCopiesOriginatingIssueMetadataToFollowUps(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{
