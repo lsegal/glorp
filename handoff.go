@@ -485,3 +485,17 @@ func claimComment(id Identity, continuing bool) string {
 	}
 	return signComment(body, id)
 }
+
+// lastCommentMatches reports whether body is already the newest comment on a
+// ticket. Dispatch uses it before announcing an uncontested pickup so a
+// repeated poll cannot stack identical ownership claims (issue #633).
+func (w *Glorp) lastCommentMatches(ctx context.Context, repo string, number int, body string) (bool, error) {
+	if w.Comments == nil {
+		return false, nil
+	}
+	comments, err := w.Comments.ListComments(ctx, repo, number)
+	if err != nil || len(comments) == 0 {
+		return false, err
+	}
+	return comments[len(comments)-1].Body == body, nil
+}
