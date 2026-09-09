@@ -100,6 +100,19 @@ func TestGhFixTreatsIdentityMentionsAsThreadedInstructions(t *testing.T) {
 	}
 }
 
+func TestGhFixAcceptsNoMergeDispatchAdvice(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"and do not merge",
+		"after the identity when present",
+		"as a do-not-merge directive for this run",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not accept no-merge advice %q", required)
+		}
+	}
+}
+
 func TestGhFixKeepsGitHubIssueReferencesDistinctFromExternalTrackers(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{

@@ -172,6 +172,9 @@ func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySema
 	if update.AllowedCommenters != nil {
 		w.AllowedCommenters = splitAllowedCommenters(strings.Join(*update.AllowedCommenters, ","))
 	}
+	if update.NoMerge != nil {
+		w.noMerge.Store(*update.NoMerge)
+	}
 	if update.ActiveAgents != nil {
 		trimmed := make([]string, len(*update.ActiveAgents))
 		for i, spec := range *update.ActiveAgents {
@@ -225,6 +228,7 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		// what's actually in effect instead of leaving the field blank.
 		ReadyStateDefault: projectReadyState(w.ReadyState, ""),
 		AllowedCommenters: append([]string(nil), w.AllowedCommenters...),
+		NoMerge:           w.noMerge.Load(),
 		Agents:            w.registry().Names(),
 		AgentOptions:      w.agentOptions(),
 		ConfiguredAgents:  w.configuredAgents(),
@@ -239,12 +243,12 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 // ownership.
 func (w *Glorp) runner() AgentRunner {
 	override := w.agentOverride.Load()
-	if override == nil || len(*override) == 0 {
-		return w.Runner
-	}
 	if runner, ok := w.Runner.(CommandRunner); ok {
-		runner.Agent = (*override)[0]
-		runner.Agents = append([]string(nil), *override...)
+		runner.NoMerge = w.noMerge.Load()
+		if override != nil && len(*override) > 0 {
+			runner.Agent = (*override)[0]
+			runner.Agents = append([]string(nil), *override...)
+		}
 		return runner
 	}
 	return w.Runner
