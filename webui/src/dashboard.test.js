@@ -160,12 +160,14 @@ describe("buildSettingsUpdate", () => {
 				concurrency: "3",
 				readyState: "Agent Ready",
 				allowedCommenters: "alice, bob",
+				noMerge: true,
 				activeAgents: ["codex", "muse"],
 			}),
 		).toEqual({
 			concurrency: 3,
 			readyState: "Agent Ready",
 			allowedCommenters: ["alice", "bob"],
+			noMerge: true,
 			activeAgents: ["codex", "muse"],
 		});
 	});
@@ -176,12 +178,14 @@ describe("buildSettingsUpdate", () => {
 				concurrency: "1",
 				readyState: "",
 				allowedCommenters: "",
+				noMerge: false,
 				activeAgents: [],
 			}),
 		).toEqual({
 			concurrency: 1,
 			readyState: "",
 			allowedCommenters: [],
+			noMerge: false,
 		});
 	});
 });
