@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.3.5 - 2026-09-09
+
 - Prevent `gh-fix` from creating pull-request descriptions with literal `\n` text by requiring multiline body files and post-create verification (issue #638).
 - Add `glorp watch --no-merge` and its matching dashboard setting, so dispatched `gh-fix` runs leave completed pull requests ready for a human merge (issue #636).
 - Style the web dashboard's no-merge checkbox as a clear, keyboard-focusable control instead of leaving it to the browser default (issue #639).
