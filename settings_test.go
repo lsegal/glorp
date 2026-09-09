@@ -163,6 +163,30 @@ func TestGlorpApplySettingsReadyStateAndAllowedCommenters(t *testing.T) {
 	<-done
 }
 
+func TestGlorpApplySettingsNoMergeChangesNewDispatches(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: CommandRunner{Agent: "codex"}, Out: &syncBuffer{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	noMerge := true
+	snapshot, err := w.ApplySettings(ctx, SettingsUpdate{NoMerge: &noMerge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.NoMerge {
+		t.Fatal("snapshot noMerge = false, want true")
+	}
+	if !w.runner().(CommandRunner).NoMerge {
+		t.Fatal("runner noMerge = false, want true")
+	}
+	cancel()
+	<-done
+}
+
 func TestGlorpApplySettingsReadyStateDefaultReflectsUnsetFallback(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{}}}

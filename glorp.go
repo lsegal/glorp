@@ -172,6 +172,7 @@ type Glorp struct {
 	Concurrency int
 	StatePath   string
 	ReadyState  string
+	noMerge     atomic.Bool
 	Issues      IssueSource
 	// Discussions lists unanswered top-level Discussion threads for
 	// Discussions-board targets. When nil, Discussions-board targets are
