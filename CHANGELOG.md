@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add `glorp watch --no-merge` and its matching dashboard setting, so dispatched `gh-fix` runs leave completed pull requests ready for a human merge (issue #636).
+- Style the web dashboard's no-merge checkbox as a clear, keyboard-focusable control instead of leaving it to the browser default (issue #639).
 
 ## v1.3.4 - 2026-09-08
 
