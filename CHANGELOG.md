@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `glorp watch --no-merge` and its matching dashboard setting, so dispatched `gh-fix` runs leave completed pull requests ready for a human merge (issue #636).
+
 ## v1.3.4 - 2026-09-08
 
 - Keep `gh-fix` references in GitHub `#NNN` form when an issue or its surrounding context also mentions an external tracker key such as `ABCD-123`, so branches, commits, pull requests, comments, and follow-ups continue to target the dispatched GitHub issue (issue #632).

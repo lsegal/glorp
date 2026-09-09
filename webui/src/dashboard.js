@@ -93,6 +93,7 @@ export function buildSettingsUpdate(form) {
 		concurrency: Number(form.concurrency),
 		readyState: form.readyState,
 		allowedCommenters: parseAllowedCommenters(form.allowedCommenters),
+		noMerge: Boolean(form.noMerge),
 	};
 	const activeAgents = (form.activeAgents || []).filter(Boolean);
 	if (activeAgents.length) update.activeAgents = activeAgents;

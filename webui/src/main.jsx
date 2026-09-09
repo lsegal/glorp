@@ -284,6 +284,7 @@ function SettingsModal({ onClose }) {
 					concurrency: String(snapshot.concurrency ?? ""),
 					readyState: snapshot.readyState ?? "",
 					allowedCommenters: (snapshot.allowedCommenters || []).join(", "),
+					noMerge: Boolean(snapshot.noMerge),
 					activeAgents: snapshot.configuredAgents ?? [],
 				});
 			})
@@ -409,6 +410,17 @@ function SettingsModal({ onClose }) {
 										value={form.allowedCommenters}
 										onChange={update("allowedCommenters")}
 									/>
+								</label>
+								<label htmlFor="settings-no-merge" className="checkbox-label">
+									<input
+										id="settings-no-merge"
+										type="checkbox"
+										checked={form.noMerge}
+										onChange={(event) =>
+											setForm({ ...form, noMerge: event.target.checked })
+										}
+									/>
+									Leave completed pull requests ready for human merge
 								</label>
 							</>
 						)}

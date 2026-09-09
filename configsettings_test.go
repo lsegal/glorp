@@ -257,11 +257,13 @@ func TestSettingsUpdateFlagsMapsDashboardFields(t *testing.T) {
 	concurrency, readyState := 4, "Ready"
 	commenters := []string{"alice", "bob"}
 	active := []string{"claude/opus"}
+	noMerge := true
 	values := settingsUpdateFlags(core.SettingsUpdate{
 		Concurrency:       &concurrency,
 		ReadyState:        &readyState,
 		AllowedCommenters: &commenters,
 		ActiveAgents:      &active,
+		NoMerge:           &noMerge,
 	})
 	if values["concurrency"] != 4 {
 		t.Errorf("concurrency = %v, want 4", values["concurrency"])
@@ -274,6 +276,9 @@ func TestSettingsUpdateFlagsMapsDashboardFields(t *testing.T) {
 	}
 	if got, _ := json.Marshal(values["agent"]); string(got) != `["claude/opus"]` {
 		t.Errorf("agent = %s, want [\"claude/opus\"]", got)
+	}
+	if values["no-merge"] != true {
+		t.Errorf("no-merge = %v, want true", values["no-merge"])
 	}
 	if len(settingsUpdateFlags(core.SettingsUpdate{})) != 0 {
 		t.Error("an empty update should write nothing")
