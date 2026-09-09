@@ -113,6 +113,19 @@ func TestGhFixKeepsGitHubIssueReferencesDistinctFromExternalTrackers(t *testing.
 	}
 }
 
+func TestGhFixWritesMultilinePRBodiesWithoutLiteralNewlineEscapes(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"`gh pr create --body-file`",
+		"never put literal `\\n` escape sequences in a `--body` argument",
+		"verify it contains actual line breaks rather than literal `\\n` text",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not safely write multiline PR bodies %q", required)
+		}
+	}
+}
+
 func TestGhFixCopiesOriginatingIssueMetadataToFollowUps(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prevent `gh-fix` from creating pull-request descriptions with literal `\n` text by requiring multiline body files and post-create verification (issue #638).
+
 ## v1.3.4 - 2026-09-08
 
 - Keep `gh-fix` references in GitHub `#NNN` form when an issue or its surrounding context also mentions an external tracker key such as `ABCD-123`, so branches, commits, pull requests, comments, and follow-ups continue to target the dispatched GitHub issue (issue #632).
