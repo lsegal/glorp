@@ -66,7 +66,8 @@ h1 .version {
 	align-items: center;
 	gap: 10px;
 }
-.settings-button {
+.settings-button,
+.refresh-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -78,13 +79,30 @@ h1 .version {
 	color: var(--muted);
 	cursor: pointer;
 }
-.settings-button:hover {
+.settings-button:hover,
+.refresh-button:hover:not(:disabled) {
 	color: #fafafa;
 	background: #27272a;
 }
-.settings-button svg {
+.refresh-button:disabled {
+	cursor: default;
+	opacity: 0.7;
+}
+.settings-button svg,
+.refresh-button svg {
 	width: 17px;
 	height: 17px;
+}
+.refresh-button svg.spinning {
+	animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
 }
 .connection {
 	border: 1px solid var(--border);
