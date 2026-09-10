@@ -307,8 +307,7 @@ func TestGhFixNeverCreatesAChangelog(t *testing.T) {
 			t.Errorf("gh-fix skill does not require skipping changelog creation %q", required)
 		}
 	}
-	forbidden := "create `CHANGELOG.md`"
-	if strings.Contains(body, forbidden) {
-		t.Errorf("gh-fix skill still instructs creating a changelog file %q", forbidden)
+	if strings.Contains(body, "# Changelog") {
+		t.Error("gh-fix skill still instructs scaffolding a new changelog file")
 	}
 }
