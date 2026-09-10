@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // dashboardServer starts a stub that answers /api/state the way the real web
@@ -186,6 +187,35 @@ func TestDashboardPickerMovesAndSelects(t *testing.T) {
 	}
 	if !strings.Contains(selected.View(), "8767") {
 		t.Fatalf("view = %q, want it to list every instance", selected.View())
+	}
+}
+
+func TestDashboardPickerResizesToTerminalWidth(t *testing.T) {
+	picker := newDashboardPicker([]dashboardInstance{
+		{Port: 8765, Targets: []string{"lsegal/glorp", "lsegal/glorp-www", "lsegal/glorp-docs"}, Running: 3, Queued: 5},
+	})
+	updated, _ := picker.Update(tea.WindowSizeMsg{Width: 20, Height: 10})
+	resized := updated.(dashboardPicker)
+	if resized.width != 20 {
+		t.Fatalf("width = %d, want 20 after a resize message", resized.width)
+	}
+	if strings.Contains(resized.View(), "lsegal/glorp-docs") {
+		t.Fatalf("view = %q, want the label truncated to fit a 20-cell terminal", resized.View())
+	}
+	for _, line := range strings.Split(resized.View(), "\n") {
+		if !strings.Contains(line, "port 8765") {
+			continue
+		}
+		if width := lipgloss.Width(line); width > 20 {
+			t.Fatalf("label line %q is %d cells wide, want it clamped to the 20-cell terminal", line, width)
+		}
+	}
+	// A wider terminal must show the full label again rather than staying
+	// truncated to whatever size the picker first saw.
+	updated, _ = resized.Update(tea.WindowSizeMsg{Width: 100, Height: 10})
+	widened := updated.(dashboardPicker)
+	if !strings.Contains(widened.View(), "lsegal/glorp-docs") {
+		t.Fatalf("view = %q, want the full label once the terminal is wide enough", widened.View())
 	}
 }
 
