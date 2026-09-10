@@ -18,6 +18,7 @@ import {
 	parseAllowedCommenters,
 	probedModelsByAgent,
 	submitJobAction,
+	submitRefresh,
 	submitSettings,
 	toggleActiveModel,
 } from "./dashboard";
@@ -136,6 +137,23 @@ describe("submitJobAction", () => {
 				number: 302,
 			}),
 		});
+	});
+});
+
+describe("submitRefresh", () => {
+	it("posts to /api/refresh", async () => {
+		const fetch = vi.fn().mockResolvedValue({ ok: true });
+		vi.stubGlobal("fetch", fetch);
+		await submitRefresh();
+		expect(fetch).toHaveBeenCalledWith("/api/refresh", { method: "POST" });
+	});
+
+	it("throws with the response body when the request fails", async () => {
+		const fetch = vi
+			.fn()
+			.mockResolvedValue({ ok: false, text: () => Promise.resolve("busy") });
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitRefresh()).rejects.toThrow("busy");
 	});
 });
 

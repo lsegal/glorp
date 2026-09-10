@@ -77,6 +77,15 @@ export async function submitJobAction(job, action) {
 	}
 }
 
+// submitRefresh asks the daemon to repoll GitHub immediately instead of
+// waiting out its normal poll interval (issue #646).
+export async function submitRefresh() {
+	const response = await fetch("/api/refresh", { method: "POST" });
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+}
+
 export function parseAllowedCommenters(text) {
 	return text
 		.split(",")

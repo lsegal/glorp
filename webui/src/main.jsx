@@ -26,6 +26,7 @@ import {
 	modelGroupsFrom,
 	modelOptionsFrom,
 	submitJobAction,
+	submitRefresh,
 	submitSettings,
 	toggleActiveModel,
 } from "./dashboard";
@@ -507,7 +508,18 @@ function SettingsModal({ onClose }) {
 function App() {
 	const [state, connected] = useDashboardState();
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [refreshing, setRefreshing] = useState(false);
 	const snapshot = state.snapshot || emptyState.snapshot;
+	const refresh = async () => {
+		setRefreshing(true);
+		try {
+			await submitRefresh();
+		} catch {
+			// The next poll interval still catches up; nothing to surface here.
+		} finally {
+			setRefreshing(false);
+		}
+	};
 	return (
 		<main>
 			<div className="masthead">
@@ -519,6 +531,16 @@ function App() {
 					</h1>
 				</div>
 				<div className="masthead-actions">
+					<button
+						type="button"
+						className="refresh-button"
+						onClick={refresh}
+						disabled={refreshing}
+						aria-label="Refresh now"
+						title="Repoll GitHub now"
+					>
+						<ArrowPathIcon className={refreshing ? "spinning" : ""} />
+					</button>
 					<button
 						type="button"
 						className="settings-button"

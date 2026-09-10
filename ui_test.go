@@ -17,7 +17,7 @@ import (
 )
 
 func TestDashboardShowsStatusAndTargets(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = updated.(dashboard)
 	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{
@@ -36,7 +36,7 @@ func TestDashboardShowsStatusAndTargets(t *testing.T) {
 }
 
 func TestDashboardShowsWebDashboardLinkWhenEnabled(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	if view := updated.(dashboard).View(); strings.Contains(view, "web dashboard:") {
 		t.Fatalf("dashboard showed a web dashboard link while disabled: %s", view)
@@ -48,7 +48,7 @@ func TestDashboardShowsWebDashboardLinkWhenEnabled(t *testing.T) {
 }
 
 func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{Number: 7, Title: "UI", Status: "active", Log: "line 1\nline 2\nline 3\nline 4\nline 5"}}}))
 	m = updated.(dashboard)
@@ -69,7 +69,7 @@ func TestDashboardUsesScrollableAgentViewport(t *testing.T) {
 }
 
 func TestDashboardFollowsStreamingAgentOutput(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
 		Number: 7, Title: "UI", Status: "active", Log: strings.Join([]string{
@@ -83,7 +83,7 @@ func TestDashboardFollowsStreamingAgentOutput(t *testing.T) {
 }
 
 func TestDashboardPausesAgentAutoscrollAndMoreReturnsToBottom(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	log := numberedLines(14)
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
@@ -119,7 +119,7 @@ func TestDashboardPausesAgentAutoscrollAndMoreReturnsToBottom(t *testing.T) {
 }
 
 func TestDashboardLogViewportBottomLock(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = updated.(dashboard)
 	for i := 0; i < 12; i++ {
@@ -141,7 +141,7 @@ func TestDashboardLogViewportBottomLock(t *testing.T) {
 }
 
 func TestDashboardMouseWheelOnlyScrollsViewportUnderPointer(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
 		{Number: 7, Title: "first", Status: "active", Started: time.Unix(2, 0), Log: numberedLines(14)},
@@ -161,7 +161,7 @@ func TestDashboardMouseWheelOnlyScrollsViewportUnderPointer(t *testing.T) {
 }
 
 func TestDashboardMouseRegionsAlignWithRenderedScrollbars(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
 		{Number: 7, Title: "first", Status: "active", Started: time.Unix(2, 0), Log: numberedLines(14)},
@@ -184,7 +184,7 @@ func TestDashboardMouseRegionsAlignWithRenderedScrollbars(t *testing.T) {
 }
 
 func TestDashboardScrollbarCanBeDragged(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
 		Number: 7, Title: "UI", Status: "active", Log: numberedLines(30),
@@ -230,7 +230,7 @@ func numberedLines(count int) string {
 }
 
 func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
 		{Number: 7, Title: "UI", Status: "active", Log: "working on it"},
@@ -248,7 +248,7 @@ func TestDashboardShowsProgressInsteadOfJobStatus(t *testing.T) {
 func TestDashboardKeepsAgentMetadataVisibleForEveryStatus(t *testing.T) {
 	for _, status := range []string{"active", "failed", "complete"} {
 		t.Run(status, func(t *testing.T) {
-			m := newDashboard()
+			m := newDashboard(nil)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 			updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
 				Number: 7, Title: "UI", Status: status,
@@ -264,7 +264,7 @@ func TestDashboardKeepsAgentMetadataVisibleForEveryStatus(t *testing.T) {
 }
 
 func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
 		Number: 7, Title: "Preserve agent scrollback", Status: "active", Log: numberedLines(14),
@@ -302,7 +302,7 @@ func TestDashboardShowsCheckmarkForCompletedJob(t *testing.T) {
 }
 
 func TestDashboardTruncatesAgentTitleToCardWidth(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
 		Number: 7, Title: "This is a deliberately long agent issue title", Status: "active",
@@ -358,7 +358,7 @@ func TestStatusBarUsesDistinctBackgrounds(t *testing.T) {
 }
 
 func TestDashboardKeepsLogsInDedicatedPanel(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = updated.(dashboard)
 	updated, _ = m.Update(logMsg("webhook delivered"))
@@ -372,7 +372,7 @@ func TestDashboardKeepsLogsInDedicatedPanel(t *testing.T) {
 }
 
 func TestDashboardShowsQuota(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Quota: "weekly 87% left"}))
 	if !strings.Contains(updated.(dashboard).View(), "quota: weekly 87% left") {
@@ -381,7 +381,7 @@ func TestDashboardShowsQuota(t *testing.T) {
 }
 
 func TestDashboardShowsIdentityLeftmostInStatusBar(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Identity: "BA6B21B5", Quota: "weekly 87% left"}))
 	view := ansi.Strip(updated.(dashboard).View())
@@ -393,7 +393,7 @@ func TestDashboardShowsIdentityLeftmostInStatusBar(t *testing.T) {
 }
 
 func TestDashboardOmitsIdentityCellWhenUnset(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Quota: "weekly 87% left"}))
 	if view := updated.(dashboard).View(); strings.Contains(view, "id: ") {
@@ -402,7 +402,7 @@ func TestDashboardOmitsIdentityCellWhenUnset(t *testing.T) {
 }
 
 func TestDashboardShowsAllNamedQuotas(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	// Wide enough that the whole quota cell fits: the status bar truncates
 	// rather than wraps (issue #489), so a narrower terminal would shorten
 	// this list rather than show all of it.
@@ -420,7 +420,7 @@ func TestDashboardShowsAllNamedQuotas(t *testing.T) {
 // now rolls onto a second line (issue #616) while each line still fits the
 // terminal.
 func TestDashboardWrapsTheStatusBarWithManyAgents(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{
 		Targets: []string{"lsegal/glorp"},
@@ -599,7 +599,7 @@ func TestClaudeQuotaRequestIsFreeSlashCommand(t *testing.T) {
 }
 
 func TestDashboardTrimsOldestJobs(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(dashboard)
 	jobs := make([]JobSnapshot, 10)
@@ -633,7 +633,7 @@ func TestSortJobSnapshotsPrioritizesRunningThenErroredThenCompleted(t *testing.T
 }
 
 func TestDashboardShowsRunningJobEvenWhenOlderThanSixNewerCompletedJobs(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(dashboard)
 	now := time.Now()
@@ -683,7 +683,7 @@ func TestJobAgentSummary(t *testing.T) {
 }
 
 func TestDashboardShowsAgentModelAndEffort(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
 		Number: 7, Title: "UI", Status: "active", Agent: "claude", Model: "opus", Effort: "low",
@@ -707,7 +707,7 @@ func TestDashboardAddsGuttersBetweenSections(t *testing.T) {
 }
 
 func TestStatusBarCountsAreOneSelfContainedCell(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Concurrency: 3, Running: 1, Queued: 1, Completed: 2}))
 	view := updated.(dashboard).View()
@@ -778,7 +778,7 @@ func TestFormatTargets(t *testing.T) {
 }
 
 func TestDashboardShowsLastPollTime(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(dashboard)
 	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{
@@ -895,7 +895,7 @@ func pagedJobsSnapshot(count int) GlorpSnapshot {
 // height that can fit a row must not.
 func TestDashboardGridNeverOverflowsTerminalHeight(t *testing.T) {
 	for _, height := range []int{24, 30, 36, 40, 50, 60} {
-		m := newDashboard()
+		m := newDashboard(nil)
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: height})
 		updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
 		if lines := len(strings.Split(updated.(dashboard).View(), "\n")); lines > height {
@@ -905,7 +905,7 @@ func TestDashboardGridNeverOverflowsTerminalHeight(t *testing.T) {
 }
 
 func TestDashboardPagesAgentsThatDoNotFitAndShowsTheKeys(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
 	m = updated.(dashboard)
@@ -923,7 +923,7 @@ func TestDashboardPagesAgentsThatDoNotFitAndShowsTheKeys(t *testing.T) {
 }
 
 func TestDashboardPagesAgentsWithLeftAndRightKeys(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
 	m = updated.(dashboard)
@@ -947,7 +947,7 @@ func TestDashboardPagesAgentsWithLeftAndRightKeys(t *testing.T) {
 }
 
 func TestDashboardPagingClampsWhenJobsDisappear(t *testing.T) {
-	m := newDashboard()
+	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	updated, _ = updated.(dashboard).Update(snapshotMsg(pagedJobsSnapshot(6)))
 	updated, _ = updated.(dashboard).Update(tea.KeyMsg{Type: tea.KeyRight})
@@ -973,5 +973,69 @@ func TestJobsPerPageGrowsWithTerminalHeight(t *testing.T) {
 	}
 	if withHint := jobsPerPage(60, 1); withHint > tall {
 		t.Fatalf("jobsPerPage(60, 1) = %d, want no more than %d once a bottom line is reserved", withHint, tall)
+	}
+}
+
+func runeKey(r rune) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+}
+
+// TestDashboardRKeyRequestsRefresh checks that pressing "r" asks the wired
+// TerminalUI to repoll GitHub now instead of waiting out the poll interval
+// (issue #646).
+func TestDashboardRKeyRequestsRefresh(t *testing.T) {
+	ui := &TerminalUI{}
+	requested := false
+	ui.SetRefreshHandler(func() { requested = true })
+	m := newDashboard(ui)
+	if _, cmd := m.Update(runeKey('r')); cmd != nil {
+		t.Fatal("pressing r produced an unexpected command")
+	}
+	if !requested {
+		t.Fatal("pressing r did not request a refresh")
+	}
+}
+
+// TestDashboardRKeyIsSafeWithoutARefreshHandler checks that pressing "r"
+// before SetRefreshHandler has wired anything (or with no TerminalUI at all)
+// does not panic, mirroring how the web UI answers unwired job actions.
+func TestDashboardRKeyIsSafeWithoutARefreshHandler(t *testing.T) {
+	m := newDashboard(nil)
+	if _, cmd := m.Update(runeKey('r')); cmd != nil {
+		t.Fatal("pressing r produced an unexpected command")
+	}
+	ui := &TerminalUI{}
+	m = newDashboard(ui)
+	if _, cmd := m.Update(runeKey('r')); cmd != nil {
+		t.Fatal("pressing r produced an unexpected command")
+	}
+}
+
+// TestDashboardQuestionMarkTogglesHelp checks that "?" opens and closes a
+// help overlay listing the dashboard's keybindings, and that other keys are
+// swallowed while it is open so they cannot also act on what is underneath
+// it (issue #646).
+func TestDashboardQuestionMarkTogglesHelp(t *testing.T) {
+	m := newDashboard(nil)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(dashboard)
+	updated, _ = m.Update(runeKey('?'))
+	m = updated.(dashboard)
+	if !m.showHelp {
+		t.Fatal("? did not open the help overlay")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "refresh") || !strings.Contains(view, "quit") {
+		t.Fatalf("help overlay missing keybinding descriptions: %s", view)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(dashboard)
+	if !m.showHelp {
+		t.Fatal("an unrelated key closed the help overlay")
+	}
+	updated, _ = m.Update(runeKey('?'))
+	m = updated.(dashboard)
+	if m.showHelp {
+		t.Fatal("? did not close the help overlay")
 	}
 }

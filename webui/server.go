@@ -42,6 +42,7 @@ type Server struct {
 	action   func(context.Context, core.JobAction) error
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 	agents   func(context.Context) ([]core.AgentStatus, error)
+	refresh  func(context.Context) error
 	// agentStatuses is the most recent completed probe. Probing starts as soon
 	// as the handler is wired, rather than making the first settings modal wait
 	// for every installed CLI to answer (issue #595).
@@ -68,6 +69,15 @@ func (ui *Server) SetJobActionHandler(handler func(context.Context, core.JobActi
 func (ui *Server) SetSettingsHandler(handler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)) {
 	ui.mu.Lock()
 	ui.settings = handler
+	ui.mu.Unlock()
+}
+
+// SetRefreshHandler wires the dashboard's refresh button (issue #646) to a
+// function that forces an immediate repoll of GitHub instead of waiting for
+// the run's normal poll interval.
+func (ui *Server) SetRefreshHandler(handler func(context.Context) error) {
+	ui.mu.Lock()
+	ui.refresh = handler
 	ui.mu.Unlock()
 }
 
@@ -129,6 +139,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ui.serveJobAction(w, r)
 		return
 	}
+	if r.URL.Path == "/api/refresh" {
+		ui.serveRefresh(w, r)
+		return
+	}
 	if r.URL.Path == "/api/settings" {
 		ui.serveSettings(w, r)
 		return
@@ -167,6 +181,32 @@ func (ui *Server) serveJobAction(w http.ResponseWriter, r *http.Request) {
 	if err := handler(r.Context(), action); err != nil {
 		if errors.Is(err, core.ErrNotReady) {
 			http.Error(w, "job actions unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// serveRefresh backs the dashboard's refresh button (issue #646). It carries
+// no request body: the button only ever asks for "poll now", never a
+// specific target, so there is nothing to decode.
+func (ui *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ui.mu.RLock()
+	handler := ui.refresh
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "refresh unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := handler(r.Context()); err != nil {
+		if errors.Is(err, core.ErrNotReady) {
+			http.Error(w, "refresh unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)

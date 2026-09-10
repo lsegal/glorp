@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lsegal/glorp/core"
@@ -84,6 +85,8 @@ type dashboard struct {
 	ready    bool
 	page     int
 	dragging *viewportTarget
+	ui       *TerminalUI
+	showHelp bool
 }
 
 var (
@@ -106,11 +109,11 @@ var (
 	totalCountStyle  = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("205"))
 )
 
-func newDashboard() dashboard {
+func newDashboard(ui *TerminalUI) dashboard {
 	s := spinner.New()
 	s.Spinner = spinner.Line
 	s.Style = active
-	return dashboard{snapshot: GlorpSnapshot{}, jobs: make(map[int]viewport.Model), spinner: s}
+	return dashboard{snapshot: GlorpSnapshot{}, jobs: make(map[int]viewport.Model), spinner: s, ui: ui}
 }
 
 func (m dashboard) Init() tea.Cmd { return spinner.Tick }
@@ -178,6 +181,21 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if msg.String() == "?" {
+			m.showHelp = !m.showHelp
+			return m, nil
+		}
+		if m.showHelp {
+			// Swallow every other key while the help overlay is open so it
+			// cannot also scroll the logs or job viewports underneath it.
+			return m, nil
+		}
+		if msg.String() == "r" {
+			if m.ui != nil {
+				m.ui.requestRefresh()
+			}
+			return m, nil
 		}
 		if _, page, pages := m.visibleJobs(); pages > 1 {
 			switch msg.String() {
@@ -318,9 +336,28 @@ func (m dashboard) viewportRegions() []viewportRegion {
 	return regions
 }
 
+// helpLines lists the dashboard's keybindings, shown by the "?" overlay and
+// used by tests so the two stay in sync.
+var helpLines = []string{
+	"Keybindings",
+	"",
+	"q, ctrl+c   quit",
+	"r           refresh now (repoll GitHub)",
+	"h/l, ←/→    switch job page",
+	"?           toggle this help",
+}
+
+func (m dashboard) helpView() string {
+	box := panel.Copy().Padding(1, 2).Render(strings.Join(helpLines, "\n"))
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m dashboard) View() string {
 	if !m.ready {
 		return "Starting glorp dashboard..."
+	}
+	if m.showHelp {
+		return m.helpView()
 	}
 	visible, page, pages := m.visibleJobs()
 	jobs := make([]string, 0, len(visible))
@@ -664,12 +701,34 @@ func (w dashboardWriter) Write(p []byte) (int, error) {
 
 type TerminalUI struct {
 	program *tea.Program
+	mu      sync.Mutex
+	refresh func()
 }
 
 func NewTerminalUI() *TerminalUI {
 	ui := &TerminalUI{}
-	ui.program = tea.NewProgram(newDashboard(), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	ui.program = tea.NewProgram(newDashboard(ui), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	return ui
+}
+
+// SetRefreshHandler wires the "r" key (issue #646) to a function that forces
+// an immediate repoll of GitHub instead of waiting for the run's normal poll
+// interval. It may be called after the program has already started reading
+// key presses, so a press that lands before it is wired is simply dropped,
+// mirroring how the web UI answers job actions before its handler is set.
+func (ui *TerminalUI) SetRefreshHandler(handler func()) {
+	ui.mu.Lock()
+	ui.refresh = handler
+	ui.mu.Unlock()
+}
+
+func (ui *TerminalUI) requestRefresh() {
+	ui.mu.Lock()
+	handler := ui.refresh
+	ui.mu.Unlock()
+	if handler != nil {
+		handler()
+	}
 }
 func (ui *TerminalUI) Run(ctx context.Context) error {
 	done := make(chan struct{})
