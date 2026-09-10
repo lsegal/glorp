@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop `gh-fix` from creating a `CHANGELOG.md` for projects that don't have one; it now only updates an existing changelog and otherwise skips the step (issue #645).
 - Add `glorp watch --no-changelog` and its matching dashboard setting, so dispatched `gh-fix` runs skip adding a changelog entry for the fix (issue #643). `gh-fix` accepts the same directive as trailing `and no changelog` dispatch advice, mirroring `--no-merge`'s `and do not merge`.
 
 ## v1.3.5 - 2026-09-09
