@@ -452,6 +452,54 @@ func TestDashboardShowsIdentityLeftmostOnStatusBarSecondLine(t *testing.T) {
 	}
 }
 
+// TestRenderStatusBarFromOffsetsTheColorRotation checks renderStatusBarFrom's
+// leading cell starts at the given offset into statusBars instead of always
+// at statusBars[0], which is what lets the status info line avoid repeating
+// the counts line's leading color (issue #652).
+func TestRenderStatusBarFromOffsetsTheColorRotation(t *testing.T) {
+	item := "id: BA6B21B5"
+	view := renderStatusBarFrom(100, []string{item}, secondLineColorOffset)
+	want := statusBars[secondLineColorOffset%len(statusBars)].Render(item)
+	if view != want {
+		t.Fatalf("renderStatusBarFrom(100, %q, %d) = %q, want %q", item, secondLineColorOffset, view, want)
+	}
+	if secondLineColorOffset%len(statusBars) == 0 {
+		t.Fatalf("secondLineColorOffset %d does not shift past statusBars[0]", secondLineColorOffset)
+	}
+}
+
+// TestRenderStatusInfoLineUsesOffsetColorAndLeadingSpace checks the status
+// info line renders its leading cell with the offset color, and with the
+// same leading space the counts line's " jobs: " cell has (issue #652).
+func TestRenderStatusInfoLineUsesOffsetColorAndLeadingSpace(t *testing.T) {
+	m := dashboard{width: 100, snapshot: GlorpSnapshot{Identity: "BA6B21B5"}}
+	got := m.renderStatusInfoLine(0, 1, secondLineColorOffset)
+	want := statusBars[secondLineColorOffset%len(statusBars)].Render("id: BA6B21B5")
+	if got != want {
+		t.Fatalf("renderStatusInfoLine(0, 1, %d) = %q, want %q", secondLineColorOffset, got, want)
+	}
+}
+
+// TestDashboardSecondLineLeadingCellStartsWithSpace checks the second status
+// bar line's leading cell has the same leading space as the counts line's
+// " jobs: " cell, instead of starting flush with no padding (issue #652).
+func TestDashboardSecondLineLeadingCellStartsWithSpace(t *testing.T) {
+	m := newDashboard(nil)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Identity: "BA6B21B5"}))
+	view := ansi.Strip(updated.(dashboard).View())
+	lines := strings.Split(view, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "id: BA6B21B5") {
+			if !strings.HasPrefix(line, " id: ") {
+				t.Fatalf("second status bar line did not start with a leading space: %q", line)
+			}
+			return
+		}
+	}
+	t.Fatalf("dashboard did not show the id cell: %s", view)
+}
+
 func TestDashboardOmitsIdentityCellWhenUnset(t *testing.T) {
 	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
