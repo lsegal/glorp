@@ -7,6 +7,7 @@
 - Add `glorp watch --no-changelog` and its matching dashboard setting, so dispatched `gh-fix` runs skip adding a changelog entry for the fix (issue #643). `gh-fix` accepts the same directive as trailing `and no changelog` dispatch advice, mirroring `--no-merge`'s `and do not merge`.
 - Combine the terminal dashboard's pager hint and web link onto one status-bar-styled line below the job counts, instead of each sitting on its own bare, unpainted line with a gap between them (issue #647). The instance id now shares that second line too, leftmost, and the web link is shortened from "web dashboard" to "web" and underlined.
 - Give the terminal dashboard's second status-bar line (instance id, pager hint, web link) its own color instead of always repeating the job counts line's leading color, and its leading cell a matching leading space (issue #652).
+- Resize the `glorp ui` dashboard picker's labels to fit the terminal when it is resized, instead of always rendering them at whatever width the picker first appeared with (issue #651).
 
 ## v1.3.5 - 2026-09-09
 

@@ -218,6 +218,7 @@ type dashboardPicker struct {
 	cursor     int
 	chosen     int
 	quit       bool
+	width      int
 }
 
 func newDashboardPicker(dashboards []dashboardInstance) dashboardPicker {
@@ -227,6 +228,10 @@ func newDashboardPicker(dashboards []dashboardInstance) dashboardPicker {
 func (p dashboardPicker) Init() tea.Cmd { return nil }
 
 func (p dashboardPicker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		p.width = size.Width
+		return p, nil
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return p, nil
@@ -264,11 +269,17 @@ func (p dashboardPicker) View() string {
 	var view strings.Builder
 	view.WriteString(pickerTitle.Render("Select a glorp dashboard to open") + "\n\n")
 	for index, instance := range p.dashboards {
-		line := "  " + instance.Label()
+		prefix := "  "
+		style := lipgloss.NewStyle()
 		if index == p.cursor {
-			line = pickerSelected.Render("> " + instance.Label())
+			prefix = "> "
+			style = pickerSelected
 		}
-		view.WriteString(line + "\n")
+		label := instance.Label()
+		if p.width > 0 {
+			label = truncate(label, max(1, p.width-len(prefix)))
+		}
+		view.WriteString(style.Render(prefix+label) + "\n")
 	}
 	view.WriteString("\n" + pickerHint.Render("↑/↓ move · enter open · q cancel") + "\n")
 	return view.String()
