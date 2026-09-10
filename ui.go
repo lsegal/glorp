@@ -103,10 +103,14 @@ var (
 		lipgloss.NewStyle().Background(lipgloss.Color("29")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 		lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("255")).Padding(0, 1),
 	}
-	countLabelStyle  = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("255"))
-	idleCountStyle   = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("241"))
-	activeCountStyle = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("42"))
-	totalCountStyle  = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("205"))
+	// secondLineColorOffset shifts the status info line's leading cell one
+	// color past statusBars[0], so it never repeats the counts line's
+	// leading color above it (issue #652).
+	secondLineColorOffset = 1
+	countLabelStyle       = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("255"))
+	idleCountStyle        = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("241"))
+	activeCountStyle      = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("42"))
+	totalCountStyle       = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("205"))
 )
 
 func newDashboard(ui *TerminalUI) dashboard {
@@ -401,7 +405,10 @@ func (m dashboard) View() string {
 	// The id, pager hint, and web link join the counts line directly (no gap
 	// line) so the whole status bar reads as one colored block instead of the
 	// counts sitting on a colored line above bare, unstyled text (issue #647).
-	if info := m.renderStatusInfoLine(page, pages); info != "" {
+	// It starts its own color rotation one cell in rather than at
+	// statusBars[0], so its leading cell alternates instead of repeating the
+	// counts line's leading color every render (issue #652).
+	if info := m.renderStatusInfoLine(page, pages, secondLineColorOffset); info != "" {
 		footer += "\n" + info
 	}
 	sections := []string{logs, footer}
@@ -415,7 +422,7 @@ func (m dashboard) View() string {
 // dashboard link as a second status-bar-styled line, so they share the
 // counts line's background and page/web sit together on one line (issue
 // #647). It returns "" when none of the three apply.
-func (m dashboard) renderStatusInfoLine(page, pages int) string {
+func (m dashboard) renderStatusInfoLine(page, pages, startIndex int) string {
 	var items []string
 	if m.snapshot.Identity != "" {
 		items = append(items, "id: "+m.snapshot.Identity)
@@ -424,12 +431,15 @@ func (m dashboard) renderStatusInfoLine(page, pages int) string {
 		items = append(items, fmt.Sprintf(pagerHint, page+1, pages))
 	}
 	if m.snapshot.WebUIURL != "" {
-		items = append(items, "web: "+underlineSpanStyle(len(items)).Render(m.snapshot.WebUIURL))
+		items = append(items, "web: "+underlineSpanStyle(startIndex+len(items)).Render(m.snapshot.WebUIURL))
 	}
 	if len(items) == 0 {
 		return ""
 	}
-	return renderStatusBar(m.width, items)
+	// startIndex lands on a padded statusBars cell (see secondLineColorOffset),
+	// which gives the leading item a leading space to match the counts line's
+	// " jobs: " cell, unlike statusBars[0] which has no padding (issue #652).
+	return renderStatusBarFrom(m.width, items, startIndex)
 }
 
 // underlineSpanStyle matches the background and foreground of the status bar
@@ -605,9 +615,17 @@ func joinVerticalWithGap(items []string, gap int) string {
 }
 
 func renderStatusBar(width int, items []string) string {
+	return renderStatusBarFrom(width, items, 0)
+}
+
+// renderStatusBarFrom renders a status bar starting its color rotation at
+// startIndex instead of always at statusBars[0], so a second bar appended
+// below a first one (see renderStatusInfoLine) continues the alternation
+// instead of repeating the first bar's leading color (issue #652).
+func renderStatusBarFrom(width int, items []string, startIndex int) string {
 	rows := wrapStatusBarItems(items, width)
 	lines := make([]string, 0, len(rows))
-	index := 0
+	index := startIndex
 	for _, row := range rows {
 		row = fitStatusBarItems(row, width, index)
 		cells := make([]string, len(row))
