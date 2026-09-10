@@ -1504,6 +1504,16 @@ func TestCommandRunnerPassesNoMergeAdvice(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerPassesNoChangelogAdvice(t *testing.T) {
+	prompt := "/gh-fix owner/repo#12 identity:/glorp:ABC and do not merge and no changelog\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	issue := Issue{Number: 12, Repository: "owner/repo", Target: "owner/repo"}
+	got := commandArgs(CommandRunner{Agent: "codex", Identity: "ABC", NoMerge: true, NoChangelog: true}, issue)
+	want := []string{"exec", "--model", codexDefaultModel, prompt}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex args = %#v, want %#v", got, want)
+	}
+}
+
 func TestCommandRunnerUsesGhDiscussForDiscussionTargets(t *testing.T) {
 	prompt := "/gh-discuss 5\n\nRepository: owner/repo\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 5, Target: "https://github.com/owner/repo/discussions"}

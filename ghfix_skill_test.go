@@ -113,6 +113,22 @@ func TestGhFixAcceptsNoMergeDispatchAdvice(t *testing.T) {
 	}
 }
 
+func TestGhFixAcceptsNoChangelogDispatchAdvice(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"and no changelog",
+		"after the identity and any do-not-merge advice when present",
+		"as a no-changelog directive for this run",
+		"skip step 4 of \"Implement the fix\" and add no changelog entry",
+		"Skip this step entirely, adding no changelog entry at all, when a no-changelog directive is in effect",
+		"asking that the changelog be skipped, left alone, or ignored for this fix",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not accept no-changelog advice %q", required)
+		}
+	}
+}
+
 func TestGhFixKeepsGitHubIssueReferencesDistinctFromExternalTrackers(t *testing.T) {
 	body := ghFixSkill(t)
 	for _, required := range []string{

@@ -285,6 +285,7 @@ function SettingsModal({ onClose }) {
 					readyState: snapshot.readyState ?? "",
 					allowedCommenters: (snapshot.allowedCommenters || []).join(", "),
 					noMerge: Boolean(snapshot.noMerge),
+					noChangelog: Boolean(snapshot.noChangelog),
 					activeAgents: snapshot.configuredAgents ?? [],
 				});
 			})
@@ -421,6 +422,20 @@ function SettingsModal({ onClose }) {
 										}
 									/>
 									Leave completed pull requests ready for human merge
+								</label>
+								<label
+									htmlFor="settings-no-changelog"
+									className="checkbox-label"
+								>
+									<input
+										id="settings-no-changelog"
+										type="checkbox"
+										checked={form.noChangelog}
+										onChange={(event) =>
+											setForm({ ...form, noChangelog: event.target.checked })
+										}
+									/>
+									Skip changelog entries in gh-fix pull requests
 								</label>
 							</>
 						)}

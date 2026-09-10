@@ -173,6 +173,7 @@ type Glorp struct {
 	StatePath   string
 	ReadyState  string
 	noMerge     atomic.Bool
+	noChangelog atomic.Bool
 	Issues      IssueSource
 	// Discussions lists unanswered top-level Discussion threads for
 	// Discussions-board targets. When nil, Discussions-board targets are

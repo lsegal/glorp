@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `glorp watch --no-changelog` and its matching dashboard setting, so dispatched `gh-fix` runs skip adding a changelog entry for the fix (issue #643). `gh-fix` accepts the same directive as trailing `and no changelog` dispatch advice, mirroring `--no-merge`'s `and do not merge`.
+
 ## v1.3.5 - 2026-09-09
 
 - Prevent `gh-fix` from creating pull-request descriptions with literal `\n` text by requiring multiline body files and post-create verification (issue #638).

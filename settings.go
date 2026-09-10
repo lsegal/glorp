@@ -175,6 +175,9 @@ func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySema
 	if update.NoMerge != nil {
 		w.noMerge.Store(*update.NoMerge)
 	}
+	if update.NoChangelog != nil {
+		w.noChangelog.Store(*update.NoChangelog)
+	}
 	if update.ActiveAgents != nil {
 		trimmed := make([]string, len(*update.ActiveAgents))
 		for i, spec := range *update.ActiveAgents {
@@ -229,6 +232,7 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		ReadyStateDefault: projectReadyState(w.ReadyState, ""),
 		AllowedCommenters: append([]string(nil), w.AllowedCommenters...),
 		NoMerge:           w.noMerge.Load(),
+		NoChangelog:       w.noChangelog.Load(),
 		Agents:            w.registry().Names(),
 		AgentOptions:      w.agentOptions(),
 		ConfiguredAgents:  w.configuredAgents(),
@@ -245,6 +249,7 @@ func (w *Glorp) runner() AgentRunner {
 	override := w.agentOverride.Load()
 	if runner, ok := w.Runner.(CommandRunner); ok {
 		runner.NoMerge = w.noMerge.Load()
+		runner.NoChangelog = w.noChangelog.Load()
 		if override != nil && len(*override) > 0 {
 			runner.Agent = (*override)[0]
 			runner.Agents = append([]string(nil), *override...)

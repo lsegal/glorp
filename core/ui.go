@@ -84,6 +84,7 @@ type SettingsUpdate struct {
 	ReadyState        *string   `json:"readyState,omitempty"`
 	AllowedCommenters *[]string `json:"allowedCommenters,omitempty"`
 	NoMerge           *bool     `json:"noMerge,omitempty"`
+	NoChangelog       *bool     `json:"noChangelog,omitempty"`
 	// ActiveAgents replaces the live set of agent specs new dispatches
 	// round-robin across (issue #572), overriding what --agent configured at
 	// startup. When given it must name at least one valid agent spec; the
@@ -110,6 +111,7 @@ type SettingsSnapshot struct {
 	ReadyStateDefault string   `json:"readyStateDefault"`
 	AllowedCommenters []string `json:"allowedCommenters"`
 	NoMerge           bool     `json:"noMerge"`
+	NoChangelog       bool     `json:"noChangelog"`
 	// Agents lists every agent the run's registry defines, built-in and
 	// config-defined alike, which is the set ActiveAgents may be set from.
 	Agents []string `json:"agents"`
