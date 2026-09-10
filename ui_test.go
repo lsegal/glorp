@@ -38,12 +38,60 @@ func TestDashboardShowsStatusAndTargets(t *testing.T) {
 func TestDashboardShowsWebDashboardLinkWhenEnabled(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if view := updated.(dashboard).View(); strings.Contains(view, "web dashboard:") {
-		t.Fatalf("dashboard showed a web dashboard link while disabled: %s", view)
+	if view := ansi.Strip(updated.(dashboard).View()); strings.Contains(view, "web:") {
+		t.Fatalf("dashboard showed a web link while disabled: %s", view)
 	}
 	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{WebUIURL: "http://localhost:8765"}))
-	if view := updated.(dashboard).View(); !strings.Contains(view, "web dashboard: http://localhost:8765") {
-		t.Fatalf("dashboard missing web dashboard link: %s", view)
+	if view := ansi.Strip(updated.(dashboard).View()); !strings.Contains(view, "web: http://localhost:8765") {
+		t.Fatalf("dashboard missing web link: %s", view)
+	}
+}
+
+// TestUnderlineSpanStyleMatchesItsCellBackground checks the style used for
+// the web link is underlined and matches the background and foreground of
+// whichever status bar cell it renders inside, rather than leaving that span
+// unpainted when the parent cell's style resets (issue #647).
+func TestUnderlineSpanStyleMatchesItsCellBackground(t *testing.T) {
+	for i, cell := range statusBars {
+		style := underlineSpanStyle(i)
+		if !style.GetUnderline() {
+			t.Fatalf("underline span style for cell %d is not underlined", i)
+		}
+		if style.GetBackground() != cell.GetBackground() || style.GetForeground() != cell.GetForeground() {
+			t.Fatalf("underline span style for cell %d = bg %q fg %q, want bg %q fg %q matching its status bar cell",
+				i, style.GetBackground(), style.GetForeground(), cell.GetBackground(), cell.GetForeground())
+		}
+	}
+}
+
+// TestDashboardCombinesPagerAndWebLinkOnOneLineWithNoGap checks the pager
+// hint and web link share a single line directly under the counts line, with
+// no blank gap line between them, instead of each sitting on its own bare
+// line (issue #647).
+func TestDashboardCombinesPagerAndWebLinkOnOneLineWithNoGap(t *testing.T) {
+	m := newDashboard()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{
+		Jobs:        pagedJobsSnapshot(6).Jobs,
+		Concurrency: 6,
+		WebUIURL:    "http://localhost:8765",
+	}))
+	view := ansi.Strip(updated.(dashboard).View())
+	lines := strings.Split(view, "\n")
+	countsLine, infoLine := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "jobs:") {
+			countsLine = i
+		}
+		if strings.Contains(line, "page 1/") && strings.Contains(line, "web: http://localhost:8765") {
+			infoLine = i
+		}
+	}
+	if countsLine < 0 || infoLine < 0 {
+		t.Fatalf("dashboard did not combine the pager hint and web link onto one line: %s", view)
+	}
+	if infoLine != countsLine+1 {
+		t.Fatalf("info line followed the counts line with a gap (counts at %d, info at %d): %s", countsLine, infoLine, view)
 	}
 }
 
@@ -380,15 +428,27 @@ func TestDashboardShowsQuota(t *testing.T) {
 	}
 }
 
-func TestDashboardShowsIdentityLeftmostInStatusBar(t *testing.T) {
+// TestDashboardShowsIdentityLeftmostOnStatusBarSecondLine checks the instance
+// id sits on the line below the job counts/quota line, leftmost of any other
+// cell sharing that second line (issue #647).
+func TestDashboardShowsIdentityLeftmostOnStatusBarSecondLine(t *testing.T) {
 	m := newDashboard()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Identity: "BA6B21B5", Quota: "weekly 87% left"}))
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{
+		Identity: "BA6B21B5", Quota: "weekly 87% left", WebUIURL: "http://localhost:8765",
+	}))
 	view := ansi.Strip(updated.(dashboard).View())
-	idIndex := strings.Index(view, "id: BA6B21B5")
 	quotaIndex := strings.Index(view, "quota: weekly 87% left")
-	if idIndex < 0 || quotaIndex < 0 || idIndex > quotaIndex {
-		t.Fatalf("dashboard did not show instance id leftmost in the status bar: %s", view)
+	idIndex := strings.Index(view, "id: BA6B21B5")
+	webIndex := strings.Index(view, "web: http://localhost:8765")
+	if quotaIndex < 0 || idIndex < 0 || webIndex < 0 {
+		t.Fatalf("dashboard missing expected status bar cells: %s", view)
+	}
+	if idIndex < quotaIndex {
+		t.Fatalf("dashboard showed the instance id on the counts line instead of the line below it: %s", view)
+	}
+	if idIndex > webIndex {
+		t.Fatalf("dashboard did not show the instance id leftmost on the status bar's second line: %s", view)
 	}
 }
 
