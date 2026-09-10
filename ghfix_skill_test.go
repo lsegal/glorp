@@ -296,3 +296,18 @@ func TestGhFixFilesNoFollowUpIssuesOnAHeldRun(t *testing.T) {
 		}
 	}
 }
+
+func TestGhFixNeverCreatesAChangelog(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"If the project has no changelog, do not create one",
+		"skip this step entirely and note in the PR body that no changelog entry was added because the project has none",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require skipping changelog creation %q", required)
+		}
+	}
+	if strings.Contains(body, "# Changelog") {
+		t.Error("gh-fix skill still instructs scaffolding a new changelog file")
+	}
+}

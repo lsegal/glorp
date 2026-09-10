@@ -397,22 +397,48 @@ func (m dashboard) View() string {
 	tokens := quotaText(m.snapshot)
 	push := deliveryText(m.snapshot)
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
-	items := []string{counts, tokens, push, targets}
-	if m.snapshot.Identity != "" {
-		items = append([]string{"id: " + m.snapshot.Identity}, items...)
+	footer := renderStatusBar(m.width, []string{counts, tokens, push, targets})
+	// The id, pager hint, and web link join the counts line directly (no gap
+	// line) so the whole status bar reads as one colored block instead of the
+	// counts sitting on a colored line above bare, unstyled text (issue #647).
+	if info := m.renderStatusInfoLine(page, pages); info != "" {
+		footer += "\n" + info
 	}
-	footer := renderStatusBar(m.width, items)
 	sections := []string{logs, footer}
-	if pages > 1 {
-		sections = append(sections, muted.Render(fmt.Sprintf(pagerHint, page+1, pages)))
-	}
-	if m.snapshot.WebUIURL != "" {
-		sections = append(sections, muted.Render("web dashboard: "+m.snapshot.WebUIURL))
-	}
 	if grid != "" {
 		sections = append([]string{grid}, sections...)
 	}
 	return joinVerticalWithGap(sections, dashboardGap)
+}
+
+// renderStatusInfoLine renders the instance id, the pager hint, and the web
+// dashboard link as a second status-bar-styled line, so they share the
+// counts line's background and page/web sit together on one line (issue
+// #647). It returns "" when none of the three apply.
+func (m dashboard) renderStatusInfoLine(page, pages int) string {
+	var items []string
+	if m.snapshot.Identity != "" {
+		items = append(items, "id: "+m.snapshot.Identity)
+	}
+	if pages > 1 {
+		items = append(items, fmt.Sprintf(pagerHint, page+1, pages))
+	}
+	if m.snapshot.WebUIURL != "" {
+		items = append(items, "web: "+underlineSpanStyle(len(items)).Render(m.snapshot.WebUIURL))
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	return renderStatusBar(m.width, items)
+}
+
+// underlineSpanStyle matches the background and foreground of the status bar
+// cell a span will render inside, since a nested Lipgloss span resets its
+// parent style when it ends (see renderJobCounts) and would otherwise leave
+// the web link's cell unpainted around the underline.
+func underlineSpanStyle(cellIndex int) lipgloss.Style {
+	cell := statusBars[cellIndex%len(statusBars)]
+	return lipgloss.NewStyle().Background(cell.GetBackground()).Foreground(cell.GetForeground()).Underline(true)
 }
 
 // pagerHint tells the operator that agent cards continue on another page and
@@ -425,15 +451,17 @@ const pagerHint = "page %d/%d  ←/→ (or h/l) for more agents"
 // a shorter terminal the top row was pushed off screen entirely and those
 // viewports could neither be read nor scrolled (issue #617).
 //
-// extraLines counts the persistent bottom lines rendered under the status bar
-// (the web dashboard URL, the pager hint), each of which also costs the gap
-// line joinVerticalWithGap puts above it.
-func jobsPerPage(height, extraLines int) int {
+// hasInfoLine reports whether the status bar's second line (instance id,
+// pager hint, web link) is present. That line is fused directly under the
+// counts line inside the same footer section rather than joined as its own
+// section, so it costs exactly one content line and no extra gap line
+// (issue #647).
+func jobsPerPage(height, hasInfoLine int) int {
 	logHeight := max(3, height/3)
-	// The grid, the log panel, the status bar, and each extra line are joined
-	// with one blank gap line between them.
-	chrome := max(1, logHeight-2) + 1 + extraLines
-	available := height - chrome - (2 + extraLines)
+	// The grid, the log panel, and the status bar (whose optional second line
+	// is fused into it) are joined with one blank gap line between each.
+	chrome := max(1, logHeight-2) + 1 + hasInfoLine
+	available := height - chrome - 2
 	rows := (available + dashboardGap) / (jobCardHeight + dashboardGap)
 	return max(1, rows) * jobGridColumns
 }
@@ -441,14 +469,14 @@ func jobsPerPage(height, extraLines int) int {
 // visibleJobs returns the agent cards belonging to the current page, the page
 // index clamped to the pages that exist, and the total number of pages.
 func (m dashboard) visibleJobs() ([]JobSnapshot, int, int) {
-	extraLines := 0
-	if m.snapshot.WebUIURL != "" {
-		extraLines++
+	hasInfoLine := 0
+	if m.snapshot.Identity != "" || m.snapshot.WebUIURL != "" {
+		hasInfoLine = 1
 	}
-	perPage := jobsPerPage(m.height, extraLines)
-	if len(m.snapshot.Jobs) > perPage {
-		// Paging costs one more bottom line, which can cost a whole card row.
-		perPage = jobsPerPage(m.height, extraLines+1)
+	perPage := jobsPerPage(m.height, hasInfoLine)
+	if hasInfoLine == 0 && len(m.snapshot.Jobs) > perPage {
+		// Paging itself adds the info line where none existed before.
+		perPage = jobsPerPage(m.height, 1)
 	}
 	if len(m.snapshot.Jobs) == 0 {
 		return nil, 0, 0
