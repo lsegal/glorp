@@ -161,6 +161,7 @@ describe("buildSettingsUpdate", () => {
 				readyState: "Agent Ready",
 				allowedCommenters: "alice, bob",
 				noMerge: true,
+				noChangelog: true,
 				activeAgents: ["codex", "muse"],
 			}),
 		).toEqual({
@@ -168,6 +169,7 @@ describe("buildSettingsUpdate", () => {
 			readyState: "Agent Ready",
 			allowedCommenters: ["alice", "bob"],
 			noMerge: true,
+			noChangelog: true,
 			activeAgents: ["codex", "muse"],
 		});
 	});
@@ -179,6 +181,7 @@ describe("buildSettingsUpdate", () => {
 				readyState: "",
 				allowedCommenters: "",
 				noMerge: false,
+				noChangelog: false,
 				activeAgents: [],
 			}),
 		).toEqual({
@@ -186,6 +189,7 @@ describe("buildSettingsUpdate", () => {
 			readyState: "",
 			allowedCommenters: [],
 			noMerge: false,
+			noChangelog: false,
 		});
 	});
 });

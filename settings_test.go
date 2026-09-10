@@ -187,6 +187,30 @@ func TestGlorpApplySettingsNoMergeChangesNewDispatches(t *testing.T) {
 	<-done
 }
 
+func TestGlorpApplySettingsNoChangelogChangesNewDispatches(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: CommandRunner{Agent: "codex"}, Out: &syncBuffer{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	noChangelog := true
+	snapshot, err := w.ApplySettings(ctx, SettingsUpdate{NoChangelog: &noChangelog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.NoChangelog {
+		t.Fatal("snapshot noChangelog = false, want true")
+	}
+	if !w.runner().(CommandRunner).NoChangelog {
+		t.Fatal("runner noChangelog = false, want true")
+	}
+	cancel()
+	<-done
+}
+
 func TestGlorpApplySettingsReadyStateDefaultReflectsUnsetFallback(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{}}}

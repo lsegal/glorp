@@ -63,6 +63,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.String("claude-binary", "claude", "Claude executable (alias for --agent-binary claude=PATH)")
 	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (nothing honours the request under -p yet and no alternative lever exists, so this is off by default and currently reaches nobody)")
 	flags.Bool("no-merge", false, "leave completed gh-fix pull requests ready for a human to merge")
+	flags.Bool("no-changelog", false, "skip changelog entries in gh-fix pull requests")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
@@ -144,6 +145,7 @@ func runWatch(args []string) int {
 	claudeBinary := flagValue[string](flags, "claude-binary")
 	remoteControl := flagValue[bool](flags, "remote-control")
 	noMerge := flagValue[bool](flags, "no-merge")
+	noChangelog := flagValue[bool](flags, "no-changelog")
 	statePath := flagValue[string](flags, "state")
 	if err := guardWorkStateFile(statePath); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -295,7 +297,7 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	runner := CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, AgentBinaries: agentBinaries.values(), Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, NoMerge: noMerge, Definitions: registry, agentCursor: agentCursor}
+	runner := CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, AgentBinaries: agentBinaries.values(), Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, NoMerge: noMerge, NoChangelog: noChangelog, Definitions: registry, agentCursor: agentCursor}
 	// Quota commands are run through the same executable the agent itself is
 	// invoked with, so --agent-binary points both at the same install.
 	quota := combinedQuotaReader(namedQuotaReaders(registry, agentSpecs.names(), runner.binary))
@@ -305,6 +307,7 @@ func runWatch(args []string) int {
 	}
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
 	w.noMerge.Store(noMerge)
+	w.noChangelog.Store(noChangelog)
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
@@ -1592,6 +1595,10 @@ type CommandRunner struct {
 	Output      io.Writer
 	Yolo        bool
 	NoMerge     bool
+	// NoChangelog asks the dispatched /gh-fix prompt to skip adding a
+	// changelog entry for the run, mirroring how NoMerge asks it to leave the
+	// pull request unmerged.
+	NoChangelog bool
 	// RemoteControl asks Claude to start its Remote Control bridge so a headless
 	// run is viewable from the Claude mobile app and claude.ai/code. Claude does
 	// not honour the request under -p (see remoteControlSettings), so it is off
@@ -1720,6 +1727,9 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		}
 		if !isDiscussionTarget(target) && r.NoMerge {
 			prompt += " and do not merge"
+		}
+		if !isDiscussionTarget(target) && r.NoChangelog {
+			prompt += " and no changelog"
 		}
 		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	} else if session.Update != "" {

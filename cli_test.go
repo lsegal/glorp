@@ -124,6 +124,18 @@ func TestWatchNoMergeFlag(t *testing.T) {
 	}
 }
 
+func TestWatchNoChangelogFlag(t *testing.T) {
+	agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
+	filter := filterFlag{values: []string{defaultIssueFilter}}
+	flags := watchFlagSet(&agents, &agentBinaryFlag{}, &filter)
+	if err := flags.Parse([]string{"--no-changelog", "owner/repo"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !flagValue[bool](flags, "no-changelog") {
+		t.Fatal("no-changelog = false, want true")
+	}
+}
+
 func TestWatchRemoteControlDefaultsOff(t *testing.T) {
 	// Claude ignores remoteControlAtStartup under -p, so the default must not
 	// advertise a capability the run does not get (issue #502).

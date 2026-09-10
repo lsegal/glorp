@@ -162,6 +162,9 @@ func settingsUpdateFlags(update core.SettingsUpdate) map[string]any {
 	if update.NoMerge != nil {
 		values["no-merge"] = *update.NoMerge
 	}
+	if update.NoChangelog != nil {
+		values["no-changelog"] = *update.NoChangelog
+	}
 	if update.ActiveAgents != nil {
 		values["agent"] = append([]string(nil), *update.ActiveAgents...)
 	}
