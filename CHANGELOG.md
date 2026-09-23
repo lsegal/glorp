@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add Claude Opus 5.5 to the model choices reported by `glorp agents` (issue #655).
+
 ## v1.4.0 - 2026-09-10
 
 - Add a refresh button to the web dashboard, and an `r` key and a `?` help overlay to the terminal dashboard, so an operator can force glorp to repoll GitHub immediately instead of waiting out the normal poll interval (issue #646).
