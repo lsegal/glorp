@@ -39,6 +39,21 @@ An issue that clearly describes several separable pieces of work is a tracking i
 5. Route every new sub-issue exactly as "Create follow-up issues" routes a follow-up: choose its labels from the sub-issue itself, carry over only still-accurate labels, inherit the parent's milestone and assignees, copy the parent's project membership with a `Todo` status, and otherwise apply the `.glorp.json` assignment. This is what lets the next agent slot pick the sub-issue up. Treat a failure to create, attach, or route a sub-issue as an actionable error and retry it.
 6. Once its sub-issues exist, the parent is a tracking or meta issue. It does not require a pull request, code, or a changelog entry to close, and it must not consume an agent slot. Post exactly one comment listing the sub-issues created and stating that the parent closes when they are all complete, then end the run without cloning, branching, or opening a pull request, so the next agent slot is free to pick up a sub-issue.
 
+## Stack on an open blocking issue
+
+An issue blocked by another open issue does not have to wait for it when the repository supports GitHub stacked pull requests ([`gh-stack`](https://github.com/github/gh-stack)). Decide this once during validation, before cloning, and record the decision for the rest of the run. Skip this section when resuming an open pull request; its base branch already records whether it is stacked.
+
+1. Collect the issue's open blockers: every open issue in `gh api repos/<OWNER>/<REPO>/issues/<ISSUENUMBER>/dependencies/blocked_by` plus every open issue named by a `Depends on #<N>` line in the issue body.
+2. Detect whether stacked pull requests are enabled for the repository with `gh api repos/<OWNER>/<REPO>/stacks?per_page=1`. A successful response means they are enabled; `404 Not Found` means they are not.
+3. Stack only when stacks are enabled, there is exactly one open blocker, and that blocker has an open pull request that closes it. Record that blocker pull request's number and head branch as the stacking base. In every other case, do not stack: build from the default branch exactly as the rest of this workflow describes.
+4. Install the extension when it is missing with `gh extension install github/gh-stack`. If it cannot be installed, still stack the branch and pull request as described below, skip the `gh stack` commands, and say in the pull request body that the stack could not be linked.
+5. Create the new branch from the blocker's head branch instead of the default branch, and open the draft pull request against that branch instead of the default branch. Everything else about the draft pull request stays the same.
+6. Link the pull requests into a stack on GitHub with `gh stack link`. If the blocker's pull request already belongs to a stack (`gh api repos/<OWNER>/<REPO>/stacks?pull_request=<BLOCKERPR>`), pass that stack's pull requests bottom to top followed by this pull request; otherwise pass `<BLOCKERPR> <PRNUMBER>`. Name the blocker pull request in the pull request body.
+7. The blocker's branch belongs to another run. Never commit to, rebase, push, or merge it, and never merge the stack with `gh stack merge`. This also rules out `gh stack sync` and `gh stack push`, which push every branch in the stack.
+8. Check for upstream changes before every push and while waiting on CI: fetch and compare the blocker's head branch with this branch's base. When the blocker has moved, or has merged, update this branch with `gh stack rebase --upstack` from this branch (it switches to `--onto` automatically for a merged blocker), resolve any conflicts, rerun the affected checks, and push only this branch with `git push --force-with-lease=<BRANCH>:<PREVIOUSREMOTESHA> origin <BRANCH>`. This lease-protected push of this run's own branch, after a `gh stack` rebase, is the only exception to never force-pushing. Without the extension, merge the blocker's branch into this branch and push normally instead.
+9. When the blocker's pull request merges, confirm this pull request's base is now the default branch, retargeting it with `gh pr edit <PRNUMBER> --base <DEFAULTBRANCH>` if GitHub did not, then drive CI on the new head as usual. If the blocker's pull request closes without merging, unstack with `gh stack unstack`, rebase this branch onto the default branch the same way, retarget the pull request, and report the closed blocker on the pull request.
+10. Never merge a stacked pull request while its base is anything other than the default branch. Once it is marked ready and CI passes, keep monitoring until the blocker merges, then continue with "Merge and verify".
+
 ## Create an isolated clone and branch
 
 1. Resolve the canonical `OWNER/REPO`, clone URL, and default branch.
@@ -46,7 +61,7 @@ An issue that clearly describes several separable pieces of work is a tracking i
 3. Create a uniquely named sibling or temporary directory outside the current checkout, such as `<repo>-gh-fix-<N>`. Never reuse or modify the user's current working tree, and do not substitute a worktree for the separate clone.
 4. Clone the repository normally. If resuming per the section above, clone and check out the existing branch and verify its HEAD matches the remote; otherwise verify the clone's default-branch HEAD matches the remote.
 5. Immediately after verifying the clone, emit `GLORP_CHECKOUT_DIRECTORY=<absolute clone path>` as an exact, plain-text progress line without Markdown formatting. This lets callers display and persist the real isolated checkout. Emit the line again if a missing checkout is regenerated while resuming.
-6. When not resuming an existing branch, create a new branch from the current remote default branch. Prefer `fix/issue-<N>-<short-slug>` unless repository instructions require another naming scheme.
+6. When not resuming an existing branch, create a new branch from the current remote default branch, or from the blocker's head branch when "Stack on an open blocking issue" decided to stack. Prefer `fix/issue-<N>-<short-slug>` unless repository instructions require another naming scheme.
 7. Register cleanup of every clone directory created by this workflow immediately after it is created. Remove those directories before exiting, including on normal completion, errors, or panics. Do not remove the user's existing checkout or unrelated directories.
 
 The cleanup must be unconditional: use a deferred/finally-style cleanup guard as soon as each clone is created, and make cleanup errors visible while preserving the original failure when one exists.
@@ -56,7 +71,7 @@ The cleanup must be unconditional: use a deferred/finally-style cleanup guard as
 Immediately after creating the branch, publish it and open a draft pull request so progress is visible throughout development. Skip this section entirely when resuming an existing draft PR per "Resume existing work" above — it already has an open PR.
 
 1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER> [skip ci]`, then push the new branch with upstream tracking. The `[skip ci]` marker keeps CI from running on a tree identical to the default branch; never add it to any later commit. Never force-push.
-2. Open a draft PR against the current default branch with a concise title describing the intended fix.
+2. Open a draft PR against the current default branch, or against the blocker's head branch when stacking, with a concise title describing the intended fix.
 3. Write a real Markdown body that summarizes the issue and planned work. Build the exact multiline Markdown in a file or on standard input and pass it with `gh pr create --body-file` (or the equivalent `gh pr edit --body-file`); never put literal `\n` escape sequences in a `--body` argument to represent paragraph breaks. Include `Closes #<ISSUENUMBER>` on its own line so the draft links to and will close the original issue when merged, then read the created PR body back and verify it contains actual line breaks rather than literal `\n` text.
 4. End the body with a `**Agents:**` footer line naming the current agent CLI and model handling the issue (for example `**Agents:** claude-code (claude-sonnet-5)`), identified from your own runtime context. This is the contributing-agents footer described below.
 5. Record the PR number and URL, then confirm the head and base branches are correct.
@@ -123,7 +138,7 @@ Before the final push, verify that the branch contains the intended code, tests,
 ## Mark the pull request ready
 
 1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings. Preserve `Closes #<ISSUENUMBER>` on its own line and update the `**Agents:**` footer as described above rather than dropping or overwriting it.
-2. Confirm the head branch, base branch, and changed-file scope are correct.
+2. Confirm the head branch, base branch, and changed-file scope are correct. A stacked pull request's changed files must only be this issue's changes on top of the blocker's branch.
 3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI screenshots or screen recordings are complete.
 
 ## Drive CI to completion
@@ -136,7 +151,7 @@ Continue until every required check completes successfully:
 4. For external checks, follow the check URL and use the provider's available logs or tooling. If the logs are inaccessible, report the access blocker rather than guessing.
 5. Classify each failure:
    - For a failure caused by the PR, reproduce it locally when practical, implement the smallest correct repair, run relevant local checks, commit the repair, and push normally.
-   - For a merge conflict, update the branch from the latest default branch without force, resolve it, rerun affected checks, commit, and push.
+   - For a merge conflict, update the branch from the latest default branch without force, resolve it, rerun affected checks, commit, and push. For a stacked pull request, update it from the blocker's branch as "Stack on an open blocking issue" describes instead.
    - For a clearly transient infrastructure or flaky-test failure, rerun the failed job once, then investigate if it repeats.
    - For a clearly unrelated persistent failure, gather diagnostic details and attempt an in-scope repair only when doing so is safe. Otherwise stop at the genuine external blocker.
 6. After every push or rerun, monitor the new head SHA's checks from pending through completion. Ignore stale results from earlier SHAs.
@@ -156,7 +171,7 @@ When validation recorded a do-not-merge directive, the run ends with a ready, un
 
 Skip this section entirely when the issue withheld merge authorization; follow "Hold the pull request when merging is withheld" instead.
 
-1. Before merging, fetch the latest PR state and confirm all required checks are successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI screenshots or screen recordings are present, and the head SHA is the one that passed CI.
+1. Before merging, fetch the latest PR state and confirm its base is the default branch (a stacked pull request waits for its blocker to merge first), all required checks are successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI screenshots or screen recordings are present, and the head SHA is the one that passed CI.
 2. Merge using the repository's required or established merge method. When the repository allows more than one method, prefer them in this order: squash, then merge, then rebase. When squashing, use the PR's title and body as the squash commit message rather than overriding it — the body already carries the standalone `Closes #<ISSUENUMBER>` line. If only merge or only rebase is available, use that method instead, keeping the standalone closing reference intact regardless of method.
 3. Delete the remote issue branch after a successful merge when repository policy permits.
 4. Verify the PR is merged, the merged commit is reachable from the remote default branch, and GitHub closed issue `#<ISSUENUMBER>`. Allow for a brief GitHub processing delay, but do not claim closure without checking.

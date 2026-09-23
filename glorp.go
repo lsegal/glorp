@@ -245,14 +245,14 @@ type Glorp struct {
 	// repeatMu guards lastLogged, the state last reported under each
 	// logChanged key. A poll loop ticking every few seconds must report a
 	// summary, or a failure, once rather than on every tick (issue #413).
-	repeatMu      sync.Mutex
-	lastLogged    map[string]string
+	repeatMu   sync.Mutex
+	lastLogged map[string]string
 	// stacksMu guards stacks, the last answer to whether each repository has
 	// GitHub stacked pull requests enabled (issue #657). Blocked issues are
 	// re-evaluated on every poll, so the answer is cached rather than asked
 	// again each tick.
-	stacksMu sync.Mutex
-	stacks   map[string]stacksProbe
+	stacksMu      sync.Mutex
+	stacks        map[string]stacksProbe
 	jobActionOnce sync.Once
 	jobActions    chan jobActionRequest
 	// settingsOnce/settingsRequests carry live settings updates (issue #341)
@@ -3007,7 +3007,7 @@ func (w *Glorp) stackableOnDependency(ctx context.Context, checker WorkClosureCh
 	if checker == nil {
 		return 0, false
 	}
-	dependency, ok := core.StackableDependency(issue)
+	dependency, ok := stackableDependency(issue)
 	if !ok {
 		return 0, false
 	}
@@ -3031,6 +3031,8 @@ func (w *Glorp) stackableOnDependency(ctx context.Context, checker WorkClosureCh
 // The dispatch predicates live in package core, shared with the browser
 // driver's board reader.
 func issueBlocked(issue Issue) (bool, string) { return core.IssueBlocked(issue) }
+
+func stackableDependency(issue Issue) (IssueDependency, bool) { return core.StackableDependency(issue) }
 
 func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, wasCompleted, seen bool, readyState string) bool {
 	return core.ShouldDispatchIssue(repo, issue, isActive, wasActive, wasCompleted, seen, readyState)
