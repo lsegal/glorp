@@ -377,8 +377,8 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "quota": {"reader": "claude"},
   "skills": {"target": "claude-code"},
   "doctor": {
-    "knownModels": ["opus", "sonnet", "haiku"],
-    "modelsNote": "known Claude aliases; the CLI also accepts full model ids"
+    "knownModels": ["opus", "sonnet", "haiku", "claude-opus-5-5"],
+    "modelsNote": "known Claude aliases and model ids; the CLI may accept others"
   },
   "args": {
     "run": [
