@@ -240,8 +240,8 @@ func TestBuiltinAgentsAskTheirCLIForModels(t *testing.T) {
 			if name != "claude" || len(definition.Doctor.Models) > 0 {
 				t.Errorf("built-in %q hardcodes doctor.knownModels despite having a model probe", name)
 			}
-			if got := strings.Join(definition.Doctor.KnownModels, ","); got != "opus,sonnet,haiku" {
-				t.Errorf("Claude aliases = %q, want opus,sonnet,haiku", got)
+			if got := strings.Join(definition.Doctor.KnownModels, ","); got != "opus,sonnet,haiku,claude-opus-5-5" {
+				t.Errorf("Claude known models = %q, want opus,sonnet,haiku,claude-opus-5-5", got)
 			}
 			continue
 		}

@@ -187,6 +187,16 @@ func TestBuiltinDoctorProbesAreDeclaredOnce(t *testing.T) {
 	}
 }
 
+func TestClaudeKnownModelsIncludeOpus55(t *testing.T) {
+	claude, ok := MustBuiltin().Lookup("claude")
+	if !ok {
+		t.Fatal("builtin registry has no claude definition")
+	}
+	if got, want := strings.Join(claude.Doctor.KnownModels, ","), "opus,sonnet,haiku,claude-opus-5-5"; got != want {
+		t.Errorf("Claude known models = %q, want %q", got, want)
+	}
+}
+
 // TestAgyModelsFromRealProbeOutput pins the `agy` definition's filtering to
 // what `agy models` really prints, captured from agy 1.1.26: a
 // `Fetching available models...` progress line, then one model per line as a
