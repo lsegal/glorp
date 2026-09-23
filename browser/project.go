@@ -778,6 +778,17 @@ func (s WatchIssues) OriginatingWorkState(ctx context.Context, repo string, numb
 	return s.Work.OriginatingWorkState(ctx, repo, number)
 }
 
+// StacksEnabled forwards the stacked pull request check to the API client,
+// so browser mode stacks a blocked issue the same way poll mode does
+// (issue #657).
+func (s WatchIssues) StacksEnabled(ctx context.Context, repo string) (bool, error) {
+	stacks, ok := s.Work.(core.StackSource)
+	if !ok {
+		return false, nil
+	}
+	return stacks.StacksEnabled(ctx, repo)
+}
+
 func (s WatchIssues) ListIssues(ctx context.Context, target string) ([]core.Issue, error) {
 	if core.IsProjectTarget(target) {
 		return s.Board.ListIssues(ctx, target)

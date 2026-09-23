@@ -32,6 +32,28 @@ func IssueBlocked(issue Issue) (bool, string) {
 	return true, strings.Join(blocked, ", ")
 }
 
+// StackableDependency returns the one open dependency an issue could be
+// stacked on instead of waiting for it to close (issue #657): with GitHub
+// stacked pull requests, the dependent issue's pull request is built on the
+// blocker's branch. A tracking issue with sub-issues is never stackable, and
+// neither is an issue blocked by more than one open issue, because a stack is
+// a single chain of branches.
+func StackableDependency(issue Issue) (IssueDependency, bool) {
+	if issue.HasSubIssues {
+		return IssueDependency{}, false
+	}
+	var open []IssueDependency
+	for _, dependency := range issue.DependsOn {
+		if !strings.EqualFold(dependency.State, "closed") {
+			open = append(open, dependency)
+		}
+	}
+	if len(open) != 1 {
+		return IssueDependency{}, false
+	}
+	return open[0], true
+}
+
 // ShouldDispatchIssue decides whether a repository or project issue that is
 // not already active locally is a dispatch candidate. Remote ownership can
 // no longer be read synchronously for repository issues (no label survives

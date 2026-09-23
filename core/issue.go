@@ -85,6 +85,13 @@ type WorkClosureChecker interface {
 	OriginatingWorkState(context.Context, string, int) (OriginatingWorkState, error)
 }
 
+// StackSource reports whether a repository has GitHub stacked pull requests
+// enabled, so an issue blocked by an open issue can be built on the blocker's
+// branch instead of waiting for it to close (issue #657).
+type StackSource interface {
+	StacksEnabled(context.Context, string) (bool, error)
+}
+
 // ProjectStateSource returns a cheap fingerprint of a project board's
 // dispatchable state. GitHub publishes no projects_v2 webhook for user-owned
 // Projects, so board-only edits (dragging an issue onto the board, moving a
