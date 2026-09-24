@@ -166,3 +166,178 @@ func TestGhFixStacksOnOpenBlockingIssue(t *testing.T) {
 		}
 	}
 }
+
+func TestOriginatingWorkStateReadsStackedPullRequestBase(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		pull string
+		want bool
+	}{
+		{"stacked on a blocker branch", `{"state":"open","draft":false,"base":{"ref":"fix/issue-12-blocker","repo":{"default_branch":"main"}}}`, true},
+		{"targets the default branch", `{"state":"open","draft":false,"base":{"ref":"main","repo":{"default_branch":"main"}}}`, false},
+	} {
+		responses := [][]byte{
+			[]byte(`{"state":"open"}`),
+			[]byte(`[{"event":"cross-referenced","source":{"issue":{"number":9,"body":"Closes #7","pull_request":{"merged_at":null}}}}]`),
+			[]byte(test.pull),
+		}
+		call := 0
+		gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+			call++
+			return responses[call-1], nil
+		}}
+		state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
+		if err != nil || len(state.PullRequests) != 1 || state.PullRequests[0].Stacked != test.want {
+			t.Errorf("%s: OriginatingWorkState() = (%#v, %v), want Stacked %v", test.name, state, err, test.want)
+		}
+	}
+}
+
+// fakeParkingSource answers per issue number, so a dependent issue's stacked
+// pull request and its blocker's pull request can be told apart (issue #659).
+type fakeParkingSource struct {
+	*fakeSource
+	mu     sync.Mutex
+	states map[int]OriginatingWorkState
+}
+
+func (f *fakeParkingSource) OriginatingWorkState(_ context.Context, _ string, number int) (OriginatingWorkState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.states[number], nil
+}
+
+func (f *fakeParkingSource) StacksEnabled(context.Context, string) (bool, error) { return true, nil }
+
+func parkingSource(batches ...[]Issue) *fakeParkingSource {
+	return &fakeParkingSource{
+		fakeSource: &fakeSource{batches: batches},
+		states: map[int]OriginatingWorkState{
+			7:  {IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", Stacked: true}}},
+			12: {IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 14, State: "open"}}},
+		},
+	}
+}
+
+func blockedOn12(state string) []Issue {
+	return []Issue{{Number: 7, Repository: "o/r", DependsOn: []IssueDependency{{Number: 12, State: state}}}}
+}
+
+func waitForWorkStatus(t *testing.T, statePath string, number int, status string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[number].Status == status {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("issue #%d was not recorded as %s, state=%v err=%v", number, status, state, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestGlorpParksAStackedPullRequestWaitingOnItsBlocker(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := parkingSource(blockedOn12("open"))
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitForSession(t, runner.sessions)
+	waitForWorkStatus(t, statePath, 7, "parked")
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "issue #7 parked: depends on #12 (open); its stacked pull request waits for that to merge") {
+		if time.Now().After(deadline) {
+			t.Fatalf("a later poll did not leave the parked issue waiting:\n%s", logs)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("a parked stacked pull request relaunched its agent while its blocker is open: %+v", extra)
+	default:
+	}
+	if !strings.Contains(logs.String(), "issue #7 parked: its stacked pull request is ready and waits on its blocker to merge; freeing its slot") {
+		t.Fatalf("parking was not logged:\n%s", logs)
+	}
+}
+
+func TestGlorpCompletesAHeldPullRequestThatIsNotStacked(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := parkingSource(blockedOn12("open"))
+	// Merge withheld on a pull request that already targets the default
+	// branch: a donotmerge hold, not a parked stack (issue #628).
+	src.states[7] = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open"}}}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitForSession(t, runner.sessions)
+	waitForWorkStatus(t, statePath, 7, "completed")
+}
+
+func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := parkingSource(blockedOn12("open"), blockedOn12("open"), blockedOn12("closed"))
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	first := waitForSession(t, runner.sessions)
+	waitForWorkStatus(t, statePath, 7, "parked")
+	// The blocker merged: its issue closed and the stacked pull request was
+	// retargeted, so the dependent issue is dispatched again to finish it.
+	src.mu.Lock()
+	src.states[7] = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", IsDraft: true}}}
+	src.mu.Unlock()
+	resumed := waitForSession(t, runner.sessions)
+	if !resumed.Resume || resumed.ID != first.ID || !strings.Contains(resumed.Update, "The blocker is no longer open") {
+		t.Fatalf("parked issue was not resumed with its blocker merged: first=%+v resumed=%+v", first, resumed)
+	}
+	if !strings.Contains(logs.String(), "issue #7 unparked: its blocker is no longer open; resuming its stacked pull request") {
+		t.Fatalf("unparking was not logged:\n%s", logs)
+	}
+}
+
+func TestGhFixParksAStackedPullRequestWaitingOnItsBlocker(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"end the run without waiting for the blocker to merge",
+		"glorp parks it",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not describe parking %q", required)
+		}
+	}
+}

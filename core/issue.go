@@ -66,6 +66,11 @@ type PullRequestWorkState struct {
 	// deliberately marked its fix ready and is waiting on a human rather than
 	// stalled (issue #628).
 	IsDraft bool
+	// Stacked reports whether the pull request targets a branch other than
+	// its repository's default branch, which is how a pull request stacked on
+	// an open blocker's branch looks until that blocker merges. A ready one
+	// is parked waiting on its base rather than held for a human (issue #659).
+	Stacked bool
 }
 
 // OriginatingWorkState is what a run reads back about the issue an agent is
