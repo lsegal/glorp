@@ -626,11 +626,19 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 			State    string     `json:"state"`
 			MergedAt *time.Time `json:"merged_at"`
 			Draft    bool       `json:"draft"`
+			Base     struct {
+				Ref  string `json:"ref"`
+				Repo struct {
+					DefaultBranch string `json:"default_branch"`
+				} `json:"repo"`
+			} `json:"base"`
 		}
 		if err := json.Unmarshal(output, &currentPullRequest); err != nil {
 			return OriginatingWorkState{}, fmt.Errorf("decode pull request #%d state for issue #%d: %w", pullRequest.Number, number, err)
 		}
-		state.PullRequests = append(state.PullRequests, PullRequestWorkState{Number: pullRequest.Number, State: currentPullRequest.State, Merged: currentPullRequest.MergedAt != nil, IsDraft: currentPullRequest.Draft})
+		base := currentPullRequest.Base
+		stacked := base.Ref != "" && base.Repo.DefaultBranch != "" && base.Ref != base.Repo.DefaultBranch
+		state.PullRequests = append(state.PullRequests, PullRequestWorkState{Number: pullRequest.Number, State: currentPullRequest.State, Merged: currentPullRequest.MergedAt != nil, IsDraft: currentPullRequest.Draft, Stacked: stacked})
 	}
 	return state, nil
 }

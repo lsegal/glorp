@@ -1097,31 +1097,36 @@ func unclosedWorkPrompt(issue Issue) string {
 // whether GitHub answered at all, so a check that could not be made is never
 // mistaken for an issue that is still open. A merge GitHub has not finished
 // processing is allowed for by re-reading once after the closure interval
-// before the work is treated as unfinished.
-func (w *Glorp) confirmIssueClosed(ctx context.Context, checker WorkClosureChecker, issue Issue) (closed, answered bool) {
+// before the work is treated as unfinished. It also reports whether the ready
+// pull request is parked: stacked on a base other than the default branch,
+// so it can only merge after its blocker does (issue #659).
+func (w *Glorp) confirmIssueClosed(ctx context.Context, checker WorkClosureChecker, issue Issue) (closed, answered, parked bool) {
 	repo := issueRepository(issue.Target, issue)
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return false, false
+				return false, false, false
 			case <-time.After(w.activeWorkClosureInterval()):
 			}
 		}
 		state, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
 		if err != nil {
 			if ctx.Err() != nil {
-				return false, false
+				return false, false, false
 			}
 			w.logf("issue #%d completion check failed: %v", issue.Number, err)
 			continue
 		}
 		answered = true
-		if strings.EqualFold(state.IssueState, "closed") || pullRequestHeldForReview(state) {
-			return true, true
+		if strings.EqualFold(state.IssueState, "closed") {
+			return true, true, false
+		}
+		if pullRequestHeldForReview(state) {
+			return true, true, pullRequestParkedOnStack(state)
 		}
 	}
-	return false, answered
+	return false, answered, false
 }
 
 // pullRequestHeldForReview reports whether state carries a pull request that
@@ -1136,6 +1141,27 @@ func pullRequestHeldForReview(state OriginatingWorkState) bool {
 		}
 	}
 	return false
+}
+
+// pullRequestParkedOnStack reports whether state carries a ready pull request
+// that is stacked on another branch. Such a pull request is not held for a
+// human: it is waiting for its blocker to merge so it can be retargeted onto
+// the default branch and merged, which a later run has to come back and do
+// (issue #659).
+func pullRequestParkedOnStack(state OriginatingWorkState) bool {
+	for _, pullRequest := range state.PullRequests {
+		if strings.EqualFold(pullRequest.State, "open") && !pullRequest.Merged && !pullRequest.IsDraft && pullRequest.Stacked {
+			return true
+		}
+	}
+	return false
+}
+
+// parkedWorkPrompt is the update a parked stacked run is resumed with once its
+// blocker is no longer open, so the agent picks the waiting pull request back
+// up instead of starting the fix over.
+func parkedWorkPrompt(issue Issue) string {
+	return fmt.Sprintf("Your pull request for issue #%d was parked, stacked on its blocker's branch and waiting for that blocker to merge. The blocker is no longer open.\n\nPick the work back up: rebase or retarget the pull request onto the default branch as the gh-fix stacking steps describe (or unstack it if the blocker's pull request closed without merging), drive CI to green on the new head, and merge it so issue #%d closes.", issue.Number, issue.Number)
 }
 
 func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) string {
@@ -1587,7 +1613,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
+			workMu.Lock()
+			wasParked := work[issueKey(issue)].Status == "parked"
+			workMu.Unlock()
 			if blocked, reason := issueBlocked(issue); blocked {
+				// A parked stacked pull request is already ready; only its
+				// blocker merging gives a run anything left to do, so it
+				// waits without taking a slot until then (issue #659).
+				if wasParked {
+					w.logChanged("parked-"+issueKey(issue), reason, "issue #%d parked: %s; its stacked pull request waits for that to merge", issue.Number, reason)
+					continue
+				}
 				if pullRequest, ok := w.stackableOnDependency(ctx, closureChecker, issue); ok {
 					w.logChanged("stack-"+issueKey(issue), strconv.Itoa(pullRequest), "issue #%d %s; stacking it on pull request #%d", issue.Number, reason, pullRequest)
 				} else {
@@ -1633,7 +1669,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// sitting at "In Progress" that this instance has no record of
 				// is another instance's apparent work (typically stranded by
 				// one that died mid-run), so it must be negotiated too.
-				contested := (hadLocalRecord && !wasFailed && !wasActive) || (!hadLocalRecord && (projectItemInProgress(issue.Target, issue) || swept))
+				contested := (hadLocalRecord && !wasFailed && !wasActive && !wasParked) || (!hadLocalRecord && (projectItemInProgress(issue.Target, issue) || swept))
 				session := AgentSession{
 					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
 					// Persisted work is not an active worker after a daemon restart or
@@ -1649,6 +1685,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if session.Agent != "" && !w.agentStillConfigured(session.Agent) {
 					w.logf("issue #%d discarded persisted agent %q; it is no longer configured", issue.Number, session.Agent)
 					session.ID, session.Agent, session.Resume = "", "", false
+				}
+				if wasParked {
+					w.logf("issue #%d unparked: its blocker is no longer open; resuming its stacked pull request", issue.Number)
+					if session.Resume {
+						session.Update = parkedWorkPrompt(issue)
+					}
 				}
 				if directMention {
 					// A direct mention is a new threaded instruction. Start a fresh
@@ -1831,6 +1873,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// work receives it rather than the change waiting out the run
 				// (issue #469).
 				alreadyClosed := false
+				parked := false
 				keepalives := 0
 				for {
 					runCtx, cancelRun := context.WithCancelCause(ctx)
@@ -1896,8 +1939,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 						// GitHub says the issue is closed; while it is still
 						// open the work is kept alive and continued instead of
 						// being reported as finished.
-						closed, answered := w.confirmIssueClosed(ctx, closureChecker, i)
+						closed, answered, stacked := w.confirmIssueClosed(ctx, closureChecker, i)
 						if closed || !answered || ctx.Err() != nil {
+							// A ready pull request stacked on the blocker the
+							// issue was dispatched with can only merge once that
+							// blocker does. Park the work so its slot is freed
+							// and the next poll that finds the blocker gone
+							// dispatches it again (issue #659).
+							_, blockedOnStack := stackableDependency(i)
+							parked = closed && stacked && blockedOnStack
 							break
 						}
 						keepalives++
@@ -1962,7 +2012,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d failed: %v (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, runErr, running, queued, completed, failed)
 					publish()
 				} else {
-					if w.Status != nil {
+					// Parked work is not done, so its project item stays in
+					// progress rather than moving to Done.
+					if w.Status != nil && !parked {
 						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, "Done"); statusErr != nil {
 							w.logf("issue #%d failed to update project status: %v", i.Number, statusErr)
 						}
@@ -1977,6 +2029,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					jobMu.Unlock()
 					state := work[key]
 					state.Status = "completed"
+					if parked {
+						state.Status = "parked"
+					}
 					work[key] = state
 					_ = saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
@@ -1985,7 +2040,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 					tasks.completed++
 					running, queued, completed, failed := tasks.running, tasks.queued, tasks.completed, tasks.failed
 					tasks.mu.Unlock()
-					w.logf("issue #%d completed (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
+					if parked {
+						w.logf("issue #%d parked: its stacked pull request is ready and waits on its blocker to merge; freeing its slot (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
+					} else {
+						w.logf("issue #%d completed (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
+					}
 					publish()
 				}
 			}(issue, session, startedRunning, startedQueued)
