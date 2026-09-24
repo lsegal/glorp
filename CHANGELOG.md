@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.0 - 2026-09-24
+
 - Add Claude Opus 5.5 to the model choices reported by `glorp agents` (issue #655).
 - Dispatch an issue blocked by a single open issue that already has an open pull request when the repository has GitHub stacked pull requests enabled, instead of waiting for the blocker to close (issue #657). `gh-fix` detects stacked pull request support itself, builds the fix on the blocker's branch, links the two pull requests into a stack with `gh stack`, keeps its branch rebased onto the blocker, and merges only after the blocker merges.
 - Free a stacked `gh-fix` run's concurrency slot while its ready pull request waits for its blocker to merge, instead of holding the slot for hours or days (issue #659). glorp recognizes a ready pull request stacked on another branch as parked rather than as a finished `donotmerge` hold, leaves it waiting while the blocker stays open, and dispatches the issue again once the blocker closes so `gh-fix` resumes, retargets the pull request onto the default branch, and merges it.
