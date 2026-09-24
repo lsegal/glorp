@@ -222,6 +222,16 @@ func (g SignInGuard) OriginatingWorkState(ctx context.Context, repo string, numb
 	return checker.OriginatingWorkState(ctx, repo, number)
 }
 
+// StacksEnabled passes the stacked pull request check through to the wrapped
+// source for the same reason OriginatingWorkState does (issue #657).
+func (g SignInGuard) StacksEnabled(ctx context.Context, repo string) (bool, error) {
+	stacks, ok := g.source.(core.StackSource)
+	if !ok {
+		return false, nil
+	}
+	return stacks.StacksEnabled(ctx, repo)
+}
+
 func (g SignInGuard) ListIssues(ctx context.Context, target string) ([]core.Issue, error) {
 	issues, err := g.source.ListIssues(ctx, target)
 	if err != nil {

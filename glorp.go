@@ -131,6 +131,7 @@ type (
 )
 
 type ProjectStateSource = core.ProjectStateSource
+type StackSource = core.StackSource
 type IssueStatuser interface {
 	SetIssueStatus(context.Context, string, Issue, string) error
 }
@@ -244,8 +245,14 @@ type Glorp struct {
 	// repeatMu guards lastLogged, the state last reported under each
 	// logChanged key. A poll loop ticking every few seconds must report a
 	// summary, or a failure, once rather than on every tick (issue #413).
-	repeatMu      sync.Mutex
-	lastLogged    map[string]string
+	repeatMu   sync.Mutex
+	lastLogged map[string]string
+	// stacksMu guards stacks, the last answer to whether each repository has
+	// GitHub stacked pull requests enabled (issue #657). Blocked issues are
+	// re-evaluated on every poll, so the answer is cached rather than asked
+	// again each tick.
+	stacksMu      sync.Mutex
+	stacks        map[string]stacksProbe
 	jobActionOnce sync.Once
 	jobActions    chan jobActionRequest
 	// settingsOnce/settingsRequests carry live settings updates (issue #341)
@@ -1581,8 +1588,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
 			if blocked, reason := issueBlocked(issue); blocked {
-				w.logf("issue #%d not picked up: %s", issue.Number, reason)
-				continue
+				if pullRequest, ok := w.stackableOnDependency(ctx, closureChecker, issue); ok {
+					w.logChanged("stack-"+issueKey(issue), strconv.Itoa(pullRequest), "issue #%d %s; stacking it on pull request #%d", issue.Number, reason, pullRequest)
+				} else {
+					w.logf("issue #%d not picked up: %s", issue.Number, reason)
+					continue
+				}
 			}
 			key := issueKey(issue)
 			mentionKey := issue.Repository + "#" + strconv.Itoa(issue.Number)
@@ -2947,9 +2958,81 @@ func saveScopedWorkState(path string, state map[string]workState, targets []stri
 	return os.WriteFile(path, append(b, '\n'), 0600)
 }
 
+// stacksProbeTTL is how long a repository's stacked pull request setting is
+// trusted before it is read again, so enabling the feature on a repository is
+// noticed without a restart.
+const stacksProbeTTL = time.Hour
+
+type stacksProbe struct {
+	enabled bool
+	at      time.Time
+}
+
+// stacksEnabled reports whether repo has GitHub stacked pull requests
+// enabled, caching the answer for stacksProbeTTL. A source that cannot answer
+// or a failed read counts as disabled, which keeps the old wait-for-blocker
+// behavior.
+func (w *Glorp) stacksEnabled(ctx context.Context, repo string) bool {
+	source, ok := w.Issues.(StackSource)
+	if !ok || repo == "" {
+		return false
+	}
+	w.stacksMu.Lock()
+	probe, cached := w.stacks[repo]
+	w.stacksMu.Unlock()
+	if cached && time.Since(probe.at) < stacksProbeTTL {
+		return probe.enabled
+	}
+	enabled, err := source.StacksEnabled(ctx, repo)
+	if err != nil {
+		w.logChanged("stacks-"+repo, err.Error(), "could not read stacked pull request setting for %s: %v", repo, err)
+		return false
+	}
+	w.stacksMu.Lock()
+	if w.stacks == nil {
+		w.stacks = make(map[string]stacksProbe)
+	}
+	w.stacks[repo] = stacksProbe{enabled: enabled, at: time.Now()}
+	w.stacksMu.Unlock()
+	return enabled
+}
+
+// stackableOnDependency reports whether a blocked issue can be dispatched
+// anyway by stacking its pull request on its blocker's branch (issue #657),
+// and which open pull request it would stack on. That needs stacked pull
+// requests enabled on the repository, exactly one open blocker in that same
+// repository (core.StackableDependency), and an open pull request for that
+// blocker to build on; otherwise the issue keeps waiting for its blocker.
+func (w *Glorp) stackableOnDependency(ctx context.Context, checker WorkClosureChecker, issue Issue) (int, bool) {
+	if checker == nil {
+		return 0, false
+	}
+	dependency, ok := stackableDependency(issue)
+	if !ok {
+		return 0, false
+	}
+	repo := issue.Repository
+	if !w.stacksEnabled(ctx, repo) {
+		return 0, false
+	}
+	state, err := checker.OriginatingWorkState(ctx, repo, dependency.Number)
+	if err != nil {
+		w.logChanged("stack-"+issueKey(issue), err.Error(), "issue #%d could not read pull requests for #%d: %v", issue.Number, dependency.Number, err)
+		return 0, false
+	}
+	for _, pullRequest := range state.PullRequests {
+		if strings.EqualFold(pullRequest.State, "open") && !pullRequest.Merged {
+			return pullRequest.Number, true
+		}
+	}
+	return 0, false
+}
+
 // The dispatch predicates live in package core, shared with the browser
 // driver's board reader.
 func issueBlocked(issue Issue) (bool, string) { return core.IssueBlocked(issue) }
+
+func stackableDependency(issue Issue) (IssueDependency, bool) { return core.StackableDependency(issue) }
 
 func shouldDispatchIssue(repo string, issue Issue, isActive, wasActive, wasCompleted, seen bool, readyState string) bool {
 	return core.ShouldDispatchIssue(repo, issue, isActive, wasActive, wasCompleted, seen, readyState)

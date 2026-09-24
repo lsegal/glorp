@@ -565,6 +565,20 @@ func (g GHCLI) timedOut(ctx, runCtx context.Context, args []string, err error) e
 	return err
 }
 
+// StacksEnabled reports whether repo has GitHub stacked pull requests
+// enabled. The Stacks API answers 404 Not Found for a repository without
+// them, which is a definite "no" rather than an error (issue #657).
+func (g GHCLI) StacksEnabled(ctx context.Context, repo string) (bool, error) {
+	output, err := g.apiGET(ctx, g.isPublicRepo(ctx, repo), "repos/"+repo+"/stacks?per_page=1")
+	if err != nil {
+		if detail := string(output); strings.Contains(detail, "HTTP 404") || strings.Contains(detail, "Not Found") {
+			return false, nil
+		}
+		return false, fmt.Errorf("list stacks for %s: %w: %s", repo, err, strings.TrimSpace(string(output)))
+	}
+	return true, nil
+}
+
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
 	public := g.isPublicRepo(ctx, repo)
 	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number))
