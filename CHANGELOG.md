@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop `gh-fix` from filing follow-up issues for verification that only a person can do, such as testing in a third-party desktop app, on physical hardware, or with real accounts or devices (issue #661). Glorp dispatched those issues to agent slots that could never close them. `gh-fix` now posts them as one `Manual verification` checklist comment on the pull request, or on the issue when no pull request exists, and files only the automatable part of a mixed item. Split issues get no sub-issue for a manual-only part, and a held pull request's completion comment lists manual checks under their own heading.
+
 ## v1.5.0 - 2026-09-24
 
 - Add Claude Opus 5.5 to the model choices reported by `glorp agents` (issue #655).
