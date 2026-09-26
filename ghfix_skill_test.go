@@ -311,3 +311,68 @@ func TestGhFixNeverCreatesAChangelog(t *testing.T) {
 		t.Error("gh-fix skill still instructs scaffolding a new changelog file")
 	}
 }
+
+func TestGhFixPostsManualVerificationAsACommentNotAnIssue(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"**Classify every item before filing it.**",
+		"An item is **manual-only** when its acceptance can only be checked by a person",
+		"running a third-party GUI application or host, using physical or peripheral hardware, using real devices or accounts, or making a subjective or visual judgement the repository cannot test",
+		"Never file a manual-only item as an issue",
+		"Post manual-only items as one comment with a `Manual verification` checklist instead",
+		"Put it on the pull request when one exists, or on the originating issue when the run stops without one",
+		"give the setup steps and the exact checks, and state that CI cannot cover them",
+		"The steps below apply only to items, or parts of items, that are not manual-only",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not route manual verification to a comment %q", required)
+		}
+	}
+}
+
+func TestGhFixFilesOnlyTheAutomatablePartOfAMixedItem(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"When an item mixes manual checks with automatable work, such as a script, a test harness, docs, or packaging, file only the automatable part as a follow-up issue and leave the manual checks in the comment",
+		"A part that mixes manual checks with automatable work becomes a sub-issue for its automatable work only",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not split mixed verification items %q", required)
+		}
+	}
+}
+
+func TestGhFixNeverSplitsOffAManualOnlySubIssue(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"A manual-only part, as \"Create follow-up issues\" defines it, is never a separable task: never create a sub-issue for it, and do not count it toward a split",
+		"with any manual-only parts under a `Manual verification` checklist in that same comment",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not keep manual-only parts out of sub-issues %q", required)
+		}
+	}
+}
+
+func TestGhFixKeepsManualVerificationSeparateOnAHeldRunAndInTheReport(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"keep manual-only items out of `Follow-ups (not filed)` and list them under their own `Manual verification` heading in the same comment",
+		"Record manual verification items separately, with the URL of the comment that lists them",
+		"manual verification items and their comment URL listed separately from follow-up issues",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not keep manual verification separate from follow-ups %q", required)
+		}
+	}
+}
+
+func TestGhFixSiteDescribesManualVerificationComments(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("site", "content", "skills", "gh-fix.md"))
+	if err != nil {
+		t.Fatalf("read gh-fix site page: %v", err)
+	}
+	if !strings.Contains(string(data), "<code>Manual verification</code> checklist comment instead of an issue") {
+		t.Error("gh-fix site page does not describe manual verification comments")
+	}
+}
