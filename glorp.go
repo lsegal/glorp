@@ -186,6 +186,9 @@ type Glorp struct {
 	fallbackInterval time.Duration
 	// closureInterval overrides active-work closure polling in tests.
 	closureInterval time.Duration
+	// wakeupDelayOverride replaces the delay of an agent's scheduled wakeup
+	// in tests.
+	wakeupDelayOverride time.Duration
 	// Projects supplies the push-mode project board fingerprint. When nil,
 	// board changes are only picked up by the fallback poll.
 	Projects ProjectStateSource
@@ -1875,6 +1878,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 				alreadyClosed := false
 				parked := false
 				keepalives := 0
+				// wakeup is the ScheduleWakeup the agent's last turn left
+				// pending, which the next pass waits out before resuming the
+				// session with the agent's own prompt (issue #671).
+				var wakeup *scheduledWakeup
+				wakeups := 0
+				setWaiting := func(from, to, reason string, wakeAt time.Time) {
+					jobMu.Lock()
+					job := jobs[key]
+					if job.Status == from {
+						job.Status, job.WaitReason, job.WakeAt = to, reason, wakeAt
+						jobs[key] = job
+					}
+					jobMu.Unlock()
+					publish()
+				}
 				for {
 					runCtx, cancelRun := context.WithCancelCause(ctx)
 					workMu.Lock()
@@ -1902,8 +1920,28 @@ func (w *Glorp) Run(ctx context.Context) error {
 						target := ownershipTargetFor(runCtx, closureChecker, i)
 						go w.watchForCompetingClaim(runCtx, target, i.Number, time.Now(), cancelRun)
 					}
+					waitInterrupted := false
+					if pending := wakeup; pending != nil && runCtx.Err() == nil {
+						wakeup = nil
+						delay := w.wakeupDelay(*pending)
+						setWaiting("active", "waiting", pending.Reason, time.Now().Add(delay))
+						fmt.Fprintf(jobOutput, "Waiting %s for the scheduled wakeup before resuming the session.\n", formatWakeupDelay(delay))
+						due, closed := w.awaitWakeup(runCtx, closureChecker, i, delay)
+						setWaiting("waiting", "active", "", time.Time{})
+						if closed {
+							w.logf("issue #%d closed while its agent waited for a scheduled wakeup; cancelling the wakeup", i.Number)
+							cancelRun(nil)
+							workMu.Lock()
+							delete(cancellations, key)
+							workMu.Unlock()
+							break
+						}
+						waitInterrupted = !due
+					}
 					activeRunner := w.runner()
 					if cause := context.Cause(runCtx); isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) || errors.Is(cause, errWorkUpdated) {
+						runErr = cause
+					} else if waitInterrupted {
 						runErr = cause
 					} else if w.UI != nil {
 						if runner, ok := activeRunner.(SessionAgentOutputRunner); ok {
@@ -1922,6 +1960,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 					if isCooperativeCancellation(cause) || errors.Is(cause, errWorkStoppedFromWebUI) || errors.Is(cause, errWorkUpdated) {
 						runErr = cause
 					}
+					var scheduled *scheduledWakeup
+					if errors.As(runErr, &scheduled) {
+						runErr = nil
+					} else {
+						wakeups = 0
+					}
 					cancelRun(nil)
 					workMu.Lock()
 					delete(cancellations, key)
@@ -1929,6 +1973,26 @@ func (w *Glorp) Run(ctx context.Context) error {
 					workMu.Unlock()
 					update, updated := workUpdateFor(cause)
 					if !updated || ctx.Err() != nil {
+						if scheduled != nil && ctx.Err() == nil {
+							// Print mode exits when the turn ends, so the
+							// wakeup the agent asked for would never fire and
+							// the run would look finished while it waits on
+							// CI (issue #671). The session is kept alive and
+							// resumed with the agent's own prompt instead.
+							wakeups++
+							if wakeups > maxConsecutiveWakeups {
+								runErr = fmt.Errorf("agent scheduled %d wakeups in a row without finishing; stopping the run", maxConsecutiveWakeups)
+								break
+							}
+							if state.SessionID != "" && state.Agent != "" {
+								w.logf("issue #%d agent scheduled a wakeup in %s (%s); keeping session %s alive until then", i.Number, formatWakeupDelay(scheduled.Delay), scheduled.Reason, state.SessionID)
+								wakeup = scheduled
+								agentSession = AgentSession{ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory, Resume: true, Update: wakeupPrompt(i, *scheduled)}
+								publish()
+								continue
+							}
+							w.logf("issue #%d agent scheduled a wakeup, but its session cannot be resumed; treating the run as finished", i.Number)
+						}
 						if runErr != nil || ctx.Err() != nil || closureChecker == nil {
 							break
 						}
@@ -2244,7 +2308,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			switch action.Action {
 			case "stop":
-				if job.Status != "active" {
+				if job.Status != "active" && job.Status != "waiting" {
 					request.done <- fmt.Errorf("job cannot be stopped while %s", job.Status)
 					continue
 				}
@@ -2265,7 +2329,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				request.done <- nil
 			case "retry":
 				switch job.Status {
-				case "active":
+				case "active", "waiting":
 					workMu.Lock()
 					cancel := cancellations[key]
 					workMu.Unlock()
