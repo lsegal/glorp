@@ -23,6 +23,11 @@ import (
 // DefaultPort is the first localhost port the dashboard tries to bind.
 const DefaultPort = 8765
 
+// DefaultBind is the address the dashboard listens on unless told otherwise.
+// Loopback keeps it private to this machine: it has no authentication, and it
+// can stop jobs and change settings (issue #666).
+const DefaultBind = "127.0.0.1"
+
 // State is the JSON payload the dashboard's /api/state endpoint publishes. It
 // is exported because `glorp ui` reads it back when probing localhost for
 // running dashboards.
@@ -295,14 +300,19 @@ func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(state)
 }
 
-// Listen binds the first free localhost port at or above startPort and reports
-// the listener along with the port it took.
-func Listen(startPort int) (net.Listener, int, error) {
+// Listen binds the first free port on host at or above startPort and reports
+// the listener along with the port it took. An empty host listens on every
+// interface, as "0.0.0.0" does.
+func Listen(host string, startPort int) (net.Listener, int, error) {
 	if startPort < 1 || startPort > 65535 {
 		return nil, 0, fmt.Errorf("web-ui-port must be between 1 and 65535")
 	}
+	if err := ValidateBind(host); err != nil {
+		return nil, 0, err
+	}
+	host = strings.Trim(host, "[]")
 	for port := startPort; port <= 65535; port++ {
-		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 		if err == nil {
 			return listener, port, nil
 		}
@@ -312,6 +322,36 @@ func Listen(startPort int) (net.Listener, int, error) {
 		}
 	}
 	return nil, 0, fmt.Errorf("no web UI port available at or above %d", startPort)
+}
+
+// ValidateBind rejects a bind address that carries a port, since the port
+// comes from --web-ui-port. A bare IPv6 address such as "::" is accepted.
+func ValidateBind(host string) error {
+	if strings.Contains(host, ":") && net.ParseIP(strings.Trim(host, "[]")) == nil {
+		return fmt.Errorf("bind must be a host address without a port, such as 0.0.0.0; got %q", host)
+	}
+	return nil
+}
+
+// IsLoopback reports whether a bind address keeps the dashboard private to
+// this machine.
+func IsLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+// URL is the address to open the dashboard at when it listens on host and
+// port. Loopback and wildcard binds are both reachable as localhost, which is
+// also where `glorp ui` looks; any other host is only reachable by name.
+func URL(host string, port int) string {
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); host == "" || IsLoopback(host) || (ip != nil && ip.IsUnspecified()) {
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // FrontendDir is where this package's Vite project sits relative to the
