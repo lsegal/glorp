@@ -156,6 +156,7 @@ h1 .version {
 	height: 298px;
 	padding: 16px;
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	grid-template-rows: auto auto auto 1fr;
 	gap: 8px;
 }
@@ -693,12 +694,60 @@ h1 .version {
 	}
 	.masthead {
 		align-items: center;
+		flex-wrap: wrap;
+		gap: 12px;
 	}
 	.eyebrow {
 		display: none;
 	}
+	h1 {
+		font-size: 20px;
+		white-space: nowrap;
+	}
+	.masthead-actions {
+		gap: 8px;
+	}
+	.settings-button,
+	.refresh-button,
+	.restart-button {
+		width: 40px;
+		height: 40px;
+	}
+	.settings-button svg,
+	.refresh-button svg,
+	.restart-button svg {
+		width: 20px;
+		height: 20px;
+	}
 	.card {
-		height: 280px;
+		height: 360px;
+		padding: 14px;
+	}
+	.job-viewport {
+		flex-direction: column;
+		gap: 8px;
+	}
+	.viewport-actions {
+		position: static;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+	.viewport-actions button {
+		min-height: 36px;
+		padding: 6px 14px;
+		border-radius: 6px;
+		font-size: 13px;
+	}
+	.viewport-actions svg {
+		width: 16px;
+		height: 16px;
+	}
+	.job-viewport .viewport-status {
+		padding-right: 12px;
+	}
+	.more {
+		padding: 6px 12px;
+		font-size: 12px;
 	}
 	.status-cell {
 		flex: 1 1 auto;
@@ -711,7 +760,30 @@ h1 .version {
 		padding: 8px;
 	}
 	.modal {
-		max-height: calc(100vh - 16px);
+		max-height: calc(100dvh - 16px);
 		padding: 12px;
+	}
+	.modal-close {
+		padding: 8px;
+		margin: -8px;
+	}
+	.modal-tabs button {
+		padding: 8px 14px;
+		font-size: 14px;
+	}
+	/* Mobile Safari zooms into any field whose text is under 16px. */
+	.modal-body input,
+	.modal-body select {
+		font-size: 16px;
+		padding: 9px 10px;
+	}
+	.model-chip {
+		padding: 9px 14px;
+		font-size: 13px;
+	}
+	.modal-actions button {
+		flex: 1;
+		min-height: 44px;
+		font-size: 14px;
 	}
 }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make the web dashboard easier to use on a phone (issue #669). Job cards no longer spill past their edge on narrow screens, which had hidden their Retry and Stop buttons; those buttons now sit above the log with finger-sized targets. The header wraps instead of squeezing the title, the header and settings buttons are larger, and the settings fields no longer make mobile Safari zoom in.
+
 ## v1.5.3 - 2026-09-28
 
 - Add a restart button to the web dashboard, beside the refresh and settings buttons, that stops the running `glorp watch` the same way Ctrl+C does and starts it again with the same command line, picking up a binary replaced by `glorp upgrade` (issue #665). Running agents are stopped and resumed by the new instance, and the dashboard reconnects to it on its own.
