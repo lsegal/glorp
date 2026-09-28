@@ -30,7 +30,7 @@ const dashboardGap = 1
 // still in flight, with completed work pushed to the bottom.
 func jobStatusRank(status string) int {
 	switch status {
-	case "active":
+	case "active", "waiting":
 		return 0
 	case "failed":
 		return 1
@@ -379,12 +379,20 @@ func (m dashboard) View() string {
 		if status == "complete" {
 			indicator = done.Render("✓")
 		}
+		if status == "waiting" {
+			indicator = "⏸"
+		}
 		cardWidth := jobCardWidth(m.width)
 		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
 		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
 		metadataWidth := max(1, cardWidth-2)
 		checkout := muted.Render(truncate("checkout: "+job.CheckoutDirectory, metadataWidth))
 		session := muted.Render(truncate("session: "+job.SessionID, metadataWidth))
+		if status == "waiting" {
+			// A waiting job says what it waits for and when it resumes in
+			// place of its session line, so the card keeps its height.
+			session = muted.Render(truncate(jobWaitLabel(job, time.Now()), metadataWidth))
+		}
 		agent := muted.Render(truncate("agent: "+jobAgentSummary(job), metadataWidth))
 		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
 			fmt.Sprintf("%s\n%s\n%s\n%s\n%s", title, checkout, session, agent, progress)))

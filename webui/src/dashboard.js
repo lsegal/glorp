@@ -62,8 +62,21 @@ export function jobActionAvailability(status) {
 		// A queued job is already on its way to a fresh gh-fix run, so retry is
 		// available for every state shown in the dashboard.
 		retry: true,
-		stop: status === "active",
+		// A job waiting on a scheduled wakeup still holds its agent session,
+		// so it can be stopped just like a running one (issue #671).
+		stop: status === "active" || status === "waiting",
 	};
+}
+
+// jobWaitLabel describes a job waiting on the wakeup its agent scheduled, such
+// as "waiting: CI is running, resumes at 15:04:05". The dashboard is not
+// redrawn while a job waits, so it names the time rather than counting down.
+export function jobWaitLabel(job) {
+	let label = "waiting";
+	if (job.WaitReason) label += `: ${job.WaitReason}`;
+	const resumes = lastPollLabel(job.WakeAt);
+	if (resumes) label += `, resumes at ${resumes}`;
+	return label;
 }
 
 export async function submitJobAction(job, action) {

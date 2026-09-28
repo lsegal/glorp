@@ -190,6 +190,9 @@ h1 .version {
 .status-icon.failed {
 	color: #f87171;
 }
+.status-icon.waiting {
+	color: #fbbf24;
+}
 .status-icon.queued {
 	color: var(--muted);
 }

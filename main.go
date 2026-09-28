@@ -2111,16 +2111,24 @@ type claudeJSONOutputWriter struct {
 	mu     sync.Mutex
 	output io.Writer
 	buffer []byte
+	// wakeup is the last ScheduleWakeup the agent called, and wakeupID the
+	// tool_use ID it was called with, so a call the tool rejected is dropped
+	// again (issue #671).
+	wakeup   *scheduledWakeup
+	wakeupID string
 }
 
 type claudeStreamEvent struct {
 	Type    string `json:"type"`
 	Message struct {
 		Content []struct {
-			Type  string          `json:"type"`
-			Text  string          `json:"text"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
+			Type      string          `json:"type"`
+			Text      string          `json:"text"`
+			ID        string          `json:"id"`
+			Name      string          `json:"name"`
+			Input     json.RawMessage `json:"input"`
+			ToolUseID string          `json:"tool_use_id"`
+			IsError   bool            `json:"is_error"`
 		} `json:"content"`
 	} `json:"message"`
 	IsError bool   `json:"is_error"`
@@ -2181,6 +2189,15 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 				}
 			case "tool_use":
 				texts = append(texts, "Running: "+claudeToolUseSummary(block.Name, block.Input))
+				if block.Name == scheduleWakeupTool {
+					w.wakeup, w.wakeupID = parseScheduledWakeup(block.Input), block.ID
+				}
+			}
+		}
+	case event.Type == "user":
+		for _, block := range event.Message.Content {
+			if block.Type == "tool_result" && block.IsError && w.wakeupID != "" && block.ToolUseID == w.wakeupID {
+				w.wakeup, w.wakeupID = nil, ""
 			}
 		}
 	case event.Type == "result" && event.IsError:
@@ -2193,6 +2210,17 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 	}
 	_, err := fmt.Fprintln(w.output, strings.Join(texts, "\n"))
 	return err
+}
+
+// PendingWakeup reports the ScheduleWakeup the agent left pending when its
+// stream ended, if any.
+func (w *claudeJSONOutputWriter) PendingWakeup() (scheduledWakeup, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.wakeup == nil {
+		return scheduledWakeup{}, false
+	}
+	return *w.wakeup, true
 }
 
 // claudeToolUseDetailKeys are the tool input fields that carry enough context
@@ -2456,6 +2484,16 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	}
 	if metadataOutput != nil {
 		metadataOutput.Flush()
+	}
+	if runErr == nil {
+		// In print mode the process exits when the turn ends, so a wakeup the
+		// agent scheduled would never fire. It is handed to the run loop
+		// instead, which waits it out and resumes the session (issue #671).
+		if reporter, ok := decoder.(wakeupReporter); ok {
+			if wakeup, pending := reporter.PendingWakeup(); pending {
+				return &wakeup, false
+			}
+		}
 	}
 	if runErr != nil {
 		if detector != nil && detector.sessionMissing() {

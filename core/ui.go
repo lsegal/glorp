@@ -26,6 +26,10 @@ type JobSnapshot struct {
 	Effort            string
 	Started           time.Time
 	Log               string
+	// WaitReason and WakeAt describe a job whose agent scheduled a wakeup and
+	// is waiting for it, with Status "waiting" (issue #671).
+	WaitReason string
+	WakeAt     time.Time
 }
 
 // Snapshot is the whole run as the dashboards draw it. The terminal dashboard
