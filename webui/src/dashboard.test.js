@@ -12,6 +12,7 @@ import {
 	formatInterval,
 	jobActionAvailability,
 	jobAgentSummary,
+	jobWaitLabel,
 	lastPollLabel,
 	modelGroupsFrom,
 	modelOptionsFrom,
@@ -93,6 +94,29 @@ describe("jobActionAvailability", () => {
 			retry: true,
 			stop: false,
 		});
+	});
+
+	it("lets a job waiting on a scheduled wakeup be stopped", () => {
+		expect(jobActionAvailability("waiting")).toEqual({
+			retry: true,
+			stop: true,
+		});
+	});
+});
+
+describe("jobWaitLabel", () => {
+	it("names the reason and the local time the job resumes", () => {
+		const wakeAt = new Date(2026, 8, 28, 15, 4, 5);
+		expect(
+			jobWaitLabel({
+				WaitReason: "CI is running",
+				WakeAt: wakeAt.toISOString(),
+			}),
+		).toBe("waiting: CI is running, resumes at 15:04:05");
+	});
+
+	it("leaves out what the snapshot does not carry", () => {
+		expect(jobWaitLabel({ WakeAt: "0001-01-01T00:00:00Z" })).toBe("waiting");
 	});
 });
 

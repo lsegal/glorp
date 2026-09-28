@@ -9,6 +9,7 @@ import {
 	Activity,
 	Check,
 	Circle,
+	Clock,
 	Cpu,
 	FolderGit2,
 	Radio,
@@ -24,6 +25,7 @@ import {
 	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
+	jobWaitLabel,
 	modelGroupsFrom,
 	modelOptionsFrom,
 	submitJobAction,
@@ -114,6 +116,8 @@ function JobIcon({ status }) {
 		return <X className="status-icon failed" aria-label="failed" />;
 	if (status === "active" || status === "stopping")
 		return <Activity className="status-icon active" aria-label="active" />;
+	if (status === "waiting")
+		return <Clock className="status-icon waiting" aria-label="waiting" />;
 	return <Circle className="status-icon queued" aria-label="queued" />;
 }
 
@@ -149,6 +153,11 @@ function JobCard({ job }) {
 			<div className="meta" title={jobAgentSummary(job)}>
 				<Cpu /> agent: {jobAgentSummary(job)}
 			</div>
+			{job.Status === "waiting" && (
+				<div className="meta" title={jobWaitLabel(job)}>
+					<Clock /> {jobWaitLabel(job)}
+				</div>
+			)}
 			<div className="job-viewport">
 				<div className="viewport-actions">
 					<button
