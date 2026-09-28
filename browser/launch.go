@@ -169,10 +169,17 @@ type process struct {
 	cmd   *exec.Cmd
 	port  int
 	wsURL string
-	// profile is the user-data directory the browser was launched against, so
-	// a page that turns out to have been read by a signed-out session can name
-	// the directory to sign in.
+	// profile is the profile the browser was launched for, so a page that
+	// turns out to have been read by a signed-out session can name the
+	// directory to sign in, and so the saved sign-in is kept in one place.
 	profile string
+	// dataDir is the --user-data-dir the browser actually runs in: profile
+	// itself when this instance holds it, or a private directory of its own
+	// when another glorp instance already does (issue #663).
+	dataDir string
+	// lock is this instance's claim on profile, nil when it runs in a private
+	// directory instead.
+	lock *profileLock
 	// supervisor is the one the process was started with, so Close stops it
 	// the same way.
 	supervisor Supervisor
@@ -194,24 +201,55 @@ func launch(ctx context.Context, config Config) (*process, error) {
 	if err := os.MkdirAll(profile, 0o700); err != nil {
 		return nil, fmt.Errorf("create browser profile directory %s: %w", profile, err)
 	}
-	port, err := freePort()
+	lock, dataDir, err := claimProfile(profile)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, binary, launchArgs(profile, port, config.Headed)...)
+	proc := &process{profile: profile, dataDir: dataDir, lock: lock}
+	port, err := freePort()
+	if err != nil {
+		proc.release()
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, binary, launchArgs(dataDir, port, config.Headed)...)
 	// The browser writes a steady stream of diagnostics to standard error that
 	// would otherwise be painted over glorp's terminal UI.
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	supervisor := config.supervisor()
 	if err := supervisor.Start(cmd); err != nil {
+		proc.release()
 		return nil, fmt.Errorf("start browser (%s): %w", binary, err)
 	}
+	proc.cmd, proc.port, proc.supervisor = cmd, port, supervisor
 	wsURL, err := waitForReady(ctx, debugURL(port), readyTimeout)
 	if err != nil {
-		_ = supervisor.Stop(cmd)
+		_ = proc.stop()
 		return nil, err
 	}
-	return &process{cmd: cmd, port: port, wsURL: wsURL, profile: profile, supervisor: supervisor}, nil
+	proc.wsURL = wsURL
+	return proc, nil
+}
+
+// stop terminates the browser and then gives up whatever it was run in.
+func (p *process) stop() error {
+	var err error
+	if p.cmd != nil {
+		err = p.supervisor.Stop(p.cmd)
+	}
+	p.release()
+	return err
+}
+
+// release gives up the profile claim, or removes the private directory the
+// browser ran in instead. It runs once the browser is stopped, because a
+// running browser still holds the directory.
+func (p *process) release() {
+	p.lock.release()
+	p.lock = nil
+	if p.dataDir != "" && p.dataDir != p.profile {
+		_ = os.RemoveAll(p.dataDir)
+	}
+	p.dataDir = ""
 }
 
 // versionInfo is the part of the DevTools /json/version response glorp

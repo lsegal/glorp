@@ -397,7 +397,7 @@ func (b *Browser) Close() error {
 	if b.cmd == nil {
 		return nil
 	}
-	return b.cmd.supervisor.Stop(b.cmd.cmd)
+	return b.cmd.stop()
 }
 
 // Tab is one reusable tab. Its methods serialize on the tab because a
