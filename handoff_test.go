@@ -1151,3 +1151,32 @@ func TestStandDownForStandingClaimsReadsThePullRequestContinuingTheWork(t *testi
 		t.Fatalf("result = %+v, want the pickup dropped for the claim standing on its open pull request", result)
 	}
 }
+
+// The nudge a won handshake sends is what makes the Run loop poll again, and
+// that poll is the only one before the next tick. It must find the handshake
+// already finished: a poll that still sees it in flight drops the issue as
+// "being negotiated", and with nothing left to nudge the loop the reclaimed
+// work waits out the whole tick (issue #673). Nothing here waits for the
+// background goroutine to exit; the nudge itself is the signal, exactly as the
+// Run loop receives it.
+func TestNegotiationNudgeFollowsHandshakeCompletion(t *testing.T) {
+	for attempt := 0; attempt < 200; attempt++ {
+		w := &Glorp{Comments: newFakeCommentClient(), Identity: "SELF", Out: io.Discard, ownershipWait: func(context.Context) bool { return true }}
+		pending := func() []pendingIssue {
+			return []pendingIssue{{issue: Issue{Number: 7, Repository: "o/r", Target: "o/r"}, contested: true}}
+		}
+		if result := w.negotiateContestedIssues(context.Background(), nil, pending(), map[string]bool{}, true); len(result) != 0 {
+			t.Fatalf("a contested issue should leave the batch while it negotiates, got %+v", result)
+		}
+		select {
+		case <-w.negotiatedNudges():
+		case <-time.After(5 * time.Second):
+			t.Fatal("a won handshake never nudged the poll loop")
+		}
+		if result := w.negotiateContestedIssues(context.Background(), nil, pending(), map[string]bool{}, false); len(result) != 1 {
+			w.awaitNegotiations()
+			t.Fatalf("attempt %d: the poll a won handshake nudged did not dispatch the issue, got %+v", attempt, result)
+		}
+		w.awaitNegotiations()
+	}
+}
