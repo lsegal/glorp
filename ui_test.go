@@ -1147,3 +1147,22 @@ func TestDashboardQuestionMarkTogglesHelp(t *testing.T) {
 		t.Fatal("? did not close the help overlay")
 	}
 }
+
+func TestDashboardShowsAWaitingJobsWakeup(t *testing.T) {
+	m := newDashboard(nil)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+		Number: 7, Title: "Fix the decoder", Status: "waiting", SessionID: "session-7",
+		WaitReason: "watching CI run", WakeAt: time.Now().Add(3*time.Minute + 30*time.Second),
+	}}}))
+	view := ansi.Strip(updated.(dashboard).View())
+	t.Log("\n" + view)
+	for _, want := range []string{"⏸ #7", "waiting: watching CI run, resumes in 4m"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("waiting job view does not contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "✓") {
+		t.Fatalf("a waiting job was drawn as complete:\n%s", view)
+	}
+}
