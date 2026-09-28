@@ -36,7 +36,7 @@ func TestStartWebUIWiresHandlersBeforeServing(t *testing.T) {
 	}
 	freePort := probe.Addr().(*net.TCPAddr).Port
 	probe.Close()
-	listener, port, err := webui.Listen(freePort)
+	listener, port, err := webui.Listen(webui.DefaultBind, freePort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestStartWebUIWiresHandlersBeforeServing(t *testing.T) {
 	}
 	server := &http.Server{Handler: ui}
 	defer server.Close()
-	startWebUI(ui, server, listener, port, io.Discard,
+	startWebUI(ui, server, listener, webui.DefaultBind, port, io.Discard,
 		func(context.Context, core.JobAction) error { return nil },
 		func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error) {
 			return core.SettingsSnapshot{Concurrency: 3}, nil
@@ -1107,5 +1107,24 @@ func TestRemoteControlInertNoticeWarnsWhenOptedIn(t *testing.T) {
 	}
 	if got := remoteControlInertNotice(false); got != "" {
 		t.Errorf("notice = %q, want no notice when remote control is off", got)
+	}
+}
+
+// TestExposedWebUINoticeWarnsOffLoopback checks that --bind warns when it
+// makes the unauthenticated dashboard reachable from other machines (issue
+// #666), and stays quiet for the loopback default.
+func TestExposedWebUINoticeWarnsOffLoopback(t *testing.T) {
+	for _, bind := range []string{webui.DefaultBind, "localhost", "::1"} {
+		if notice := exposedWebUINotice(bind); notice != "" {
+			t.Fatalf("exposedWebUINotice(%q) = %q, want no warning", bind, notice)
+		}
+	}
+	for bind, want := range map[string]string{"0.0.0.0": "0.0.0.0", "": "all interfaces", "192.168.1.5": "192.168.1.5"} {
+		if notice := exposedWebUINotice(bind); !strings.Contains(notice, want) || !strings.Contains(notice, "no authentication") {
+			t.Fatalf("exposedWebUINotice(%q) = %q, want a warning naming %s", bind, notice, want)
+		}
+	}
+	if got := commandFlags("watch").Lookup("bind"); got == nil || got.DefValue != webui.DefaultBind {
+		t.Fatalf("watch --bind = %+v, want default %s", got, webui.DefaultBind)
 	}
 }

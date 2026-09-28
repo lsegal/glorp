@@ -24,7 +24,7 @@ func TestListenUsesNextAvailablePort(t *testing.T) {
 	defer occupied.Close()
 	start := occupied.Addr().(*net.TCPAddr).Port
 
-	listener, port, err := Listen(start)
+	listener, port, err := Listen(DefaultBind, start)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +35,49 @@ func TestListenUsesNextAvailablePort(t *testing.T) {
 }
 
 func TestListenRejectsInvalidPort(t *testing.T) {
-	if _, _, err := Listen(0); err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
+	if _, _, err := Listen(DefaultBind, 0); err == nil || !strings.Contains(err.Error(), "between 1 and 65535") {
 		t.Fatalf("error = %v, want port range error", err)
+	}
+}
+
+func TestListenBindsRequestedHost(t *testing.T) {
+	for bind, wantLoopback := range map[string]bool{"0.0.0.0": false, DefaultBind: true} {
+		listener, _, err := Listen(bind, DefaultPort)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ip := listener.Addr().(*net.TCPAddr).IP
+		listener.Close()
+		if ip.IsLoopback() != wantLoopback || (!wantLoopback && !ip.IsUnspecified()) {
+			t.Fatalf("Listen(%q) bound %v", bind, ip)
+		}
+	}
+}
+
+func TestListenRejectsBindWithPort(t *testing.T) {
+	if _, _, err := Listen("0.0.0.0:80", DefaultPort); err == nil || !strings.Contains(err.Error(), "without a port") {
+		t.Fatalf("error = %v, want bind-with-port error", err)
+	}
+	for _, bind := range []string{"", "::", "[::1]", "localhost", "0.0.0.0"} {
+		if err := ValidateBind(bind); err != nil {
+			t.Fatalf("ValidateBind(%q) = %v, want accepted", bind, err)
+		}
+	}
+}
+
+func TestURLNamesReachableHost(t *testing.T) {
+	for bind, want := range map[string]string{
+		"127.0.0.1":   "http://localhost:8765",
+		"localhost":   "http://localhost:8765",
+		"0.0.0.0":     "http://localhost:8765",
+		"::":          "http://localhost:8765",
+		"":            "http://localhost:8765",
+		"192.168.1.5": "http://192.168.1.5:8765",
+		"fd00::1":     "http://[fd00::1]:8765",
+	} {
+		if got := URL(bind, 8765); got != want {
+			t.Errorf("URL(%q) = %q, want %q", bind, got, want)
+		}
 	}
 }
 

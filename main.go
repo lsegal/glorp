@@ -54,6 +54,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.Bool("no-tui", false, "disable the interactive terminal UI")
 	flags.Bool("no-webui", false, "disable the browser dashboard")
 	flags.Int("web-ui-port", webui.DefaultPort, "starting port for the browser UI")
+	flags.String("bind", webui.DefaultBind, "address the browser UI listens on; 0.0.0.0 makes it reachable from other machines")
 	flags.Bool("yolo", false, "disable agent sandboxes and permission checks")
 	flags.Int("concurrency", 0, "maximum concurrent agents (0 means 3)")
 	flags.Var(agentSpecs, "agent", "agent to run as agent/model:level, such as codex, claude/opus, or codex/gpt-5.6:high (repeatable to load balance evenly across concurrency)")
@@ -138,6 +139,7 @@ func runWatch(args []string) (code int) {
 	noTui := flagValue[bool](flags, "no-tui")
 	noWebUI := flagValue[bool](flags, "no-webui")
 	webUIPort := flagValue[int](flags, "web-ui-port")
+	bind := strings.TrimSpace(flagValue[string](flags, "bind"))
 	yolo := flagValue[bool](flags, "yolo")
 	concurrency := flagValue[int](flags, "concurrency")
 	readyState := flagValue[string](flags, "ready-state")
@@ -182,6 +184,10 @@ func runWatch(args []string) (code int) {
 	}
 	if !noWebUI && (webUIPort < 1 || webUIPort > 65535) {
 		fmt.Fprintln(os.Stderr, "web-ui-port must be between 1 and 65535")
+		return 2
+	}
+	if err := webui.ValidateBind(bind); !noWebUI && err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 	limit := concurrency
@@ -265,7 +271,7 @@ func runWatch(args []string) (code int) {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		webListener, webPort, err = webui.Listen(webUIPort)
+		webListener, webPort, err = webui.Listen(bind, webUIPort)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -326,7 +332,7 @@ func runWatch(args []string) (code int) {
 	quota := combinedQuotaReader(namedQuotaReaders(registry, agentSpecs.names(), runner.binary))
 	webUIURL := ""
 	if webUI != nil {
-		webUIURL = fmt.Sprintf("http://localhost:%d", webPort)
+		webUIURL = webui.URL(bind, webPort)
 	}
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
 	w.noMerge.Store(noMerge)
@@ -343,7 +349,7 @@ func runWatch(args []string) (code int) {
 			return nil
 		}
 		restartHandler := newRestartHandler(&restartRequested, requestShutdown, w.logf)
-		startWebUI(webUI, webServer, webListener, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
+		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
 		ui.SetRefreshHandler(w.nudgePoll)
@@ -420,7 +426,7 @@ func runWatch(args []string) (code int) {
 // starts accepting connections: a request that lands in the gap sees the
 // handler as unset and gets a spurious "unavailable" response, which the
 // settings modal has no retry for and so is left stuck (issue #571).
-func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error), refreshHandler func(context.Context) error, restartHandler func(context.Context) error) {
+func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, bind string, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error), refreshHandler func(context.Context) error, restartHandler func(context.Context) error) {
 	webUI.SetJobActionHandler(jobActionHandler)
 	webUI.SetSettingsHandler(settingsHandler)
 	webUI.SetAgentsHandler(agentsHandler)
@@ -431,9 +437,27 @@ func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listen
 			fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)
 		}
 	}()
-	webURL := fmt.Sprintf("http://localhost:%d", port)
+	webURL := webui.URL(bind, port)
 	fmt.Fprintf(output, "web UI listening on %s\n", webURL)
 	webUI.Log("web UI listening on " + webURL)
+	if notice := exposedWebUINotice(bind); notice != "" {
+		fmt.Fprintln(output, notice)
+		webUI.Log(notice)
+	}
+}
+
+// exposedWebUINotice warns when --bind puts the dashboard within reach of
+// other machines (issue #666). The dashboard has no authentication, so anyone
+// who can reach it can stop jobs and change this instance's settings.
+func exposedWebUINotice(bind string) string {
+	if webui.IsLoopback(bind) {
+		return ""
+	}
+	address := bind
+	if address == "" {
+		address = "all interfaces"
+	}
+	return fmt.Sprintf("warning: web UI is bound to %s and has no authentication; anyone who can reach it can control this glorp instance", address)
 }
 
 // persistingSettingsHandler writes a dashboard settings change back to the

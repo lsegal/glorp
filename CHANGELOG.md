@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add a restart button to the web dashboard, beside the refresh and settings buttons, that stops the running `glorp watch` the same way Ctrl+C does and starts it again with the same command line, picking up a binary replaced by `glorp upgrade` (issue #665). Running agents are stopped and resumed by the new instance, and the dashboard reconnects to it on its own.
+- Add `glorp watch --bind ADDRESS`, so the browser dashboard can listen on an address other than `127.0.0.1`, such as `--bind 0.0.0.0` to reach it from other machines (issue #666). The dashboard has no authentication, so glorp warns at startup whenever it is bound off loopback.
 
 ## v1.5.2 - 2026-09-28
 
