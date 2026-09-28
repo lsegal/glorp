@@ -800,13 +800,20 @@ func (w *Glorp) negotiateContestedIssues(ctx context.Context, checker WorkClosur
 			w.logf("issue #%d negotiating ownership in the background; polling continues while it waits", issue.Number)
 			go func() {
 				defer w.negotiateWG.Done()
-				defer w.endNegotiation(key)
 				claimed, err := w.negotiateOwnership(ctx, target)
 				if err != nil {
+					w.endNegotiation(key)
 					w.logf("issue #%d ownership handoff failed: %v", issue.Number, err)
 					return
 				}
 				w.recordHandshake(target, claimed)
+				// The negotiation ends after its outcome is recorded, so no
+				// poll sees neither, but before the nudge goes out rather than
+				// in a deferred call after it. The nudged poll is the only one
+				// before the next tick, and while the key still reads as in
+				// flight that poll drops the issue as still being negotiated,
+				// leaving won work waiting out the whole interval (issue #673).
+				w.endNegotiation(key)
 				if claimed {
 					w.logf("issue #%d picked up after handoff; dispatching on the next poll", issue.Number)
 					w.nudgePoll()
