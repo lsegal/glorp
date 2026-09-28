@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -196,6 +197,77 @@ func TestServerRejectsUnsupportedRefreshMethod(t *testing.T) {
 	ui.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET refresh = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestServerHandlesRestart(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	ui.SetRestartHandler(func(context.Context) error {
+		called = true
+		return nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/restart", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("POST restart = %d, body = %q", response.Code, response.Body.String())
+	}
+	if !called {
+		t.Fatal("restart handler was not called")
+	}
+}
+
+func TestServerRejectsUnavailableRestart(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/restart", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST restart = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestServerReportsRestartErrors(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.SetRestartHandler(func(context.Context) error {
+		return core.ErrNotReady
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/restart", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST restart (not ready) = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	ui.SetRestartHandler(func(context.Context) error {
+		return errors.New("already restarting")
+	})
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/restart", nil))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "already restarting") {
+		t.Fatalf("POST restart (error) = %d %q, want %d", response.Code, response.Body.String(), http.StatusConflict)
+	}
+}
+
+func TestServerRejectsUnsupportedRestartMethod(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/restart", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET restart = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 	}
 }
 

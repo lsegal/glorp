@@ -52,6 +52,7 @@ func TestStartWebUIWiresHandlersBeforeServing(t *testing.T) {
 			return core.SettingsSnapshot{Concurrency: 3}, nil
 		},
 		func(context.Context) ([]core.AgentStatus, error) { return nil, nil },
+		func(context.Context) error { return nil },
 		func(context.Context) error { return nil })
 
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/settings", port))

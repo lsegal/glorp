@@ -86,6 +86,16 @@ export async function submitRefresh() {
 	}
 }
 
+// submitRestart asks the daemon to shut down and start again with the same
+// command line (issue #665). The dashboard shows "reconnecting" while it is
+// down and picks the new instance up on the same port once it is back.
+export async function submitRestart() {
+	const response = await fetch("/api/restart", { method: "POST" });
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+}
+
 export function parseAllowedCommenters(text) {
 	return text
 		.split(",")

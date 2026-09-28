@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a restart button to the web dashboard, beside the refresh and settings buttons, that stops the running `glorp watch` the same way Ctrl+C does and starts it again with the same command line, picking up a binary replaced by `glorp upgrade` (issue #665). Running agents are stopped and resumed by the new instance, and the dashboard reconnects to it on its own.
+
 ## v1.5.2 - 2026-09-28
 
 - Let several `glorp watch` instances run in browser poll mode at once, instead of every instance after the first failing with a "context deadline exceeded" error while waiting for its browser (issue #663). Chrome allows one process per profile directory, so a later instance's browser handed itself to the first one and exited; glorp now runs each later instance's browser in a private temporary directory while still sharing the profile's saved GitHub sign-in.

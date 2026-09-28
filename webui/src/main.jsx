@@ -1,6 +1,7 @@
 import {
 	ArrowPathIcon,
 	Cog6ToothIcon,
+	PowerIcon,
 	StopIcon,
 	XMarkIcon,
 } from "@heroicons/react/24/outline";
@@ -27,6 +28,7 @@ import {
 	modelOptionsFrom,
 	submitJobAction,
 	submitRefresh,
+	submitRestart,
 	submitSettings,
 	toggleActiveModel,
 } from "./dashboard";
@@ -509,6 +511,13 @@ function App() {
 	const [state, connected] = useDashboardState();
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
+	// restarting is "requested" until the daemon drops off, then "down" until
+	// it answers again, so the button stays busy through the whole restart.
+	const [restarting, setRestarting] = useState("");
+	useEffect(() => {
+		if (restarting === "requested" && !connected) setRestarting("down");
+		if (restarting === "down" && connected) setRestarting("");
+	}, [restarting, connected]);
 	const snapshot = state.snapshot || emptyState.snapshot;
 	const refresh = async () => {
 		setRefreshing(true);
@@ -518,6 +527,24 @@ function App() {
 			// The next poll interval still catches up; nothing to surface here.
 		} finally {
 			setRefreshing(false);
+		}
+	};
+	const restart = async () => {
+		if (
+			!window.confirm(
+				"Restart glorp? Running agents are stopped and resumed once it starts again.",
+			)
+		) {
+			return;
+		}
+		setRestarting("requested");
+		try {
+			await submitRestart();
+		} catch (error) {
+			// A dropped connection means the daemon is already going down.
+			if (error instanceof TypeError) return;
+			setRestarting("");
+			window.alert(`Could not restart glorp: ${error.message}`);
 		}
 	};
 	return (
@@ -540,6 +567,16 @@ function App() {
 						title="Repoll GitHub now"
 					>
 						<ArrowPathIcon className={refreshing ? "spinning" : ""} />
+					</button>
+					<button
+						type="button"
+						className="restart-button"
+						onClick={restart}
+						disabled={restarting !== ""}
+						aria-label="Restart glorp"
+						title={restarting ? "Restarting glorp..." : "Restart glorp"}
+					>
+						<PowerIcon className={restarting ? "pulsing" : ""} />
 					</button>
 					<button
 						type="button"
