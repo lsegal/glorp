@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `glorp watch --bind ADDRESS`, so the browser dashboard can listen on an address other than `127.0.0.1`, such as `--bind 0.0.0.0` to reach it from other machines (issue #666). The dashboard has no authentication, so glorp warns at startup whenever it is bound off loopback.
+
 ## v1.5.2 - 2026-09-28
 
 - Let several `glorp watch` instances run in browser poll mode at once, instead of every instance after the first failing with a "context deadline exceeded" error while waiting for its browser (issue #663). Chrome allows one process per profile directory, so a later instance's browser handed itself to the first one and exited; glorp now runs each later instance's browser in a private temporary directory while still sharing the profile's saved GitHub sign-in.
