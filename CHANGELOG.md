@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep a `claude` agent alive when it ends its turn on `ScheduleWakeup`, instead of showing the run as complete while it still waits on CI (issue #671). Claude runs in print mode under glorp, so its process exited and the wakeup never fired. glorp now shows the job as waiting, with the reason and when it resumes, in both dashboards, then resumes the same session with the agent's own wakeup prompt when the delay is up. Stopping the job ends the wait right away, a merged issue cancels it, and a run that schedules 48 wakeups in a row is stopped. `gh-fix` also tells a non-interactive agent to wait for CI in the foreground.
 - Make the web dashboard easier to use on a phone (issue #669). Job cards no longer spill past their edge on narrow screens, which had hidden their Retry and Stop buttons; those buttons now sit above the log with finger-sized targets. The header wraps instead of squeezing the title, the header and settings buttons are larger, and the settings fields no longer make mobile Safari zoom in.
 
 ## v1.5.3 - 2026-09-28

@@ -376,3 +376,16 @@ func TestGhFixSiteDescribesManualVerificationComments(t *testing.T) {
 		t.Error("gh-fix site page does not describe manual verification comments")
 	}
 }
+
+func TestGhFixWaitsForCIInTheForegroundWhenNonInteractive(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"When running non-interactively",
+		"block on the watch in the foreground",
+		"never end the turn waiting on a background task, a monitor, or a scheduled wakeup",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not require foreground CI waits (issue #671): missing %q", required)
+		}
+	}
+}
