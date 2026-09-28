@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let several `glorp watch` instances run in browser poll mode at once, instead of every instance after the first failing with a "context deadline exceeded" error while waiting for its browser (issue #663). Chrome allows one process per profile directory, so a later instance's browser handed itself to the first one and exited; glorp now runs each later instance's browser in a private temporary directory while still sharing the profile's saved GitHub sign-in.
+
 ## v1.5.1 - 2026-09-26
 
 - Stop `gh-fix` from filing follow-up issues for verification that only a person can do, such as testing in a third-party desktop app, on physical hardware, or with real accounts or devices (issue #661). Glorp dispatched those issues to agent slots that could never close them. `gh-fix` now posts them as one `Manual verification` checklist comment on the pull request, or on the issue when no pull request exists, and files only the automatable part of a mixed item. Split issues get no sub-issue for a manual-only part, and a held pull request's completion comment lists manual checks under their own heading.
