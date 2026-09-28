@@ -94,7 +94,7 @@ func commandFlags(name string) *flag.FlagSet {
 	return nil
 }
 
-func runWatch(args []string) int {
+func runWatch(args []string) (code int) {
 	// Agent definitions are loaded before the flags are parsed, because
 	// --agent is validated against them as it is read and the flag package
 	// hands values over in the order they were written.
@@ -198,8 +198,27 @@ func runWatch(args []string) int {
 	if agentSpecs.values[0].Name == "claude" {
 		binary = claudeBinary
 	}
+	// The web dashboard's restart button (issue #665) shuts the run down like
+	// Ctrl+C and sets restartRequested. This is deferred first so it runs
+	// last, after every other deferred cleanup has closed the dashboard port,
+	// browser, and subprocesses the relaunched instance takes over.
+	var restartRequested atomic.Bool
+	var uiDone chan struct{}
+	defer func() {
+		if !restartRequested.Load() || code != 0 {
+			return
+		}
+		if uiDone != nil {
+			// Let the terminal dashboard restore the screen before the new
+			// instance draws its own.
+			<-uiDone
+		}
+		code = relaunch(os.Stderr)
+	}()
 	ctx, stop := process.ShutdownContext()
 	defer stop()
+	ctx, requestShutdown := context.WithCancel(ctx)
+	defer requestShutdown()
 	// Nothing glorp started may outlive it, so sweep up any subprocess whose own
 	// cleanup did not run before the daemon returns (issue #260).
 	defer process.ReapAll()
@@ -235,7 +254,11 @@ func runWatch(args []string) int {
 	if shouldUseTerminalUI(noTui, os.Stdout) {
 		ui = NewTerminalUI()
 		output = ui.Writer()
-		go func() { _ = ui.Run(ctx) }()
+		uiDone = make(chan struct{})
+		go func() {
+			defer close(uiDone)
+			_ = ui.Run(ctx)
+		}()
 	}
 	var webUI *webui.Server
 	var webServer *http.Server
@@ -325,7 +348,8 @@ func runWatch(args []string) int {
 			w.nudgePoll()
 			return nil
 		}
-		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler)
+		restartHandler := newRestartHandler(&restartRequested, requestShutdown, w.logf)
+		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
 		ui.SetRefreshHandler(w.nudgePoll)
@@ -402,11 +426,12 @@ func runWatch(args []string) int {
 // starts accepting connections: a request that lands in the gap sees the
 // handler as unset and gets a spurious "unavailable" response, which the
 // settings modal has no retry for and so is left stuck (issue #571).
-func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, bind string, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error), refreshHandler func(context.Context) error) {
+func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, bind string, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error), refreshHandler func(context.Context) error, restartHandler func(context.Context) error) {
 	webUI.SetJobActionHandler(jobActionHandler)
 	webUI.SetSettingsHandler(settingsHandler)
 	webUI.SetAgentsHandler(agentsHandler)
 	webUI.SetRefreshHandler(refreshHandler)
+	webUI.SetRestartHandler(restartHandler)
 	go func() {
 		if err := webServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "web UI server: %v\n", err)

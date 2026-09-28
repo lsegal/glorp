@@ -48,6 +48,7 @@ type Server struct {
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 	agents   func(context.Context) ([]core.AgentStatus, error)
 	refresh  func(context.Context) error
+	restart  func(context.Context) error
 	// agentStatuses is the most recent completed probe. Probing starts as soon
 	// as the handler is wired, rather than making the first settings modal wait
 	// for every installed CLI to answer (issue #595).
@@ -83,6 +84,15 @@ func (ui *Server) SetSettingsHandler(handler func(context.Context, core.Settings
 func (ui *Server) SetRefreshHandler(handler func(context.Context) error) {
 	ui.mu.Lock()
 	ui.refresh = handler
+	ui.mu.Unlock()
+}
+
+// SetRestartHandler wires the dashboard's restart button (issue #665) to a
+// function that shuts the running instance down and starts it again with the
+// same command line.
+func (ui *Server) SetRestartHandler(handler func(context.Context) error) {
+	ui.mu.Lock()
+	ui.restart = handler
 	ui.mu.Unlock()
 }
 
@@ -146,6 +156,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/refresh" {
 		ui.serveRefresh(w, r)
+		return
+	}
+	if r.URL.Path == "/api/restart" {
+		ui.serveRestart(w, r)
 		return
 	}
 	if r.URL.Path == "/api/settings" {
@@ -212,6 +226,33 @@ func (ui *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 	if err := handler(r.Context()); err != nil {
 		if errors.Is(err, core.ErrNotReady) {
 			http.Error(w, "refresh unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// serveRestart backs the dashboard's restart button (issue #665). Like
+// refresh it carries no request body. The handler only asks the instance to
+// restart; the shutdown itself happens after this response is written, so the
+// browser learns the request was accepted before the server goes away.
+func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ui.mu.RLock()
+	handler := ui.restart
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "restart unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := handler(r.Context()); err != nil {
+		if errors.Is(err, core.ErrNotReady) {
+			http.Error(w, "restart unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)

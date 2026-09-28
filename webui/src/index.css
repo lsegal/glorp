@@ -67,7 +67,8 @@ h1 .version {
 	gap: 10px;
 }
 .settings-button,
-.refresh-button {
+.refresh-button,
+.restart-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -80,21 +81,32 @@ h1 .version {
 	cursor: pointer;
 }
 .settings-button:hover,
-.refresh-button:hover:not(:disabled) {
+.refresh-button:hover:not(:disabled),
+.restart-button:hover:not(:disabled) {
 	color: #fafafa;
 	background: #27272a;
 }
-.refresh-button:disabled {
+.refresh-button:disabled,
+.restart-button:disabled {
 	cursor: default;
 	opacity: 0.7;
 }
 .settings-button svg,
-.refresh-button svg {
+.refresh-button svg,
+.restart-button svg {
 	width: 17px;
 	height: 17px;
 }
 .refresh-button svg.spinning {
 	animation: spin 0.8s linear infinite;
+}
+.restart-button svg.pulsing {
+	animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+	50% {
+		opacity: 0.3;
+	}
 }
 @keyframes spin {
 	from {

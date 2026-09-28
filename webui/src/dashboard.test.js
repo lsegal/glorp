@@ -19,6 +19,7 @@ import {
 	probedModelsByAgent,
 	submitJobAction,
 	submitRefresh,
+	submitRestart,
 	submitSettings,
 	toggleActiveModel,
 } from "./dashboard";
@@ -137,6 +138,26 @@ describe("submitJobAction", () => {
 				number: 302,
 			}),
 		});
+	});
+});
+
+describe("submitRestart", () => {
+	it("posts to /api/restart", async () => {
+		const fetch = vi.fn().mockResolvedValue({ ok: true });
+		vi.stubGlobal("fetch", fetch);
+		await submitRestart();
+		expect(fetch).toHaveBeenCalledWith("/api/restart", { method: "POST" });
+	});
+
+	it("throws with the response body when the request fails", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			text: () => Promise.resolve("glorp is already restarting"),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitRestart()).rejects.toThrow(
+			"glorp is already restarting",
+		);
 	});
 });
 
