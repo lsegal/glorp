@@ -61,6 +61,45 @@ func TestGhFixCheckpointCommitsSkipCI(t *testing.T) {
 	}
 }
 
+// GitHub honors a skip marker anywhere in a commit message, and a squash merge
+// copies the pull request's title and body into the default-branch commit. The
+// skill must keep every literal marker out of the commits and text that reach
+// the checked head and main, and must not merge a head that CI never ran on.
+func TestGhFixKeepsSkipMarkersOutOfFinalCommitsAndPRText(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(".agents", "skills", "gh-fix", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read gh-fix skill: %v", err)
+	}
+	var guidance, merge string
+	for _, l := range strings.Split(string(data), "\n") {
+		if strings.Contains(l, "Never write a literal skip marker") {
+			guidance = l
+		}
+		if strings.Contains(l, "Before merging, fetch the latest PR state") {
+			merge = l
+		}
+	}
+	if guidance == "" {
+		t.Fatal("gh-fix skill must forbid literal skip markers in final commits and pull request text")
+	}
+	for _, want := range []string{
+		"`[skip ci]`", "`[ci skip]`", "`[no ci]`", "`[skip actions]`", "`[actions skip]`", "`skip-checks: true`",
+		"final implementation commit", "CI repair commits", "PR title", "PR body", "Describe the marker in words",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Errorf("skip marker guidance must mention %s, got: %s", want, guidance)
+		}
+	}
+	if merge == "" {
+		t.Fatal("gh-fix skill no longer documents the pre-merge checks")
+	}
+	for _, want := range []string{"CI run actually registered for the head SHA", "stays empty for the head SHA is not passing"} {
+		if !strings.Contains(merge, want) {
+			t.Errorf("pre-merge checks must say %q, got: %s", want, merge)
+		}
+	}
+}
+
 // Push-triggered workflows must honor the [skip ci] marker instead of building
 // commits that explicitly opt out.
 func TestPushWorkflowsHonorSkipCI(t *testing.T) {
