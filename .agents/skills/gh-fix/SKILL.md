@@ -70,7 +70,7 @@ The cleanup must be unconditional: use a deferred/finally-style cleanup guard as
 
 Immediately after creating the branch, publish it and open a draft pull request so progress is visible throughout development. Skip this section entirely when resuming an existing draft PR per "Resume existing work" above — it already has an open PR.
 
-1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER> [skip ci]`, then push the new branch with upstream tracking. The `[skip ci]` marker keeps CI from running on a tree identical to the default branch; never add it to any later commit. Never force-push.
+1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER> [skip ci]`, then push the new branch with upstream tracking. The `[skip ci]` marker keeps CI from running on a tree identical to the default branch; only this commit and the checkpoint commits described under "Implement the fix" carry it. Never force-push.
 2. Open a draft PR against the current default branch, or against the blocker's head branch when stacking, with a concise title describing the intended fix.
 3. Write a real Markdown body that summarizes the issue and planned work. Build the exact multiline Markdown in a file or on standard input and pass it with `gh pr create --body-file` (or the equivalent `gh pr edit --body-file`); never put literal `\n` escape sequences in a `--body` argument to represent paragraph breaks. Include `Closes #<ISSUENUMBER>` on its own line so the draft links to and will close the original issue when merged, then read the created PR body back and verify it contains actual line breaks rather than literal `\n` text.
 4. End the body with a `**Agents:**` footer line naming the current agent CLI and model handling the issue (for example `**Agents:** claude-code (claude-sonnet-5)`), identified from your own runtime context. This is the contributing-agents footer described below.
@@ -91,7 +91,7 @@ Every time you write or replace the PR body (draft creation, checkpoint updates,
 2. Inspect the relevant code and history, then implement the smallest complete fix consistent with repository conventions.
 3. Add or update focused tests that would fail without the fix when the repository has a relevant test framework.
 4. Locate the existing changelog case-insensitively, including project-specific paths and names. Add a concise user-facing note under its current unreleased section and follow its formatting. If the project has no changelog, do not create one — skip this step entirely and note in the PR body that no changelog entry was added because the project has none. Only add changelog entries for user-visible changes; do not add internal-only notes. Do not add entry for a fix of another unreleased changelog entry. Skip this step entirely, adding no changelog entry at all, when a no-changelog directive is in effect: the `and no changelog` dispatch advice from validation, or wording anywhere in the issue body or its comments — including a `@/glorp:<ID>` instruction addressed to this run — asking that the changelog be skipped, left alone, or ignored for this fix. Note in the PR body that the changelog was intentionally skipped and why.
-5. During active development, create and push a checkpoint commit at least once every five minutes when the working tree has changes. Use a message such as `Checkpoint issue #<ISSUENUMBER> progress`; do not wait for implementation or tests to finish before publishing the next checkpoint to the draft PR. Never include secrets, generated build artifacts, or unrelated changes. If there are no changes at the checkpoint, skip the empty commit and check again after the next development interval.
+5. During active development, create and push a checkpoint commit at least once every five minutes when the working tree has changes. Use a message such as `Checkpoint issue #<ISSUENUMBER> progress [skip ci]`, keeping the `[skip ci]` marker so unfinished work does not burn a CI run; do not wait for implementation or tests to finish before publishing the next checkpoint to the draft PR. Never include secrets, generated build artifacts, or unrelated changes. If there are no changes at the checkpoint, skip the empty commit and check again after the next development interval.
 6. Run focused tests first, then the repository's broader required checks. Resolve failures caused by the change. Do not mark a known-broken fix ready for review.
 7. Review status and the complete diff. Include only files needed for the issue, its tests, and changelog note.
 
@@ -123,7 +123,7 @@ Skip if you run into 2+ errors trying to capture or upload results and mention t
 
 ## Commit and push
 
-After local checks pass, create a final implementation commit with a concise imperative subject and put the closing keyword on its own line in the body. If the latest checkpoint already contains every final change, use an empty commit so the checked implementation still has this unambiguous closing commit:
+After local checks pass, create a final implementation commit, never marked `[skip ci]`, with a concise imperative subject and put the closing keyword on its own line in the body. If the latest checkpoint already contains every final change, use an empty commit so the checked implementation still has this unambiguous closing commit:
 
 ```text
 Fix <concise issue summary>
@@ -150,7 +150,7 @@ Continue until every required check completes successfully:
 3. When a GitHub Actions check fails, inspect the exact run and failing job logs with `gh pr checks`, `gh run view`, and job-log APIs as necessary. Record the check name, run URL, failing command, and useful error context before changing code.
 4. For external checks, follow the check URL and use the provider's available logs or tooling. If the logs are inaccessible, report the access blocker rather than guessing.
 5. Classify each failure:
-   - For a failure caused by the PR, reproduce it locally when practical, implement the smallest correct repair, run relevant local checks, commit the repair, and push normally.
+   - For a failure caused by the PR, reproduce it locally when practical, implement the smallest correct repair, run relevant local checks, commit the repair without a `[skip ci]` marker, and push normally.
    - For a merge conflict, update the branch from the latest default branch without force, resolve it, rerun affected checks, commit, and push. For a stacked pull request, update it from the blocker's branch as "Stack on an open blocking issue" describes instead.
    - For a clearly transient infrastructure or flaky-test failure, rerun the failed job once, then investigate if it repeats.
    - For a clearly unrelated persistent failure, gather diagnostic details and attempt an in-scope repair only when doing so is safe. Otherwise stop at the genuine external blocker.
