@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.5 - 2026-10-02
+
 - Mark the `gh-fix` skill's `Checkpoint issue #N progress` commits with `[skip ci]`, like its initial commit, so publishing unfinished work to the draft pull request no longer starts a CI run in repositories that build branch pushes or draft pull requests (issue #675). The final implementation commit and CI repairs stay unmarked so the pull request's head is still checked.
 
 ## v1.5.4 - 2026-09-28
