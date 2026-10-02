@@ -30,6 +30,37 @@ func TestGhFixInitialCommitSkipsCI(t *testing.T) {
 	}
 }
 
+// Checkpoint commits publish unfinished work to the draft pull request, so they
+// carry [skip ci] too; the final implementation commit must not, or the checked
+// head SHA would never get a CI verdict.
+func TestGhFixCheckpointCommitsSkipCI(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(".agents", "skills", "gh-fix", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read gh-fix skill: %v", err)
+	}
+	var checkpoint, final string
+	for _, l := range strings.Split(string(data), "\n") {
+		if strings.Contains(l, "create and push a checkpoint commit") {
+			checkpoint = l
+		}
+		if strings.Contains(l, "create a final implementation commit") {
+			final = l
+		}
+	}
+	if checkpoint == "" {
+		t.Fatal("gh-fix skill no longer documents checkpoint commits")
+	}
+	if !strings.Contains(checkpoint, "Checkpoint issue #<ISSUENUMBER> progress [skip ci]") {
+		t.Errorf("checkpoint commit message must carry the [skip ci] marker, got: %s", checkpoint)
+	}
+	if final == "" {
+		t.Fatal("gh-fix skill no longer documents the final implementation commit")
+	}
+	if !strings.Contains(final, "never marked `[skip ci]`") {
+		t.Errorf("final implementation commit must be kept free of [skip ci], got: %s", final)
+	}
+}
+
 // Push-triggered workflows must honor the [skip ci] marker instead of building
 // commits that explicitly opt out.
 func TestPushWorkflowsHonorSkipCI(t *testing.T) {
