@@ -3,30 +3,70 @@
 package webui
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 )
 
+// viteStartTimeout bounds how long the test waits for Vite to answer. A cold
+// start on a slow CI runner, notably Windows, can take well over ten seconds.
+const viteStartTimeout = 2 * time.Minute
+
 // execSupervisor runs the dev server directly, standing in for glorp's tracked
-// child-process helpers, which live in the root package.
-type execSupervisor struct{}
+// child-process helpers, which live in the root package. It reports when the
+// started process exits, so the test can stop waiting on a server that died.
+type execSupervisor struct {
+	exited chan struct{}
+	err    error
+}
 
-func (execSupervisor) Start(cmd *exec.Cmd) error { return cmd.Start() }
+func newExecSupervisor() *execSupervisor {
+	return &execSupervisor{exited: make(chan struct{})}
+}
 
-func (execSupervisor) Run(cmd *exec.Cmd) error { return cmd.Run() }
+func (s *execSupervisor) Start(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() {
+		s.err = cmd.Wait()
+		close(s.exited)
+	}()
+	return nil
+}
 
-func (execSupervisor) Stop(cmd *exec.Cmd) error {
+func (*execSupervisor) Run(cmd *exec.Cmd) error { return cmd.Run() }
+
+func (s *execSupervisor) Stop(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
 	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
+	<-s.exited
 	return nil
+}
+
+// syncBuffer collects the dev server's output from its stdout and stderr.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func TestFrontendStartsViteInDevelopment(t *testing.T) {
@@ -44,22 +84,32 @@ func TestFrontendStartsViteInDevelopment(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stop, err := StartFrontend(ctx, io.Discard, execSupervisor{})
+	output := &syncBuffer{}
+	supervisor := newExecSupervisor()
+	stop, err := StartFrontend(ctx, output, supervisor)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("start frontend: %v\n%s", err, output)
 	}
 	defer stop()
 
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		response, err := http.Get(viteDevURL)
+	client := &http.Client{Timeout: 5 * time.Second}
+	deadline := time.After(viteStartTimeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		response, err := client.Get(viteDevURL)
 		if err == nil {
 			response.Body.Close()
 			if response.StatusCode == http.StatusOK {
 				return
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-supervisor.exited:
+			t.Fatalf("Vite exited before answering at %s: %v\n%s", viteDevURL, supervisor.err, output)
+		case <-deadline:
+			t.Fatalf("Vite did not answer at %s within %s\n%s", viteDevURL, viteStartTimeout, output)
+		case <-ticker.C:
+		}
 	}
-	t.Fatalf("Vite did not start at %s", viteDevURL)
 }
