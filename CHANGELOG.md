@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop the `gh-fix` skill from skipping CI by quoting a skip marker such as `[skip ci]` in its final commit, CI repair commits, pull request title, or pull request body (issue #677). GitHub honors the marker anywhere in a commit message, and a squash merge copies the title and body onto the default branch, so a fix that mentioned the marker merged with no CI run on the pull request or on the default branch. `gh-fix` now describes the marker in words instead, and will not merge until a CI run has registered for the pull request's head commit.
+
 ## v1.5.5 - 2026-10-02
 
 - Mark the `gh-fix` skill's `Checkpoint issue #N progress` commits with `[skip ci]`, like its initial commit, so publishing unfinished work to the draft pull request no longer starts a CI run in repositories that build branch pushes or draft pull requests (issue #675). The final implementation commit and CI repairs stay unmarked so the pull request's head is still checked.

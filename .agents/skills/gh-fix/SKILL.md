@@ -133,11 +133,13 @@ Closes #<ISSUENUMBER>
 
 For example, `git commit -m "Fix parser handling of empty input" -m "Closes #123"` creates the required separate body line. Use exactly the target issue number and capitalize `Closes` as shown.
 
-Before the final push, verify that the branch contains the intended code, tests, and changelog note; the final implementation commit contains a standalone `Closes #<ISSUENUMBER>` line; the working tree is clean; and local checks passed. Push normally. Never force-push.
+GitHub skips CI for a commit whose message contains a skip marker anywhere, including the subject, and a squash merge copies the PR title and body into the commit on the default branch. Never write a literal skip marker GitHub recognizes (`[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]`, or a `skip-checks: true` trailer) in the final implementation commit, CI repair commits, the PR title, or the PR body, even when the change is about those markers. Describe the marker in words instead, such as "the skip-CI marker".
+
+Before the final push, verify that the branch contains the intended code, tests, and changelog note; the final implementation commit contains a standalone `Closes #<ISSUENUMBER>` line and no skip marker; the working tree is clean; and local checks passed. Push normally. Never force-push.
 
 ## Mark the pull request ready
 
-1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings. Preserve `Closes #<ISSUENUMBER>` on its own line and update the `**Agents:**` footer as described above rather than dropping or overwriting it.
+1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings. Preserve `Closes #<ISSUENUMBER>` on its own line and update the `**Agents:**` footer as described above rather than dropping or overwriting it. Keep every literal skip marker listed under "Commit and push" out of the title and body.
 2. Confirm the head branch, base branch, and changed-file scope are correct. A stacked pull request's changed files must only be this issue's changes on top of the blocker's branch.
 3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI screenshots or screen recordings are complete.
 
@@ -150,7 +152,7 @@ Continue until every required check completes successfully:
 3. When a GitHub Actions check fails, inspect the exact run and failing job logs with `gh pr checks`, `gh run view`, and job-log APIs as necessary. Record the check name, run URL, failing command, and useful error context before changing code.
 4. For external checks, follow the check URL and use the provider's available logs or tooling. If the logs are inaccessible, report the access blocker rather than guessing.
 5. Classify each failure:
-   - For a failure caused by the PR, reproduce it locally when practical, implement the smallest correct repair, run relevant local checks, commit the repair without a `[skip ci]` marker, and push normally.
+   - For a failure caused by the PR, reproduce it locally when practical, implement the smallest correct repair, run relevant local checks, commit the repair without any skip marker listed under "Commit and push", and push normally.
    - For a merge conflict, update the branch from the latest default branch without force, resolve it, rerun affected checks, commit, and push. For a stacked pull request, update it from the blocker's branch as "Stack on an open blocking issue" describes instead.
    - For a clearly transient infrastructure or flaky-test failure, rerun the failed job once, then investigate if it repeats.
    - For a clearly unrelated persistent failure, gather diagnostic details and attempt an in-scope repair only when doing so is safe. Otherwise stop at the genuine external blocker.
@@ -171,7 +173,7 @@ When validation recorded a do-not-merge directive, the run ends with a ready, un
 
 Skip this section entirely when the issue withheld merge authorization; follow "Hold the pull request when merging is withheld" instead.
 
-1. Before merging, fetch the latest PR state and confirm its base is the default branch (a stacked pull request waits for its blocker to merge first), all required checks are successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI screenshots or screen recordings are present, and the head SHA is the one that passed CI.
+1. Before merging, fetch the latest PR state and confirm its base is the default branch (a stacked pull request waits for its blocker to merge first), at least one CI run actually registered for the head SHA and every required check on it is successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI screenshots or screen recordings are present, and the head SHA is the one that passed CI. A check list that stays empty for the head SHA is not passing: when the repository has CI, check the head commit message and the PR title and body for a skip marker, remove it, and push a new commit so CI runs before merging.
 2. Merge using the repository's required or established merge method. When the repository allows more than one method, prefer them in this order: squash, then merge, then rebase. When squashing, use the PR's title and body as the squash commit message rather than overriding it — the body already carries the standalone `Closes #<ISSUENUMBER>` line. If only merge or only rebase is available, use that method instead, keeping the standalone closing reference intact regardless of method.
 3. Delete the remote issue branch after a successful merge when repository policy permits.
 4. Verify the PR is merged, the merged commit is reachable from the remote default branch, and GitHub closed issue `#<ISSUENUMBER>`. Allow for a brief GitHub processing delay, but do not claim closure without checking.
