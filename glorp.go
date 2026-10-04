@@ -1270,7 +1270,56 @@ func activeCountsByTarget(active map[string]string, parse func(string) (string, 
 // target that already filled slots on an earlier poll yields the next ones to a
 // target that has none. Discussion dispatch rotates over its own candidates
 // through this same function (issue #467).
+//
+// Before rotating, candidates are split into priority tiers by label (issue
+// #681): issues labeled `critical` come first, then `high`, then everything
+// else. Each tier is balanced across targets on its own and the tiers are
+// concatenated, so a critical issue in one target goes ahead of normal work in
+// every target while each tier keeps its existing order.
 func balanceAcrossTargets(pending []pendingIssue, inFlight map[string]int) []pendingIssue {
+	if len(pending) < 2 {
+		return pending
+	}
+	var tiers [issuePriorityTiers][]pendingIssue
+	for _, candidate := range pending {
+		tier := issuePriority(candidate.issue)
+		tiers[tier] = append(tiers[tier], candidate)
+	}
+	balanced := make([]pendingIssue, 0, len(pending))
+	for _, tier := range tiers {
+		balanced = append(balanced, balanceTierAcrossTargets(tier, inFlight)...)
+	}
+	return balanced
+}
+
+// Priority tiers, in dispatch order. issuePriorityTiers counts them.
+const (
+	issuePriorityCritical = iota
+	issuePriorityHigh
+	issuePriorityNormal
+	issuePriorityTiers
+)
+
+// issuePriority returns the dispatch tier an issue's labels place it in,
+// matching the `critical` and `high` labels case-insensitively. An issue
+// carrying both is critical.
+func issuePriority(issue Issue) int {
+	priority := issuePriorityNormal
+	for _, label := range issue.Labels {
+		name := strings.TrimSpace(label.Name)
+		switch {
+		case strings.EqualFold(name, "critical"):
+			return issuePriorityCritical
+		case strings.EqualFold(name, "high"):
+			priority = issuePriorityHigh
+		}
+	}
+	return priority
+}
+
+// balanceTierAcrossTargets rotates one priority tier's candidates across
+// their targets, as balanceAcrossTargets describes.
+func balanceTierAcrossTargets(pending []pendingIssue, inFlight map[string]int) []pendingIssue {
 	if len(pending) < 2 {
 		return pending
 	}

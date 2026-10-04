@@ -197,6 +197,8 @@ With `--pollmode=webhook`, glorp:
 4. Queries GitHub for matching open issues and queues previously unhandled work.
 5. Starts the selected agent with `/gh-fix ISSUE_NUMBER` and tracks its output and result.
 
+When concurrency slots are scarce, glorp dispatches pending issues labeled `critical` first, then issues labeled `high`, then everything else. Label matching is case-insensitive, and an issue with both labels counts as `critical`. Within each tier, issues keep the order their targets list them in, and the round-robin across targets still applies inside a tier. A `critical` issue in one target still goes ahead of normal issues in every other target. This works the same in every `--pollmode` and for Project board targets.
+
 For repository targets, opening an issue yourself and assigning it to yourself marks it eligible for pickup; glorp's default filter only dispatches open issues that the authenticated user both authored and is assigned to, so somebody else assigning you their issue cannot start a run. Ownership of a claimed issue is tracked entirely through the comment-based handoff protocol below rather than a label. Project items are moved through their configured status as work starts and finishes.
 
 Organization-owned Projects use GitHub's `projects_v2_item` organization webhook event for immediate refreshes, plus a narrow `issues`/`issue_comment` webhook on each repository backing the board so a change to an issue an agent is already working reaches it straight away. GitHub does not provide that event for user-owned Projects, so personal project targets continue to refresh on `--interval`; use `--pollmode=poll` to avoid starting an unused webhook tunnel for those targets.
