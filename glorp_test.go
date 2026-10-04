@@ -3532,6 +3532,77 @@ func TestBalanceAcrossTargetsLeadsWithTheLeastBusyTarget(t *testing.T) {
 	}
 }
 
+func labeledIssue(target string, number int, labels ...string) pendingIssue {
+	issue := Issue{Target: target, Number: number}
+	for _, label := range labels {
+		issue.Labels = append(issue.Labels, IssueLabel{Name: label})
+	}
+	return pendingIssue{issue: issue}
+}
+
+func pendingNumbers(pending []pendingIssue) []int {
+	got := []int{}
+	for _, candidate := range pending {
+		got = append(got, candidate.issue.Number)
+	}
+	return got
+}
+
+func TestBalanceAcrossTargetsDispatchesCriticalThenHighFirst(t *testing.T) {
+	pending := []pendingIssue{
+		labeledIssue("o/a", 1),
+		labeledIssue("o/a", 2, "high"),
+		labeledIssue("o/a", 3, "bug", "critical"),
+		labeledIssue("o/a", 4),
+	}
+	if got, want := pendingNumbers(balanceAcrossTargets(pending, nil)), []int{3, 2, 1, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestBalanceAcrossTargetsMatchesPriorityLabelsCaseInsensitively(t *testing.T) {
+	pending := []pendingIssue{
+		labeledIssue("o/a", 1, "enhancement"),
+		labeledIssue("o/a", 2, "High"),
+		labeledIssue("o/a", 3, "CRITICAL"),
+		labeledIssue("o/a", 4, "high", "Critical"),
+	}
+	if got, want := pendingNumbers(balanceAcrossTargets(pending, nil)), []int{3, 4, 2, 1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestBalanceAcrossTargetsKeepsOrderWithinPriorityTier(t *testing.T) {
+	pending := []pendingIssue{
+		labeledIssue("o/a", 5, "high"),
+		labeledIssue("o/a", 1),
+		labeledIssue("o/a", 9, "high"),
+		labeledIssue("o/a", 3),
+		labeledIssue("o/a", 2, "high"),
+	}
+	if got, want := pendingNumbers(balanceAcrossTargets(pending, nil)), []int{5, 9, 2, 1, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestBalanceAcrossTargetsPrioritizesAcrossTargetsAndBalancesWithinTier(t *testing.T) {
+	pending := []pendingIssue{
+		labeledIssue("o/a", 1),
+		labeledIssue("o/a", 2),
+		labeledIssue("o/a", 3, "high"),
+		labeledIssue("o/a", 4, "high"),
+		labeledIssue("o/b", 10),
+		labeledIssue("o/b", 11, "critical"),
+		labeledIssue("o/b", 12, "high"),
+		labeledIssue("o/b", 13),
+	}
+	// o/b leads each tier's rotation because o/a already has work in flight.
+	got := pendingNumbers(balanceAcrossTargets(pending, map[string]int{"o/a": 1}))
+	if want := []int{11, 12, 3, 4, 10, 1, 13, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
 func TestActiveCountsByTargetSkipsDiscussions(t *testing.T) {
 	active := map[string]string{
 		"o/a#1": "s1", "o/a#2": "s2", "o/b#3": "s3", "o/b#discussion#4": "s4", "o/b#discussion#5": "s5",
