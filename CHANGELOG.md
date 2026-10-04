@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.6 - 2026-10-04
+
 - Dispatch pending issues labeled `critical` first, then `high`, then everything else, so urgent work no longer waits behind lower-priority issues when every concurrency slot is busy (issue #681). Labels match case-insensitively, issues within a tier keep their existing order, and the round-robin across watched targets still applies within each tier. This applies to every poll mode and to Project board targets.
 - Stop the `gh-fix` skill from skipping CI by quoting a skip marker such as `[skip ci]` in its final commit, CI repair commits, pull request title, or pull request body (issue #677). GitHub honors the marker anywhere in a commit message, and a squash merge copies the title and body onto the default branch, so a fix that mentioned the marker merged with no CI run on the pull request or on the default branch. `gh-fix` now describes the marker in words instead, and will not merge until a CI run has registered for the pull request's head commit.
 
