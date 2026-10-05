@@ -423,6 +423,7 @@ func runWatch(args []string) (code int) {
 		}
 		supervisor.probe, supervisor.logf = probeTunnel, w.logf
 		w.Webhooks = supervisor.reconcile
+		w.WebhookOnline = supervisor.online
 	}
 	if err := w.Run(ctx); err != nil {
 		if ui != nil {

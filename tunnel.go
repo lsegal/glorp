@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/lsegal/glorp/ngrok"
@@ -28,7 +29,8 @@ type webhookTunnel interface {
 // the webhook server, pointing the webhooks at the new URL if it changed.
 //
 // It runs only on the poll loop, as the reconciler it feeds does, so it needs
-// no locking.
+// no locking, except for down: the dashboards read it from whichever goroutine
+// publishes a snapshot.
 type tunnelSupervisor struct {
 	tunnel      webhookTunnel
 	webhookPath string
@@ -36,6 +38,16 @@ type tunnelSupervisor struct {
 	start       func(context.Context) (webhookTunnel, error)
 	probe       func(context.Context, string) error
 	logf        func(string, ...interface{})
+	// down records that the last check found the tunnel not reaching the
+	// webhook server, or could not start a new one. GitHub deliveries are lost
+	// while it lasts, so the dashboards show webhooks as offline (issue #687).
+	down atomic.Bool
+}
+
+// online reports whether the tunnel was delivering as of the last check. It is
+// the run's WebhookOnline hook in push mode.
+func (s *tunnelSupervisor) online() bool {
+	return !s.down.Load()
 }
 
 // reconcile checks the tunnel, then reconciles the webhooks against whichever
@@ -54,9 +66,14 @@ func (s *tunnelSupervisor) reconcile(ctx context.Context) {
 func (s *tunnelSupervisor) check(ctx context.Context) {
 	if s.tunnel != nil {
 		err := s.probe(ctx, s.reconciler.endpoint)
-		if err == nil || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
+		if err == nil {
+			s.down.Store(false)
+			return
+		}
+		s.down.Store(true)
 		s.logf("ngrok tunnel at %s is not reachable (%v); restarting it", s.tunnel.URL(), err)
 		_ = s.tunnel.Close()
 		s.tunnel = nil
@@ -64,6 +81,7 @@ func (s *tunnelSupervisor) check(ctx context.Context) {
 	tunnel, err := s.start(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
+			s.down.Store(true)
 			s.logf("restart ngrok tunnel: %v; retrying on the next check", err)
 		}
 		return
@@ -71,10 +89,12 @@ func (s *tunnelSupervisor) check(ctx context.Context) {
 	endpoint, err := ngrok.WebhookURL(tunnel.URL(), s.webhookPath)
 	if err != nil {
 		_ = tunnel.Close()
+		s.down.Store(true)
 		s.logf("restart ngrok tunnel: %v; retrying on the next check", err)
 		return
 	}
 	s.tunnel = tunnel
+	s.down.Store(false)
 	if endpoint != s.reconciler.endpoint {
 		s.logf("ngrok tunnel restarted at %s; pointing webhooks at it", tunnel.URL())
 		s.reconciler.endpoint = endpoint
