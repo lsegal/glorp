@@ -3,6 +3,7 @@ package browser
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -388,5 +389,79 @@ func TestTabCloseDoesNotWaitForACommand(t *testing.T) {
 	}
 	if !closed {
 		t.Fatal("the tab was not cancelled")
+	}
+}
+
+// TestRetiresTabThatLostItsConnection checks a tab whose socket to the browser
+// closed -- the browser died, or the connection did not survive the machine
+// sleeping -- is dropped so the next read opens a fresh one. chromedp cancels
+// such a tab's context, which is not a deadline, so it used to stay in place
+// and fail every read for the rest of the run (issue #683).
+func TestRetiresTabThatLostItsConnection(t *testing.T) {
+	tabCtx, cancelTab := context.WithCancel(context.Background())
+	cancelTab()
+	tab := &Tab{ctx: tabCtx}
+	tab.paceWith(context.Background(), nil)
+	stalled := make(chan struct{}, 2)
+	tab.watchStalls(func() { stalled <- struct{}{} })
+	if err := tab.run(); !errors.Is(err, errTabConnectionLost) {
+		t.Fatalf("run: %v, want the lost connection reported", err)
+	}
+	select {
+	case <-stalled:
+	default:
+		t.Fatal("the disconnected tab was not retired")
+	}
+	// A command waiting its turn on the same tab notices too.
+	tab.gate() <- struct{}{}
+	if _, err := tab.acquire(time.Second); !errors.Is(err, errTabConnectionLost) {
+		t.Fatalf("acquire: %v, want the lost connection reported", err)
+	}
+	select {
+	case <-stalled:
+	default:
+		t.Fatal("the disconnected tab was not retired while waiting for it")
+	}
+}
+
+// TestKeepsTabsWhenTheRunShutsDown checks a tab cancelled because the run is
+// ending is not mistaken for one that lost its connection.
+func TestKeepsTabsWhenTheRunShutsDown(t *testing.T) {
+	run, stop := context.WithCancel(context.Background())
+	stop()
+	tab := &Tab{ctx: run}
+	tab.paceWith(run, nil)
+	tab.watchStalls(func() { t.Fatal("a tab was retired during shutdown") })
+	if err := tab.run(); errors.Is(err, errTabConnectionLost) {
+		t.Fatalf("run: %v, want a shutdown error", err)
+	}
+}
+
+// TestRestartIfUnresponsive checks a browser that still answers is kept, and
+// that a reader which saw a browser another reader already replaced is told
+// to try again rather than restarting it a second time.
+func TestRestartIfUnresponsive(t *testing.T) {
+	previous := probeWebSocketURL
+	defer func() { probeWebSocketURL = previous }()
+	probeWebSocketURL = func(context.Context, string) (string, error) { return "ws://live", nil }
+	launched := &process{port: 9222}
+	b := &Browser{ctx: context.Background(), cmd: launched}
+	if b.restartIfUnresponsive(launched) {
+		t.Fatal("a browser that still answers was restarted")
+	}
+	if b.Recover() {
+		t.Fatal("Recover restarted a browser that still answers")
+	}
+	probeWebSocketURL = func(context.Context, string) (string, error) {
+		t.Fatal("a browser already replaced was probed")
+		return "", nil
+	}
+	b.cmd = &process{port: 9333}
+	if !b.restartIfUnresponsive(launched) {
+		t.Fatal("a reader of a replaced browser was not told to retry")
+	}
+	b.closed = true
+	if b.restartIfUnresponsive(launched) {
+		t.Fatal("a reader of a suspended browser was told to retry")
 	}
 }

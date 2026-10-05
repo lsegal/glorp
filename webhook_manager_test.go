@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func projectItemsResponse(repos ...string) []byte {
@@ -309,5 +310,24 @@ func TestMissingWebhookEvents(t *testing.T) {
 				t.Fatalf("missing = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+// TestGHCLIAPITimesOut checks webhook configuration's `gh api` calls are
+// bounded like every other `gh` call. Reconciliation runs on the poll loop, so
+// one stuck on a connection that died while the machine slept used to stop
+// the watch for good (issue #683).
+func TestGHCLIAPITimesOut(t *testing.T) {
+	binary := fakeQuotaBinary(t, "sleep 30")
+	previous := ghCommandTimeout
+	ghCommandTimeout = 150 * time.Millisecond
+	defer func() { ghCommandTimeout = previous }()
+	start := time.Now()
+	_, err := GHCLI{Binary: binary}.api(context.Background(), "repos/o/r/hooks", "")
+	if err == nil || !strings.Contains(err.Error(), "did not finish within") {
+		t.Fatalf("error %v, want the call reported as timed out", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("call took %s, want it abandoned at the timeout", elapsed)
 	}
 }

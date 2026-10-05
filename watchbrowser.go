@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -193,6 +194,10 @@ func applyBrowserSources(w *Glorp, driver *browser.Browser, options browserWatch
 		browser.NewSignInRecovery(driver, options.config(), authSignIn(), w.logf),
 	)
 	w.Projects = board
+	// A browser that stopped answering while the machine slept is restarted
+	// when the run wakes, rather than on the read that finds it dead (issue
+	// #683).
+	w.Recover = func(context.Context) { driver.Recover() }
 	if w.Comments != nil {
 		w.Comments = browser.NewCommentSource(driver, w.Comments, w.logf)
 	}

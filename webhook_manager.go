@@ -367,17 +367,25 @@ func (g GHCLI) api(ctx context.Context, path, method string, body ...string) ([]
 	if method != "" {
 		args = append(args, "--method", method)
 	}
-	cmd := exec.CommandContext(ctx, g.Binary, args...)
 	if len(body) > 0 {
-		cmd.Stdin = strings.NewReader(body[0])
 		args = append(args, "--input", "-")
-		cmd = exec.CommandContext(ctx, g.Binary, args...)
+	}
+	// Bounded like every other `gh` call: webhook reconciliation runs on the
+	// poll loop, so a call stuck on a connection that died while the machine
+	// slept would otherwise stop the watch for good (issue #683).
+	runCtx, cancel := context.WithTimeout(ctx, ghCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, g.Binary, args...)
+	// Cancelling kills `gh`, but a child it left holding the output pipe would
+	// keep the read waiting anyway, so the pipe is closed behind it.
+	cmd.WaitDelay = ghCommandWaitDelay
+	if len(body) > 0 {
 		cmd.Stdin = strings.NewReader(body[0])
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := process.Output(cmd)
-	if err != nil {
+	if err = g.timedOut(ctx, runCtx, args, err); err != nil {
 		detail := strings.TrimSpace(stderr.String())
 		if detail != "" {
 			return nil, fmt.Errorf("%w: %s", err, detail)

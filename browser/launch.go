@@ -61,6 +61,10 @@ const (
 	commandTimeout = 2 * time.Minute
 )
 
+// tabOpenTimeout bounds opening a tab and enabling the events it is read
+// through. It is a variable only so tests need not spend it.
+var tabOpenTimeout = 30 * time.Second
+
 // binaryNames are the Chromium-based executables looked for on PATH, in
 // preference order. Edge is included because it is Chromium underneath and so
 // speaks the same DevTools Protocol; Safari has no CDP and cannot be used.

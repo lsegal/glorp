@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os/exec"
 	"regexp"
@@ -61,9 +62,19 @@ func codexQuotaArgv(binary string) []string {
 	return []string{binary, "app-server"}
 }
 
+// builtinQuotaTimeout bounds one reading by the built-in Codex and Claude
+// readers, as a definition's own timeout bounds a quota command. Quotas are
+// read on the poll loop, so a CLI stuck on a connection that went dead while
+// the machine slept would otherwise stop the watch for good (issue #683). It
+// is a variable only so tests need not spend it.
+var builtinQuotaTimeout = agents.DefaultQuotaTimeout
+
 func readCodexQuota(ctx context.Context, binary string) (string, error) {
 	argv := codexQuotaArgv(binary)
+	ctx, cancel := context.WithTimeout(ctx, builtinQuotaTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.WaitDelay = quotaCommandWaitDelay
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return "", err
@@ -83,6 +94,27 @@ func readCodexQuota(ctx context.Context, binary string) (string, error) {
 	}
 	// Keep stdin open while reading: app-server can finish the request only
 	// after it has sent the response, and treats EOF as a client disconnect.
+	// The read runs aside so the timeout can abandon it: the deferred Stop
+	// then takes down the whole tree, which closes the pipe it is reading.
+	type reading struct {
+		quota string
+		err   error
+	}
+	result := make(chan reading, 1)
+	go func() {
+		quota, err := scanCodexQuota(stdout)
+		result <- reading{quota, err}
+	}()
+	select {
+	case r := <-result:
+		return r.quota, r.err
+	case <-ctx.Done():
+		return "", fmt.Errorf("codex rate limit response not received: %w", ctx.Err())
+	}
+}
+
+// scanCodexQuota reads app-server's replies until the rate limit one arrives.
+func scanCodexQuota(stdout io.Reader) (string, error) {
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		var message struct {
@@ -151,7 +183,10 @@ func (r *claudeQuotaReader) Read(ctx context.Context) (string, error) {
 // account's current session/week usage without making a billed API request
 // (unlike a normal prompt, it costs no tokens and no money).
 func readClaudeQuota(ctx context.Context, binary string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, builtinQuotaTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, "--print", "--output-format=json")
+	cmd.WaitDelay = quotaCommandWaitDelay
 	cmd.Stdin = strings.NewReader(claudeQuotaRequest())
 	out, err := process.Output(cmd)
 	if err != nil {

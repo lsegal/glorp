@@ -377,7 +377,10 @@ func runWatch(args []string) (code int) {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		defer tunnel.Close()
+		// The supervisor owns the tunnel from here on, so whichever tunnel is
+		// running when the run ends is the one stopped.
+		supervisor := &tunnelSupervisor{tunnel: tunnel}
+		defer supervisor.Close()
 		endpoint, err := ngrok.WebhookURL(tunnel.URL(), webhookPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -406,7 +409,20 @@ func runWatch(args []string) (code int) {
 		// A project board can gain a repository that was not on it at startup,
 		// and that repository has no webhook until the target is configured
 		// again, so keep reconciling while the daemon runs (issue #238).
-		w.Webhooks = newWebhookReconciler(gh, targets, endpoint, webhookSecret, w.logf).reconcile
+		// The tunnel is checked before each reconciliation too, and started
+		// again when it stops reaching the webhook server, such as after the
+		// machine sleeps (issue #683).
+		supervisor.webhookPath = webhookPath
+		supervisor.reconciler = newWebhookReconciler(gh, targets, endpoint, webhookSecret, w.logf)
+		supervisor.start = func(ctx context.Context) (webhookTunnel, error) {
+			tunnel, err := ngrok.Start(ctx, ngrokBinary, ngrokAddr, output)
+			if err != nil {
+				return nil, err
+			}
+			return tunnel, nil
+		}
+		supervisor.probe, supervisor.logf = probeTunnel, w.logf
+		w.Webhooks = supervisor.reconcile
 	}
 	if err := w.Run(ctx); err != nil {
 		if ui != nil {
@@ -589,6 +605,10 @@ type GHCLI struct {
 // call reaches it, and a variable only so tests need not spend it.
 var ghCommandTimeout = 2 * time.Minute
 
+// ghCommandWaitDelay is how long a `gh` call killed at its deadline is given to
+// let go of its output pipe before the read gives up on it.
+const ghCommandWaitDelay = time.Second
+
 func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 	// The deadline is the command's own, and is applied before the runner is
 	// chosen so every implementation of the call is bounded by it. For the
@@ -600,7 +620,9 @@ func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 		output, err := g.runCommand(runCtx, args...)
 		return output, g.timedOut(ctx, runCtx, args, err)
 	}
-	output, err := process.CombinedOutput(exec.CommandContext(runCtx, g.Binary, args...))
+	cmd := exec.CommandContext(runCtx, g.Binary, args...)
+	cmd.WaitDelay = ghCommandWaitDelay
+	output, err := process.CombinedOutput(cmd)
 	return output, g.timedOut(ctx, runCtx, args, err)
 }
 

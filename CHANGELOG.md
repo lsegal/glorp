@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add a bundled `gh-create` skill so every agent files GitHub issues the same way (issue #684). `/gh-create` expands a request into a structured issue with the original prompt quoted verbatim at the bottom, applies every matching label the repository already defines, assigns the issue to the current `gh` user unless told otherwise, uploads and embeds referenced screenshots and videos instead of leaving local paths, and leaves out private data such as local paths, names, tokens, and anything from a private repository. The installers install it alongside `gh-fix` and `gh-discuss`.
+- Recover `glorp watch` after the machine sleeps, instead of leaving it broken until it is restarted (issue #683). glorp notices the wake, checks its connections, and polls right away. Browser mode replaces tabs that lost their connection to the browser and restarts a browser that stopped answering. Webhook mode starts a new ngrok tunnel when the old one no longer reaches glorp, and points the GitHub webhooks at it. Codex and Claude quota checks and webhook setup calls now time out, so one that hangs on a dead connection can no longer freeze polling and both dashboards.
 
 ## v1.5.6 - 2026-10-04
 

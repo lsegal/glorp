@@ -217,6 +217,10 @@ type Glorp struct {
 	// without a restart (issue #238). Nil skips reconciliation, as in poll
 	// mode where no webhooks are configured at all.
 	Webhooks func(context.Context)
+	// Recover re-establishes the run's own long-lived connections after the
+	// machine wakes from sleep, such as browser mode's browser (issue #683).
+	// Nil has nothing to recover.
+	Recover func(context.Context)
 	// ownershipWait overrides the reap grace-period wait in tests.
 	ownershipWait func(context.Context) bool
 	// reapInterval overrides the periodic reap cadence in tests.
@@ -1499,6 +1503,52 @@ func (w *Glorp) forgetLogged(key string) bool {
 // read the same in the terminal; this is what tells them apart (issue #472).
 const pollStallIntervals = 4
 
+// The wake check compares how much wall-clock time passed between two of its
+// ticks with how much should have. A process does not run while the machine
+// sleeps, so the first tick after waking lands long after the one before it.
+// They are variables only so tests need not spend them.
+var (
+	wakeCheckInterval = 15 * time.Second
+	wakeJumpThreshold = time.Minute
+)
+
+// watchForWake reports each time the machine resumes from sleep, with roughly
+// how long it slept, so the run can re-establish connections that did not
+// survive it instead of staying broken until it is restarted (issue #683).
+func watchForWake(ctx context.Context) <-chan time.Duration {
+	wakes := make(chan time.Duration, 1)
+	ticker := time.NewTicker(wakeCheckInterval)
+	go func() {
+		defer ticker.Stop()
+		detectWakes(ctx, ticker.C, wakeCheckInterval, time.Now, wakes)
+	}()
+	return wakes
+}
+
+// detectWakes is watchForWake's loop. Wall-clock time is compared with its
+// monotonic reading stripped, because on most platforms the monotonic clock
+// stops while the machine sleeps and would hide the gap. A clock set forward
+// by hand looks the same, which costs no more than one extra refresh. A wake
+// is dropped rather than queued when the last one has not been handled yet.
+func detectWakes(ctx context.Context, ticks <-chan time.Time, interval time.Duration, now func() time.Time, wakes chan<- time.Duration) {
+	last := now().Round(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+		current := now().Round(0)
+		if slept := current.Sub(last) - interval; slept >= wakeJumpThreshold {
+			select {
+			case wakes <- slept:
+			default:
+			}
+		}
+		last = current
+	}
+}
+
 // watchPollProgress reports a run whose poll loop has stopped completing polls,
 // and reports it once rather than on every check. Every GitHub read the loop
 // makes is bounded, so a stall this long means something else is holding it;
@@ -2304,6 +2354,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		defer jobMu.Unlock()
 		return lastPoll
 	})
+	wakes := watchForWake(watchCtx)
 	var tick <-chan time.Time
 	var retryTimer *time.Timer
 	var retry <-chan time.Time
@@ -2445,6 +2496,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 					return nil
 				}
 				reportPollError("", err)
+			}
+		case slept := <-wakes:
+			// Connections made before the machine slept may not have
+			// survived it, and the poll it slept through is overdue, so
+			// both are dealt with now rather than on the next tick, which
+			// can be an hour away (issue #683).
+			w.logf("machine woke from about %s of sleep; checking connections and refreshing", formatInterval(slept.Round(time.Second)))
+			if w.Recover != nil {
+				w.Recover(ctx)
+			}
+			if w.Webhooks != nil {
+				w.Webhooks(ctx)
+			}
+			if err := poll(nil); err != nil && ctx.Err() == nil {
+				reportPollError("wake", err)
 			}
 		case <-boardTick:
 			if !probeBoards(ctx) {
