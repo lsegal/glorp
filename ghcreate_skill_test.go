@@ -13,7 +13,8 @@ func ghCreateSkill(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read gh-create skill: %v", err)
 	}
-	return string(data)
+	// A Windows checkout may have CRLF line endings.
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
 func TestGhCreateSkillIsBundledLikeTheOtherSkills(t *testing.T) {
