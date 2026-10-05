@@ -43,8 +43,11 @@ type Browser struct {
 	allocCtx    context.Context
 	cancelAlloc context.CancelFunc
 
-	mu     sync.Mutex
-	tabs   map[string]*Tab
+	mu sync.Mutex
+	// restartMu admits one restart of an unresponsive browser at a time, so
+	// readers that notice together do not each launch a replacement.
+	restartMu sync.Mutex
+	tabs      map[string]*Tab
 	closed bool
 	// used is when each open tab was last handed out, idle is how long a tab
 	// may go unread before it is closed, and resume is the page a closed tab
@@ -153,6 +156,74 @@ func (b *Browser) relaunch() (bool, error) {
 	return true, nil
 }
 
+// unresponsiveProbeTimeout bounds the check of whether a browser is still
+// answering its DevTools endpoint at all. The endpoint is a local HTTP server,
+// so a live browser answers it at once.
+const unresponsiveProbeTimeout = 5 * time.Second
+
+// responsive reports whether the browser process cmd is still answering its
+// DevTools endpoint. A browser glorp did not launch (the tests' fakes), one
+// closed on purpose, and one whose run is shutting down count as responsive:
+// none of them is for a reader to restart.
+func (b *Browser) responsive(cmd *process, closed bool) bool {
+	if cmd == nil || closed || b.ctx == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(b.ctx, unresponsiveProbeTimeout)
+	defer cancel()
+	_, err := probeWebSocketURL(ctx, debugURL(cmd.port))
+	return err == nil || b.ctx.Err() != nil
+}
+
+// probeWebSocketURL is the DevTools check responsive makes, which tests replace.
+var probeWebSocketURL = webSocketURL
+
+// Recover restarts the browser when it has stopped answering, which is how a
+// run picks itself up after the machine wakes from sleep (issue #683). A
+// browser that still answers keeps its process: any tab whose own connection
+// dropped is retired on its next read instead. It reports whether the browser
+// was restarted.
+func (b *Browser) Recover() bool {
+	b.mu.Lock()
+	launched := b.cmd
+	b.mu.Unlock()
+	return b.restartIfUnresponsive(launched)
+}
+
+// restartIfUnresponsive replaces the browser process launched unless it still
+// answers. It reports whether a reader that saw launched fail should try
+// again: true when this call restarted the browser or another one already
+// had. A browser closed on purpose -- suspended for a sign-in window -- is left
+// for whatever closed it to resume.
+func (b *Browser) restartIfUnresponsive(launched *process) bool {
+	if launched == nil {
+		return false
+	}
+	b.restartMu.Lock()
+	defer b.restartMu.Unlock()
+	b.mu.Lock()
+	current, closed := b.cmd, b.closed
+	logf := b.logf
+	b.mu.Unlock()
+	if current != launched {
+		return !closed
+	}
+	if b.responsive(current, closed) {
+		return false
+	}
+	if logf != nil {
+		logf("browser stopped responding; restarting it")
+	}
+	_ = b.Close()
+	if err := b.Resume(); err != nil {
+		if logf != nil {
+			logf("restart browser: %v", err)
+		}
+		return false
+	}
+	return true
+}
+
 // Profile reports the profile directory the browser was launched against, or
 // an empty string when there is no launched process to ask (the tests' fakes).
 func (b *Browser) Profile() string {
@@ -165,7 +236,17 @@ func (b *Browser) Profile() string {
 // Tab returns the tab glorp drives for a target, opening it on first use and
 // reusing it afterwards. Names are the caller's own: one per watched target.
 func (b *Browser) Tab(name string) (*Tab, error) {
+	b.mu.Lock()
+	launched := b.cmd
+	b.mu.Unlock()
 	tab, retired, err := b.tabFor(name)
+	// A tab that cannot be opened because the browser itself has stopped
+	// answering -- it died, or its DevTools endpoint went away while the
+	// machine slept -- is retried once on a new browser process, rather than
+	// failing every read for the rest of the run (issue #683).
+	if err != nil && b.restartIfUnresponsive(launched) {
+		tab, retired, err = b.tabFor(name)
+	}
 	// Retired tabs are closed outside the browser lock, because closing one
 	// waits for whatever it was last doing to finish and no other reader
 	// should be held up by that.
@@ -491,14 +572,31 @@ func newTab(allocCtx context.Context, opts ...chromedp.ContextOption) (*Tab, err
 	tab := &Tab{ctx: ctx, cancel: cancel}
 	// Network events carry the status code, and the frame tree identifies which
 	// of them belong to the tab itself rather than to an embedded frame.
-	if err := chromedp.Run(ctx, network.Enable(), chromedp.ActionFunc(func(ctx context.Context) error {
-		frame, err := page.GetFrameTree().Do(ctx)
-		if err != nil {
-			return err
-		}
-		tab.setMainFrame(frame.Frame.ID)
-		return nil
-	})); err != nil {
+	setup := make(chan error, 1)
+	go func() {
+		setup <- chromedp.Run(ctx, network.Enable(), chromedp.ActionFunc(func(ctx context.Context) error {
+			frame, err := page.GetFrameTree().Do(ctx)
+			if err != nil {
+				return err
+			}
+			tab.setMainFrame(frame.Frame.ID)
+			return nil
+		}))
+	}()
+	// A tab is opened under the browser lock, so a browser that accepts the
+	// connection and then never answers is given up on rather than holding
+	// every reader behind it (issue #683). The deadline is not put on the
+	// context Run is given, because the first Run binds the tab's lifetime to
+	// that context.
+	timer := time.NewTimer(tabOpenTimeout)
+	defer timer.Stop()
+	var err error
+	select {
+	case err = <-setup:
+	case <-timer.C:
+		err = fmt.Errorf("browser did not open a tab within %s", core.FormatInterval(tabOpenTimeout))
+	}
+	if err != nil {
 		cancel()
 		return nil, err
 	}
@@ -673,6 +771,10 @@ func (t *Tab) acquire(timeout time.Duration) (func(), error) {
 	case gate <- struct{}{}:
 		return func() { <-gate }, nil
 	case <-done:
+		if t.lost() {
+			t.stall()
+			return nil, errTabConnectionLost
+		}
 		return nil, t.ctx.Err()
 	case <-timer.C:
 		t.stall()
@@ -706,7 +808,32 @@ func (t *Tab) run(actions ...chromedp.Action) error {
 		t.stall()
 		return fmt.Errorf("browser tab did not respond within %s", core.FormatInterval(timeout))
 	}
+	// A tab whose connection to the browser closed -- the browser died, or the
+	// socket did not survive the machine sleeping -- never answers again, so
+	// it is retired just like one that stopped responding (issue #683).
+	if t.lost() {
+		t.stall()
+		return errTabConnectionLost
+	}
 	return err
+}
+
+// errTabConnectionLost is what a read through a tab whose connection to the
+// browser closed fails with. The tab is reopened on the next read.
+var errTabConnectionLost = errors.New("browser tab lost its connection to the browser; reopening it on the next read")
+
+// lost reports whether the tab's own connection ended while the run that
+// opened it is still going. chromedp cancels a tab's context when its socket to
+// the browser closes, which is not a deadline, so the command timeout never
+// catches it.
+func (t *Tab) lost() bool {
+	if t.ctx == nil || t.ctx.Err() == nil {
+		return false
+	}
+	t.statusMu.Lock()
+	run := t.paceCtx
+	t.statusMu.Unlock()
+	return run == nil || run.Err() == nil
 }
 
 // close closes the tab. It does not wait for a command in flight: a tab is
