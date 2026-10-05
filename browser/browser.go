@@ -48,7 +48,7 @@ type Browser struct {
 	// readers that notice together do not each launch a replacement.
 	restartMu sync.Mutex
 	tabs      map[string]*Tab
-	closed bool
+	closed    bool
 	// used is when each open tab was last handed out, idle is how long a tab
 	// may go unread before it is closed, and resume is the page a closed tab
 	// was showing so its replacement can pick the same one up again. Together
