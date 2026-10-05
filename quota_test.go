@@ -236,3 +236,26 @@ func TestCodexQuotaReaderReportsWhyItCouldNotRead(t *testing.T) {
 		t.Fatal("read reported no error for a missing binary, want the reason it failed")
 	}
 }
+
+// TestBuiltinQuotaReadersTimeOut checks the built-in Codex and Claude readers
+// give up on a CLI that never answers, as a quota command does. They run on the
+// poll loop, so one stuck on a connection that died while the machine slept
+// used to stop the watch for good (issue #683).
+func TestBuiltinQuotaReadersTimeOut(t *testing.T) {
+	binary := fakeQuotaBinary(t, "sleep 30")
+	previous := builtinQuotaTimeout
+	builtinQuotaTimeout = 150 * time.Millisecond
+	defer func() { builtinQuotaTimeout = previous }()
+	for name, read := range map[string]func(context.Context, string) (string, error){
+		"codex":  readCodexQuota,
+		"claude": readClaudeQuota,
+	} {
+		start := time.Now()
+		if got, err := read(context.Background(), binary); err == nil {
+			t.Fatalf("%s quota = %q, want a timeout error", name, got)
+		}
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Fatalf("%s read took %s, want it abandoned at the timeout", name, elapsed)
+		}
+	}
+}
