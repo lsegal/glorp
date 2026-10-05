@@ -916,6 +916,14 @@ func TestDeliveryTextReportsLastPollInPushMode(t *testing.T) {
 	}
 }
 
+// TestDeliveryTextReportsOfflineWebhooks checks the terminal dashboard says
+// push delivery is offline while the ngrok tunnel is down (issue #687).
+func TestDeliveryTextReportsOfflineWebhooks(t *testing.T) {
+	if text := deliveryText(GlorpSnapshot{UseWebhooks: true}); text != "push (offline)" {
+		t.Errorf("delivery text = %q, want push mode shown offline", text)
+	}
+}
+
 // TestFormatInterval pins the shared interval spelling. The same table is run
 // against the web dashboard's formatInterval in webui/src/dashboard.test.js, so
 // the two status bars cannot drift apart again (issue #449).

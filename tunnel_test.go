@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeTunnel struct {
@@ -145,5 +147,119 @@ func TestProbeTunnel(t *testing.T) {
 	offline.Close()
 	if err := probeTunnel(context.Background(), offline.URL+"/webhook"); err == nil {
 		t.Fatal("probe of an unreachable endpoint succeeded")
+	}
+}
+
+// TestTunnelSupervisorReportsTunnelHealth checks the supervisor reports webhooks
+// as offline from the moment a probe finds the tunnel dead until a probe or
+// restart succeeds, so the dashboards stop claiming deliveries are arriving
+// while they are lost (issue #687).
+func TestTunnelSupervisorReportsTunnelHealth(t *testing.T) {
+	dead := &fakeTunnel{url: "https://one.ngrok.app"}
+	var logs []string
+	s := newTestSupervisor(dead, &endpointConfigurer{}, &logs)
+	if !s.online() {
+		t.Fatal("a supervisor that has not checked yet reports webhooks offline")
+	}
+	s.probe = func(_ context.Context, endpoint string) error {
+		if strings.Contains(endpoint, "one") {
+			return errors.New("ngrok answered with ERR_NGROK_3200")
+		}
+		return nil
+	}
+	starts := 0
+	s.start = func(context.Context) (webhookTunnel, error) {
+		starts++
+		if s.online() {
+			t.Error("webhooks reported online while the dead tunnel was being restarted")
+		}
+		if starts == 1 {
+			return nil, errors.New("wait for ngrok tunnel: timed out")
+		}
+		return &fakeTunnel{url: "https://two.ngrok.app"}, nil
+	}
+	s.reconcile(context.Background())
+	if s.online() {
+		t.Fatal("webhooks reported online after the restart failed")
+	}
+	s.reconcile(context.Background())
+	if !s.online() {
+		t.Fatal("webhooks reported offline after the restart succeeded")
+	}
+	s.reconcile(context.Background())
+	if starts != 2 || !s.online() {
+		t.Fatalf("starts=%d online=%v, want the healthy replacement kept and online", starts, s.online())
+	}
+}
+
+// TestTunnelSupervisorRecoversWhenAProbeSucceeds checks a tunnel that comes
+// back on its own is reported online again by the next successful probe.
+func TestTunnelSupervisorRecoversWhenAProbeSucceeds(t *testing.T) {
+	var logs []string
+	s := newTestSupervisor(&fakeTunnel{url: "https://one.ngrok.app"}, &endpointConfigurer{}, &logs)
+	s.down.Store(true)
+	s.probe = func(context.Context, string) error { return nil }
+	s.start = func(context.Context) (webhookTunnel, error) {
+		t.Fatal("a healthy tunnel was restarted")
+		return nil, nil
+	}
+	s.reconcile(context.Background())
+	if !s.online() {
+		t.Fatal("webhooks reported offline after a successful probe")
+	}
+}
+
+// TestGlorpReportsTunnelHealthToTheDashboards checks the snapshot both
+// dashboards render follows the supervisor: online at startup, offline after a
+// dead tunnel fails to restart, and online again once a restart succeeds
+// (issue #687).
+func TestGlorpReportsTunnelHealthToTheDashboards(t *testing.T) {
+	var logs []string
+	s := newTestSupervisor(&fakeTunnel{url: "https://one.ngrok.app"}, &endpointConfigurer{}, &logs)
+	s.probe = func(_ context.Context, endpoint string) error {
+		if strings.Contains(endpoint, "one") {
+			return errors.New("no such host")
+		}
+		return nil
+	}
+	var starts atomic.Int32
+	s.start = func(context.Context) (webhookTunnel, error) {
+		if starts.Add(1) < 3 {
+			return nil, errors.New("wait for ngrok tunnel: timed out")
+		}
+		return &fakeTunnel{url: "https://two.ngrok.app"}, nil
+	}
+	reporter := &snapshotReporter{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1,
+		Issues: &fakeSource{batches: [][]Issue{{}}}, Runner: &fakeRunner{release: make(chan struct{})},
+		UseWebhooks: true, fallbackInterval: 5 * time.Millisecond, UI: reporter,
+		Webhooks: s.reconcile, WebhookOnline: s.online,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	var states []bool
+	for time.Now().Before(deadline) {
+		reporter.mu.Lock()
+		states = states[:0]
+		for _, snapshot := range reporter.snapshots {
+			if len(states) == 0 || states[len(states)-1] != snapshot.WebhookOnline {
+				states = append(states, snapshot.WebhookOnline)
+			}
+		}
+		reporter.mu.Unlock()
+		if len(states) >= 3 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(states) < 3 || !states[0] || states[1] || !states[2] {
+		t.Fatalf("WebhookOnline went %v, want online, then offline while the restart failed, then online", states)
 	}
 }

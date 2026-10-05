@@ -37,10 +37,13 @@ export function formatInterval(nanoseconds) {
 // deliveryLabel describes how work is picked up, and when GitHub was last
 // checked. A poll that finds nothing new logs nothing (issue #413), so the
 // last-checked time is the only standing sign the run is still polling
-// (issue #447). Push mode shows it too, since it still reconciles periodically.
+// (issue #447). Push mode shows it too, since it still reconciles periodically,
+// and says when webhooks are offline because the ngrok tunnel is down
+// (issue #687).
 export function deliveryLabel(snapshot) {
 	const interval = snapshot.Interval ? formatInterval(snapshot.Interval) : "—";
 	let label = snapshot.UseWebhooks ? "push" : `polling every ${interval}`;
+	if (snapshot.UseWebhooks && !snapshot.WebhookOnline) label += " (offline)";
 	const checked = lastPollLabel(snapshot.LastPoll);
 	if (checked) label += `; checked ${checked}`;
 	return label;

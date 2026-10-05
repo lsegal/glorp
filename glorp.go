@@ -217,6 +217,10 @@ type Glorp struct {
 	// without a restart (issue #238). Nil skips reconciliation, as in poll
 	// mode where no webhooks are configured at all.
 	Webhooks func(context.Context)
+	// WebhookOnline reports whether push deliveries are reaching the webhook
+	// server, such as whether the ngrok tunnel was alive at its last check
+	// (issue #687). Nil reports push mode as always online.
+	WebhookOnline func() bool
 	// Recover re-establishes the run's own long-lived connections after the
 	// machine wakes from sleep, such as browser mode's browser (issue #683).
 	// Nil has nothing to recover.
@@ -1673,7 +1677,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if w.Quota != nil {
 			quotas = w.Quota(ctx)
 		}
-		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: w.UseWebhooks, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list})
+		online := w.UseWebhooks
+		if online && w.WebhookOnline != nil {
+			online = w.WebhookOnline()
+		}
+		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list})
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent
@@ -2487,6 +2495,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 		case <-tick:
 			if w.Webhooks != nil {
 				w.Webhooks(ctx)
+				// The tunnel check can change whether webhooks are online,
+				// and a poll that fails will not publish it (issue #687).
+				publish()
 			}
 			if err := poll(nil); err != nil {
 				if ctx.Err() != nil {
@@ -2508,6 +2519,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 			}
 			if w.Webhooks != nil {
 				w.Webhooks(ctx)
+				// The tunnel check can change whether webhooks are online,
+				// and a poll that fails will not publish it (issue #687).
+				publish()
 			}
 			if err := poll(nil); err != nil && ctx.Err() == nil {
 				reportPollError("wake", err)
