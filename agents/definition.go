@@ -69,9 +69,9 @@ type Definition struct {
 	MissingSession []string `json:"missingSession,omitempty"`
 	// Quota names the quota source for the agent.
 	Quota Quota `json:"quota,omitempty"`
-	// Skills names the skills.sh target the agent's copy of the gh-fix and
-	// gh-discuss skills is installed for, so the installers derive their
-	// --agent list from the registry instead of a hand-edited one.
+	// Skills names the skills.sh target the agent's copy of the gh-fix,
+	// gh-discuss, and gh-create skills is installed for, so the installers
+	// derive their --agent list from the registry instead of a hand-edited one.
 	Skills Skills `json:"skills,omitempty"`
 	// Doctor names the read-only probes `glorp agents` runs to report on the
 	// agent: whether its CLI is signed in, and which models it accepts. An
