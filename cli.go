@@ -98,7 +98,7 @@ declares none is still listed, with what it could not answer shown as unknown.
 
 With -names, print one agent name per line and run nothing, which is the
 listing scripts parse. With -skills, print the skills.sh target ids those
-agents install glorp's gh-fix and gh-discuss skills for instead, deduplicated,
+agents install glorp's gh-fix, gh-discuss, and gh-create skills for instead, deduplicated,
 which is how the installers derive their "skills add --agent" list.
 
 Flags:`,

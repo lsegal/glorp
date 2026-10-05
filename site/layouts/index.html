@@ -33,6 +33,7 @@
         <a href="#skills">Skills</a>
         <a class="nav-skill" href="{{ "skills/gh-fix/" | relURL }}">/gh-fix</a>
         <a class="nav-skill" href="{{ "skills/gh-discuss/" | relURL }}">/gh-discuss</a>
+        <a class="nav-skill" href="{{ "skills/gh-create/" | relURL }}">/gh-create</a>
         <a href="{{ "agents/" | relURL }}">Agents</a>
         <a class="nav-install" href="#install">Install</a>
         <a class="repo-link" href="https://github.com/lsegal/glorp">View on GitHub</a>
@@ -154,12 +155,13 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
       </section>
 
       <section id="skills" class="skill-index" aria-labelledby="skill-guides">
-        <p class="eyebrow">Two focused skills</p>
+        <p class="eyebrow">Three focused skills</p>
         <h2 id="skill-guides">Hand work to the right robot.</h2>
-        <p class="section-lede">Both ship with the installer and register globally for every agent glorp knows about.</p>
+        <p class="section-lede">All three ship with the installer and register globally for every agent glorp knows about.</p>
         <div class="skill-index-grid">
           <a class="skill-index-card fix" href="{{ "skills/gh-fix/" | relURL }}"><span class="skill-command">/gh-fix</span><strong>Issue to merged fix</strong><span>Investigate, ship, prove, and close the loop. Dispatched for every issue that clears its dependencies.</span></a>
           <a class="skill-index-card discuss" href="{{ "skills/gh-discuss/" | relURL }}"><span class="skill-command">/gh-discuss</span><strong>One useful answer</strong><span>Read the thread, research the repo, reply only when certain. Read-only, and silent when it isn&rsquo;t sure.</span></a>
+          <a class="skill-index-card create" href="{{ "skills/gh-create/" | relURL }}"><span class="skill-command">/gh-create</span><strong>Issues filed the same way</strong><span>Expand a request into a structured issue: labeled, assigned, media attached, original prompt quoted, private data left out.</span></a>
         </div>
       </section>
 
@@ -178,7 +180,7 @@ dispatching claude/opus:medium for #147<span class="cursor-blink">&#9615;</span>
             <p class="eyebrow">Prerequisites</p>
             <ul class="prereq-list">
               <li><strong>GitHub CLI (gh)</strong><span>Authenticated with access to every repository glorp watches. Project targets need the <code>read:project</code> and <code>project</code> scopes.</span></li>
-              <li><strong>Node.js and npx</strong><span>The installer uses <code>npx</code> to install the bundled gh-fix and gh-discuss skills through skills.sh.</span></li>
+              <li><strong>Node.js and npx</strong><span>The installer uses <code>npx</code> to install the bundled gh-fix, gh-discuss, and gh-create skills through skills.sh.</span></li>
               <li><strong>ngrok</strong><span>For <code>--pollmode=webhook</code>; installing it is optional, since glorp falls back to <code>npx ngrok</code>. Configure its auth before starting.</span></li>
               <li><strong>Chrome, Chromium or Edge</strong><span>For the default <code>--pollmode=browser</code>, which needs no ngrok tunnel and no extra token. Safari has no DevTools Protocol and cannot be used.</span></li>
               <li><strong>A coding agent</strong><span>At least one of <a href="https://developers.openai.com/codex/cli/">Codex CLI</a> (<code>codex</code>), <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> (<code>claude</code>), <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> (<code>gemini</code>), <a href="https://dev.meta.ai/docs/muse-code">Meta Muse Code</a> (<code>muse</code>), <a href="https://opencode.ai">opencode</a> (<code>opencode</code>), <a href="https://cline.bot">Cline</a> (<code>cline</code>), or <a href="https://antigravity.google/docs/cli/overview">Antigravity CLI</a> (<code>agy</code>) on your PATH. Any other CLI can be added with an <a href="{{ "agents/" | relURL }}">agent definition</a>.</span></li>

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a bundled `gh-create` skill so every agent files GitHub issues the same way (issue #684). `/gh-create` expands a request into a structured issue with the original prompt quoted verbatim at the bottom, applies every matching label the repository already defines, assigns the issue to the current `gh` user unless told otherwise, uploads and embeds referenced screenshots and videos instead of leaving local paths, and leaves out private data such as local paths, names, tokens, and anything from a private repository. The installers install it alongside `gh-fix` and `gh-discuss`.
+
 ## v1.5.6 - 2026-10-04
 
 - Dispatch pending issues labeled `critical` first, then `high`, then everything else, so urgent work no longer waits behind lower-priority issues when every concurrency slot is busy (issue #681). Labels match case-insensitively, issues within a tier keep their existing order, and the round-robin across watched targets still applies within each tier. This applies to every poll mode and to Project board targets.
