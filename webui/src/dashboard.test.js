@@ -29,7 +29,15 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("deliveryLabel", () => {
 	it("describes push delivery", () => {
-		expect(deliveryLabel({ UseWebhooks: true })).toBe("push");
+		expect(deliveryLabel({ UseWebhooks: true, WebhookOnline: true })).toBe(
+			"push",
+		);
+	});
+
+	it("shows push delivery as offline while the tunnel is down", () => {
+		expect(deliveryLabel({ UseWebhooks: true, WebhookOnline: false })).toBe(
+			"push (offline)",
+		);
 	});
 
 	it("describes the polling interval", () => {
@@ -47,7 +55,11 @@ describe("deliveryLabel", () => {
 			}),
 		).toBe("polling every 30s; checked 14:05:09");
 		expect(
-			deliveryLabel({ UseWebhooks: true, LastPoll: checked.toISOString() }),
+			deliveryLabel({
+				UseWebhooks: true,
+				WebhookOnline: true,
+				LastPoll: checked.toISOString(),
+			}),
 		).toBe("push; checked 14:05:09");
 	});
 
