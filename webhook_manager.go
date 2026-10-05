@@ -376,6 +376,9 @@ func (g GHCLI) api(ctx context.Context, path, method string, body ...string) ([]
 	runCtx, cancel := context.WithTimeout(ctx, ghCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, g.Binary, args...)
+	// Cancelling kills `gh`, but a child it left holding the output pipe would
+	// keep the read waiting anyway, so the pipe is closed behind it.
+	cmd.WaitDelay = ghCommandWaitDelay
 	if len(body) > 0 {
 		cmd.Stdin = strings.NewReader(body[0])
 	}

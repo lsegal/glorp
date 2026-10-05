@@ -605,6 +605,10 @@ type GHCLI struct {
 // call reaches it, and a variable only so tests need not spend it.
 var ghCommandTimeout = 2 * time.Minute
 
+// ghCommandWaitDelay is how long a `gh` call killed at its deadline is given to
+// let go of its output pipe before the read gives up on it.
+const ghCommandWaitDelay = time.Second
+
 func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 	// The deadline is the command's own, and is applied before the runner is
 	// chosen so every implementation of the call is bounded by it. For the
@@ -616,7 +620,9 @@ func (g GHCLI) run(ctx context.Context, args ...string) ([]byte, error) {
 		output, err := g.runCommand(runCtx, args...)
 		return output, g.timedOut(ctx, runCtx, args, err)
 	}
-	output, err := process.CombinedOutput(exec.CommandContext(runCtx, g.Binary, args...))
+	cmd := exec.CommandContext(runCtx, g.Binary, args...)
+	cmd.WaitDelay = ghCommandWaitDelay
+	output, err := process.CombinedOutput(cmd)
 	return output, g.timedOut(ctx, runCtx, args, err)
 }
 
