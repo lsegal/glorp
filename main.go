@@ -334,7 +334,7 @@ func runWatch(args []string) (code int) {
 	if webUI != nil {
 		webUIURL = webui.URL(bind, webPort)
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
 	// Browser mode reads issues and boards off GitHub's rendered pages instead

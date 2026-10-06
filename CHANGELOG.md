@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Act on direct `@/glorp:ID` mention comments in `--pollmode=browser` (the default) and `--pollmode=poll`, instead of only when a webhook delivers them (issue #689). Each poll now reads the comments posted since the last one with a single API request per watched repository, then reacts to the mention and starts a run using the same rules as webhook mode: the mention must be the newest comment, it must come from `--allowed-commenters`, and the ticket must not already be running. A mention posted on a pull request now starts a run on the issue that pull request closes, in every poll mode. One mention starts at most one run.
 - Restart the work on an issue when a human closes its pull request without merging while the issue is still open, instead of stopping it (issue #690). The agent is told the attempt was rejected and starts a fresh implementation with a new branch and pull request, never reopening or reusing the closed one; an agent whose session cannot be resumed is started over in a new session. Closing the issue still stops the work, and wins when both are closed. The `gh-fix` skill now also checks that the issue and the pull request are both still open right before merging, and never merges if either is closed.
 
 ## v1.5.7 - 2026-10-05

@@ -1,0 +1,304 @@
+package main
+
+import (
+	"context"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeMentionSource returns every comment it holds on every scan, whatever the
+// cursor, so the tests prove a mention is acted on once by its ID rather than
+// by the scan window happening to move past it.
+type fakeMentionSource struct {
+	mu       sync.Mutex
+	comments map[string][]RecentComment
+	closing  map[int][]int
+	scans    int
+}
+
+func newFakeMentionSource() *fakeMentionSource {
+	return &fakeMentionSource{comments: make(map[string][]RecentComment), closing: make(map[int][]int)}
+}
+
+func (f *fakeMentionSource) add(repo string, comment RecentComment) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.comments[repo] = append(f.comments[repo], comment)
+}
+
+func (f *fakeMentionSource) scanCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.scans
+}
+
+func (f *fakeMentionSource) RecentComments(_ context.Context, repo string, _ time.Time) ([]RecentComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scans++
+	return slices.Clone(f.comments[repo]), nil
+}
+
+func (f *fakeMentionSource) ClosingIssues(_ context.Context, _ string, number int) ([]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closing[number], nil
+}
+
+// startPolledMentionRun starts a poll-mode run (no webhooks, as in
+// -pollmode=poll and -pollmode=browser) over issue #7, waits for #7's first
+// run to finish, and returns the run's pieces for the test to post a mention.
+func startPolledMentionRun(t *testing.T, allowed []string) (*fakeRunner, *fakeCommentClient, *fakeMentionSource, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 4)}
+	comments := newFakeCommentClient()
+	mentions := newFakeMentionSource()
+	w := &Glorp{
+		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, Identity: "SELF", AllowedCommenters: allowed,
+		Comments: comments, Mentions: mentions,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+	deadline := time.Now().Add(time.Second)
+	for {
+		state, err := loadWorkState(w.StatePath)
+		if err == nil && state[7].Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial run of #7 did not complete")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop := func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	return runner, comments, mentions, stop
+}
+
+// waitForScans lets the run poll a few more times, so a test asserting that
+// nothing was dispatched has given the scan a real chance to act.
+func waitForScans(t *testing.T, mentions *fakeMentionSource, more int) {
+	t.Helper()
+	target := mentions.scanCount() + more
+	deadline := time.Now().Add(time.Second)
+	for mentions.scanCount() < target {
+		if time.Now().After(deadline) {
+			t.Fatalf("mention scans = %d, want at least %d", mentions.scanCount(), target)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestPolledDirectMentionOnIssueDispatchesOnce(t *testing.T) {
+	runner, comments, mentions, stop := startPolledMentionRun(t, []string{"lsegal"})
+	defer stop()
+
+	body := "Please revisit this @/glorp:SELF"
+	comments.inject("o/r", 7, Comment{Body: body, Author: "lsegal", CreatedAt: time.Now()})
+	mentions.add("o/r", RecentComment{ID: 42, Number: 7, Body: body, Author: "lsegal", UpdatedAt: time.Now()})
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("direct mention dispatched issue #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("direct mention on the issue was not picked up by polling")
+	}
+
+	// The same comment keeps coming back from later scans; it must not start
+	// another run.
+	waitForScans(t, mentions, 5)
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("one mention dispatched a second run of #%d", n)
+	default:
+	}
+	if reactions := comments.reactionsSnapshot(); len(reactions) != 1 || reactions[0] != (fakeReaction{Repo: "o/r", CommentID: 42, Content: "eyes"}) {
+		t.Fatalf("reactions = %#v, want a single eyes reaction on comment 42", reactions)
+	}
+}
+
+func TestPolledDirectMentionOnPullRequestDispatchesClosedIssue(t *testing.T) {
+	runner, comments, mentions, stop := startPolledMentionRun(t, []string{"lsegal"})
+	defer stop()
+
+	body := "@/glorp:SELF the CI failure needs another look"
+	mentions.mu.Lock()
+	mentions.closing[12] = []int{7}
+	mentions.mu.Unlock()
+	comments.inject("o/r", 12, Comment{Body: body, Author: "lsegal", CreatedAt: time.Now()})
+	mentions.add("o/r", RecentComment{ID: 43, Number: 12, Body: body, Author: "lsegal", UpdatedAt: time.Now()})
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("pull request mention dispatched #%d, want the issue it closes, #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("direct mention on the pull request was not picked up by polling")
+	}
+	if reactions := comments.reactionsSnapshot(); len(reactions) != 1 || reactions[0].CommentID != 43 {
+		t.Fatalf("reactions = %#v, want an eyes reaction on the pull request comment", reactions)
+	}
+}
+
+func TestPolledDirectMentionIgnoresUnauthorizedMentions(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		comments []Comment
+		mention  RecentComment
+	}{
+		{
+			name:     "disallowed commenter",
+			comments: []Comment{{Body: "@/glorp:SELF go", Author: "impersonator"}},
+			mention:  RecentComment{ID: 50, Number: 7, Body: "@/glorp:SELF go", Author: "impersonator"},
+		},
+		{
+			name:     "not the newest comment",
+			comments: []Comment{{Body: "@/glorp:SELF go", Author: "lsegal"}, {Body: "actually never mind", Author: "lsegal"}},
+			mention:  RecentComment{ID: 51, Number: 7, Body: "@/glorp:SELF go", Author: "lsegal"},
+		},
+		{
+			name:     "another instance",
+			comments: []Comment{{Body: "@/glorp:OTHER go", Author: "lsegal"}},
+			mention:  RecentComment{ID: 52, Number: 7, Body: "@/glorp:OTHER go", Author: "lsegal"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner, comments, mentions, stop := startPolledMentionRun(t, []string{"lsegal"})
+			defer stop()
+			for _, comment := range test.comments {
+				comments.inject("o/r", 7, comment)
+			}
+			mentions.add("o/r", test.mention)
+			waitForScans(t, mentions, 5)
+			select {
+			case n := <-runner.dispatched:
+				t.Fatalf("%s dispatched #%d", test.name, n)
+			default:
+			}
+		})
+	}
+}
+
+func TestWebhookDirectMentionOnPullRequestDispatchesClosedIssue(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 2)}
+	events := make(chan WebhookEvent, 1)
+	comments := newFakeCommentClient()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF", Comments: comments,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		state, err := loadWorkState(w.StatePath)
+		if err == nil && state[7].Status == "completed" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	body := "Please revisit this @/glorp:SELF"
+	comments.inject("o/r", 12, Comment{Body: body, Author: "lsegal", CreatedAt: time.Now()})
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 12, CommentBody: body, CommentAuthor: "lsegal", OnPullRequest: true, ClosesIssues: []int{7}}
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("pull request mention dispatched #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("direct mention on the pull request did not dispatch the issue it closes")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDecodeWebhookEventMarksPullRequestComments(t *testing.T) {
+	event := decodeWebhookEvent("issue_comment", []byte(`{"action":"created","repository":{"full_name":"o/r"},"issue":{"number":12,"body":"Fixes the parser.\n\nCloses #7\nAlso see other/repo#9 and closes o/r#8","pull_request":{"url":"https://api.github.com/repos/o/r/pulls/12"}},"comment":{"id":5,"body":"@/glorp:SELF","user":{"login":"lsegal"}}}`))
+	if !event.OnPullRequest || !slices.Equal(event.ClosesIssues, []int{7, 8}) {
+		t.Fatalf("event = %+v, want a pull request comment closing #7 and #8", event)
+	}
+	event = decodeWebhookEvent("issue_comment", []byte(`{"action":"created","repository":{"full_name":"o/r"},"issue":{"number":7,"body":"Closes #3"},"comment":{"id":5,"body":"@/glorp:SELF"}}`))
+	if event.OnPullRequest || len(event.ClosesIssues) != 0 {
+		t.Fatalf("event = %+v, want an issue comment with no closing references", event)
+	}
+}
+
+func TestClosingIssueNumbers(t *testing.T) {
+	got := closingIssueNumbers("Closes #7\nfixes #7, resolved O/R#9, closes other/repo#10, see #11, Fix #12", "o/r")
+	if want := []int{7, 9, 12}; !slices.Equal(got, want) {
+		t.Fatalf("closingIssueNumbers = %v, want %v", got, want)
+	}
+}
+
+func TestMentionScanReposCoversTargetsAndListedRepositories(t *testing.T) {
+	got := mentionScanRepos([]string{"o/r", "o/r/discussions", "users/o/projects/1"}, []Issue{{Repository: "o/other"}, {Repository: "o/r"}})
+	if want := []string{"o/other", "o/r"}; !slices.Equal(got, want) {
+		t.Fatalf("mentionScanRepos = %v, want %v", got, want)
+	}
+}
+
+func TestGHCLIRecentCommentsAndClosingIssues(t *testing.T) {
+	var calls [][]string
+	gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		switch {
+		case strings.Contains(args[1], "issues/comments?"):
+			return []byte(`[{"id":42,"body":"@/glorp:SELF","issue_url":"https://api.github.com/repos/o/r/issues/12","updated_at":"2026-10-06T07:00:00Z","user":{"login":"lsegal"}}]`), nil
+		case args[1] == "repos/o/r/issues/12":
+			return []byte(`{"body":"Closes #7","pull_request":{"url":"x"}}`), nil
+		default:
+			return []byte(`{"body":"Closes #3"}`), nil
+		}
+	}}
+	since := time.Date(2026, 10, 6, 6, 0, 0, 0, time.UTC)
+	comments, err := gh.RecentComments(context.Background(), "o/r", since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0].ID != 42 || comments[0].Number != 12 || comments[0].Author != "lsegal" {
+		t.Fatalf("comments = %#v", comments)
+	}
+	if !strings.Contains(calls[0][1], "since=2026-10-06T06%3A00%3A00Z") || !slices.Contains(calls[0], "--paginate") {
+		t.Fatalf("recent comments request = %v, want a paginated listing since the cursor", calls[0])
+	}
+	closing, err := gh.ClosingIssues(context.Background(), "o/r", 12)
+	if err != nil || !slices.Equal(closing, []int{7}) {
+		t.Fatalf("ClosingIssues(#12) = %v, %v; want [7]", closing, err)
+	}
+	closing, err = gh.ClosingIssues(context.Background(), "o/r", 3)
+	if err != nil || len(closing) != 0 {
+		t.Fatalf("ClosingIssues(issue #3) = %v, %v; want none for an issue", closing, err)
+	}
+}
