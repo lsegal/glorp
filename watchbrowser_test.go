@@ -362,8 +362,13 @@ func browserPageReaders(t *testing.T, source IssueSource) browser.WatchIssues {
 // goes to the board, while everything that still needs the API stays on GHCLI.
 func TestApplyBrowserSourcesInjectsBrowserReaders(t *testing.T) {
 	gh := GHCLI{Binary: "gh", Filter: "is:issue state:open", AllIssues: true}
-	w := &Glorp{Issues: gh, Discussions: gh, Status: gh, Comments: gh, Projects: gh, Out: io.Discard}
+	w := &Glorp{Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Out: io.Discard}
 	applyBrowserSources(w, &browser.Browser{}, browserWatchOptions{Enabled: true}, gh)
+	// Browser mode has no webhooks, so the mention scan must survive the swap
+	// to page readers (issue #689).
+	if _, ok := w.Mentions.(GHCLI); !ok {
+		t.Fatalf("Mentions = %T in browser mode, want the GHCLI mention scan", w.Mentions)
+	}
 
 	issues := browserPageReaders(t, w.Issues)
 	repos, ok := issues.Repos.(*browser.IssueSource)
