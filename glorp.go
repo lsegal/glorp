@@ -1049,6 +1049,11 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 				added++
 			}
 		}
+		if mentioned := w.pullRequestMentions(ctx, repo, issue, previous.PullRequests, watch.since, seen); len(mentioned) > 0 {
+			w.logf("issue #%d interrupting agent: instance %s was mentioned on pull request %s; relaying it into the same session", issue.Number, w.Identity, formatIssueRefs(mentioned))
+			cancel(&workUpdate{summary: fmt.Sprintf("issue #%d was mentioned on pull request %s", issue.Number, formatIssueRefs(mentioned)), instruction: pullRequestMentionPrompt(issue, mentioned, added)})
+			return
+		}
 		if added == 0 {
 			continue
 		}
@@ -1076,6 +1081,68 @@ func (w *Glorp) commentsSeen(ctx context.Context, repo string, number int) map[s
 		seen[commentKey(comment)] = true
 	}
 	return seen
+}
+
+// pullRequestMentions lists the pull requests linked to the issue a run is
+// working that gained a direct mention of this instance since the run began
+// (issue #693). The run's own watcher only reads the issue's conversation, so
+// without this a mention posted on the pull request the agent opened got its
+// eyes reaction and was never heard by the agent. Only mentions from allowed
+// commenters count: the agent itself posts on its pull request, and relaying
+// that would restart it on its own chatter. Every comment read is added to
+// seen, so one mention is relayed, or logged as skipped, once.
+func (w *Glorp) pullRequestMentions(ctx context.Context, repo string, issue Issue, pullRequests []PullRequestWorkState, since time.Time, seen map[string]bool) []int {
+	if w.Identity == "" {
+		return nil
+	}
+	var mentioned []int
+	for _, pullRequest := range pullRequests {
+		if pullRequest.Number <= 0 || pullRequest.Number == issue.Number {
+			continue
+		}
+		comments, err := w.Comments.ListComments(ctx, repo, pullRequest.Number)
+		if err != nil {
+			if ctx.Err() == nil {
+				w.logf("issue #%d pull request #%d comment check failed: %v", issue.Number, pullRequest.Number, err)
+			}
+			continue
+		}
+		found := false
+		for _, comment := range comments {
+			key := commentKey(comment)
+			if seen[key] || !relayableComment(comment, since) {
+				continue
+			}
+			seen[key] = true
+			if !mentionedIdentity(comment.Body, w.Identity) {
+				continue
+			}
+			if !commenterAllowed(comment.Author, w.AllowedCommenters) {
+				w.logf("issue #%d ignoring direct mention of instance %s on pull request #%d: %s is not an allowed commenter", issue.Number, w.Identity, pullRequest.Number, comment.Author)
+				continue
+			}
+			found = true
+		}
+		if found {
+			mentioned = append(mentioned, pullRequest.Number)
+		}
+	}
+	return mentioned
+}
+
+// pullRequestMentionPrompt tells an agent that a human mentioned this instance
+// on the pull request it is working, so the comment is acted on rather than
+// only acknowledged (issue #693).
+func pullRequestMentionPrompt(issue Issue, pullRequests []int, issueComments int) string {
+	noun := "pull request"
+	if len(pullRequests) > 1 {
+		noun = "pull requests"
+	}
+	prompt := fmt.Sprintf("A comment addressed to you was posted on %s %s for issue #%d while you were working on it.\n\nReread the %s conversation from GitHub and treat that comment as an instruction for this work. Act on it: change the implementation and push new commits to the pull request when it asks for a change, reply on the pull request when it asks a question, or both, before continuing the rest of the work.", noun, formatIssueRefs(pullRequests), issue.Number, noun)
+	if issueComments > 0 {
+		prompt += fmt.Sprintf(" Issue #%d also has %d new comment(s); reread its conversation too.", issue.Number, issueComments)
+	}
+	return prompt
 }
 
 func commentKey(comment Comment) string {
@@ -1817,7 +1884,27 @@ func (w *Glorp) Run(ctx context.Context) error {
 			wasActive := work[key].Status == "active"
 			wasFailed := work[key].Status == "failed"
 			wasCompleted := work[key].Status == "completed"
+			resumable := work[key].SessionID != "" && work[key].Agent != ""
+			nudge := nudges[key]
 			workMu.Unlock()
+			if directMention && isActive {
+				if resumable {
+					// The run's watcher reads the issue and the pull requests it
+					// opened, and relays the mention into the same session (issue
+					// #693). Keeping it queued as well would start a second, fresh
+					// run on the same comment once this one finishes.
+					delete(directMentions, mentionKey)
+					if nudge != nil {
+						select {
+						case nudge <- struct{}{}:
+						default:
+						}
+					}
+					w.logf("issue #%d direct mention of instance %s concerns the run in progress; relaying it into that run", issue.Number, w.Identity)
+				} else {
+					w.logChanged("mention-active-"+key, "waiting", "issue #%d direct mention of instance %s waits for the run in progress to finish: that run's session cannot be resumed to relay it", issue.Number, w.Identity)
+				}
+			}
 			if issue.Number > 0 && (wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) || (swept && !isActive && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || (directMention && !isActive)) {
 				seen[key] = true
 				delete(restored, key)
@@ -1860,6 +1947,14 @@ func (w *Glorp) Run(ctx context.Context) error {
 					contested = false
 				}
 				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session, mentioned: directMention})
+			}
+		}
+		// A mention whose issue the poll did not list can never be dispatched,
+		// so say why it is waiting rather than leaving it queued silently
+		// (issue #693).
+		for mentionKey := range directMentions {
+			if !observed[mentionKey] {
+				w.logChanged("mention-unlisted-"+mentionKey, "waiting", "%s direct mention of instance %s is waiting: it is not among the open issues this instance watches (closed, filtered out, a pull request that closes no issue, or not indexed yet)", mentionKey, w.Identity)
 			}
 		}
 		newIssues = w.standDownForStandingClaims(ctx, closureChecker, newIssues, seen)
