@@ -74,6 +74,10 @@ type workUpdate struct {
 	// closed marks the update a closure raised, so the cleanup run it starts
 	// is not interrupted again by the same closure.
 	closed bool
+	// restart marks the update a rejected pull request raised (issue #690).
+	// The work is not over, so a run whose session cannot be resumed to hear
+	// about it is started over in a fresh session rather than stopped.
+	restart bool
 }
 
 func (u *workUpdate) Error() string { return errWorkUpdated.Error() + ": " + u.summary }
@@ -1016,6 +1020,11 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 					cancel(&workUpdate{summary: reason, closed: true, instruction: closedWorkCleanupPrompt(issue, reason)})
 					return
 				}
+				if number, reason := rejectedPullRequest(previous, current); reason != "" {
+					w.logf("issue #%d restarting agent: %s while the issue is still open; starting a fresh attempt", issue.Number, reason)
+					cancel(&workUpdate{summary: reason, restart: true, instruction: rejectedPullRequestPrompt(issue, number)})
+					return
+				}
 				if watch.canRelay() && previous.IssueBody != "" && current.IssueBody != previous.IssueBody {
 					w.logf("issue #%d interrupting agent: its description changed; relaying it into the same session", issue.Number)
 					cancel(&workUpdate{summary: fmt.Sprintf("issue #%d description changed", issue.Number), instruction: changedDescriptionPrompt(issue)})
@@ -1085,7 +1094,15 @@ func relayableComment(comment Comment, since time.Time) bool {
 }
 
 func closedWorkCleanupPrompt(issue Issue, reason string) string {
-	return fmt.Sprintf("Stop working on issue #%d: %s.\n\nDo not implement it any further and do not reopen it. Clean up what this session already started instead: close the pull request you opened for it if it is still open, delete the branch and the isolated clone if they are no longer needed, and report what you cleaned up.", issue.Number, reason)
+	return fmt.Sprintf("Stop working on issue #%d: %s.\n\nDo not implement it any further, do not merge any pull request for it, and do not reopen it. Clean up what this session already started instead: close the pull request you opened for it if it is still open, delete the branch and the isolated clone if they are no longer needed, and report what you cleaned up.", issue.Number, reason)
+}
+
+// rejectedPullRequestPrompt tells an agent whose pull request a human closed
+// without merging, while the issue stayed open, that the attempt was rejected
+// and the work starts over (issue #690). The closed pull request is never
+// reopened or reused, matching gh-fix, which only resumes open pull requests.
+func rejectedPullRequestPrompt(issue Issue, pullRequest int) string {
+	return fmt.Sprintf("Pull request #%d for issue #%d was closed without merging while the issue is still open. That attempt was rejected.\n\nDo not merge, reopen, or reuse pull request #%d or its branch. Read the issue and the closed pull request's conversation from GitHub for why it was rejected, then start a fresh implementation: a new branch from the current default branch, a new draft pull request that closes issue #%d, and the rest of the gh-fix workflow through merge.", pullRequest, issue.Number, pullRequest, issue.Number)
 }
 
 func changedDescriptionPrompt(issue Issue) string {
@@ -1186,6 +1203,9 @@ func parkedWorkPrompt(issue Issue) string {
 	return fmt.Sprintf("Your pull request for issue #%d was parked, stacked on its blocker's branch and waiting for that blocker to merge. The blocker is no longer open.\n\nPick the work back up: rebase or retarget the pull request onto the default branch as the gh-fix stacking steps describe (or unstack it if the blocker's pull request closed without merging), drive CI to green on the new head, and merge it so issue #%d closes.", issue.Number, issue.Number)
 }
 
+// closedWorkReason reports why work must stop because its issue was closed
+// without a merge. A pull request closed while the issue is still open is not
+// a reason to stop; rejectedPullRequest reports it instead (issue #690).
 func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) string {
 	if strings.EqualFold(current.IssueState, "closed") && !strings.EqualFold(previous.IssueState, "closed") {
 		for _, pullRequest := range current.PullRequests {
@@ -1195,6 +1215,18 @@ func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) s
 		}
 		return fmt.Sprintf("issue #%d was closed without a merge", issueNumber)
 	}
+	return ""
+}
+
+// rejectedPullRequest reports a pull request closed without merging since
+// previous while the issue stayed open, which rejects that attempt and
+// restarts the work rather than ending it (issue #690). A closed issue always
+// wins: work on it stops, so a pull request closed alongside it, or by the
+// cleanup the closure asked for, never restarts it.
+func rejectedPullRequest(previous, current OriginatingWorkState) (int, string) {
+	if strings.EqualFold(current.IssueState, "closed") {
+		return 0, ""
+	}
 	previousPullRequests := make(map[int]PullRequestWorkState, len(previous.PullRequests))
 	for _, pullRequest := range previous.PullRequests {
 		previousPullRequests[pullRequest.Number] = pullRequest
@@ -1202,10 +1234,10 @@ func closedWorkReason(previous, current OriginatingWorkState, issueNumber int) s
 	for _, pullRequest := range current.PullRequests {
 		old, existed := previousPullRequests[pullRequest.Number]
 		if !pullRequest.Merged && strings.EqualFold(pullRequest.State, "closed") && (!existed || !strings.EqualFold(old.State, "closed")) {
-			return fmt.Sprintf("pull request #%d was closed without merging", pullRequest.Number)
+			return pullRequest.Number, fmt.Sprintf("pull request #%d was closed without merging", pullRequest.Number)
 		}
 	}
-	return ""
+	return 0, ""
 }
 
 // watchForCompetingClaim periodically polls comments on the negotiated
@@ -2157,6 +2189,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 					// launch is resumed with that one rather than the
 					// placeholder it was dispatched with.
 					if state.SessionID == "" || state.Agent == "" {
+						if update.restart {
+							// A rejected pull request leaves the issue open, so
+							// the work starts over in a fresh session rather
+							// than ending (issue #690).
+							w.logf("issue #%d cannot resume its session to deliver the update; restarting the agent for a fresh attempt", i.Number)
+							agentSession.Resume = false
+							agentSession.Update = ""
+							runErr = nil
+							publish()
+							continue
+						}
 						w.logf("issue #%d cannot resume its session to deliver the update; stopping instead", i.Number)
 						break
 					}
