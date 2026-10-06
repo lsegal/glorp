@@ -212,6 +212,10 @@ type Glorp struct {
 	// Comments drives the cooperative handoff handshake (issue #214). When
 	// nil, ownership negotiation is skipped and dispatch behaves as before.
 	Comments CommentClient
+	// Mentions is scanned on every poll for direct @/glorp:ID mentions when
+	// no webhook delivers them, on an issue and on its pull request alike
+	// (issue #689). Nil leaves mentions to the webhook path alone.
+	Mentions MentionSource
 	// Webhooks re-reconciles push webhooks on every periodic poll so a
 	// repository that joins a project board after startup gets a webhook
 	// without a restart (issue #238). Nil skips reconciliation, as in poll
@@ -1644,6 +1648,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// run is still read back from GitHub.
 	nudges := make(map[string]chan struct{})
 	directMentions := make(map[string]bool)
+	mentions := newMentionScan(time.Now())
 	workFinished := make(chan struct{}, 1)
 	jobs := make(map[string]JobSnapshot)
 	issueCounts := make(map[string]int)
@@ -1727,6 +1732,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if issue.Repository != "" && issue.Number > 0 {
 				observed[issue.Repository+"#"+strconv.Itoa(issue.Number)] = true
 			}
+		}
+		// Without webhooks nothing delivers an issue_comment, so direct
+		// mentions are found by scanning each repository's recent comments
+		// (issue #689).
+		if !w.UseWebhooks && w.Mentions != nil {
+			w.scanDirectMentions(ctx, mentions, mentionScanRepos(targets, issues), observed, directMentions)
 		}
 		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
@@ -2579,11 +2590,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 						authorized = false
 					}
 				}
+				keys := webhookMentionKeys(event)
 				if !authorized {
 					w.logf("issue #%d ignoring direct mention of instance %s: not the last comment or not from an allowed commenter", event.IssueNumber, w.Identity)
-				} else if key, ok := webhookIssueKey(event); ok {
-					directMentions[key] = true
-					w.logf("issue #%d directly mentioned instance %s; refreshing for a threaded gh-fix run", event.IssueNumber, w.Identity)
+				} else if event.OnPullRequest && len(keys) == 0 {
+					w.logf("pull request #%d directly mentioned instance %s, but it closes no issue to run", event.IssueNumber, w.Identity)
+				} else if len(keys) > 0 {
+					key := keys[0]
+					for _, mentioned := range keys {
+						directMentions[mentioned] = true
+					}
+					if event.OnPullRequest {
+						w.logf("pull request #%d directly mentioned instance %s; refreshing for a threaded gh-fix run on %s", event.IssueNumber, w.Identity, formatIssueRefs(event.ClosesIssues))
+					} else {
+						w.logf("issue #%d directly mentioned instance %s; refreshing for a threaded gh-fix run", event.IssueNumber, w.Identity)
+					}
 					if err := poll(nil); err != nil && ctx.Err() == nil {
 						reportPollError("direct-mention", err)
 					}
@@ -2860,6 +2881,27 @@ func webhookContinuationSweep(event WebhookEvent) map[string]bool {
 
 // webhookIssueKey returns the "repo#number" key the delivery refers to, when it
 // names one.
+// webhookMentionKeys names the "repo#number" keys a direct mention in an
+// issue_comment delivery addresses: the issue it was posted on, or for a
+// comment on a pull request, the issues that pull request closes (issue
+// #689).
+func webhookMentionKeys(event WebhookEvent) []string {
+	if !event.OnPullRequest {
+		if key, ok := webhookIssueKey(event); ok {
+			return []string{key}
+		}
+		return nil
+	}
+	if event.Repository == "" {
+		return nil
+	}
+	keys := make([]string, 0, len(event.ClosesIssues))
+	for _, number := range event.ClosesIssues {
+		keys = append(keys, event.Repository+"#"+strconv.Itoa(number))
+	}
+	return keys
+}
+
 func webhookIssueKey(event WebhookEvent) (string, bool) {
 	if event.Repository == "" || event.IssueNumber <= 0 {
 		return "", false

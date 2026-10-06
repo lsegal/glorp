@@ -37,6 +37,12 @@ type WebhookEvent struct {
 	// resulting refresh as a continuation sweep, so unowned work goes through
 	// the cooperative handoff instead of looking like a brand-new pickup.
 	MentionedIssues []int
+	// OnPullRequest reports that an issue_comment delivery's comment was
+	// posted on a pull request rather than an issue, and ClosesIssues names
+	// the issues that pull request's description closes, so a direct mention
+	// posted there reaches the issue it fixes (issue #689).
+	OnPullRequest bool
+	ClosesIssues  []int
 	// DiscussionNumber and DiscussionTitle carry the thread a `discussion`
 	// delivery names. They are kept separate from the issue fields because a
 	// discussion and an issue can share a number, and the issue fields key
@@ -98,9 +104,10 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 		Issue struct {
-			Number int    `json:"number"`
-			Title  string `json:"title"`
-			Body   string `json:"body"`
+			Number      int              `json:"number"`
+			Title       string           `json:"title"`
+			Body        string           `json:"body"`
+			PullRequest *json.RawMessage `json:"pull_request"`
 		} `json:"issue"`
 		PullRequest struct {
 			Body string `json:"body"`
@@ -135,6 +142,10 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 			body = payload.PullRequest.Body
 		}
 		event.MentionedIssues = mentionedIssueNumbers(body)
+		if kind == "issue_comment" && payload.Issue.PullRequest != nil {
+			event.OnPullRequest = true
+			event.ClosesIssues = closingIssueNumbers(payload.Issue.Body, event.Repository)
+		}
 		event.DiscussionNumber = payload.Discussion.Number
 		event.DiscussionTitle = payload.Discussion.Title
 	}
