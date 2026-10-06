@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Act on a direct `@/glorp:ID` mention posted on a pull request while glorp is still working on the issue that pull request closes, instead of only reacting to it with 👀 (issue #693). The running agent now watches the pull requests it opened as well as the issue, and is interrupted and told to act on the comment in the same session, pushing new commits or replying on the pull request as asked. The mention no longer also starts a second run once that one finishes. Only mentions from `--allowed-commenters` count, so the agent's own pull request comments never interrupt it. A mention glorp sees but cannot act on yet now logs why it is waiting: the issue's current run cannot be resumed, or the issue is not among the open issues glorp watches.
+
 ## v1.5.8 - 2026-10-06
 
 - Act on direct `@/glorp:ID` mention comments in `--pollmode=browser` (the default) and `--pollmode=poll`, instead of only when a webhook delivers them (issue #689). Each poll now reads the comments posted since the last one with a single API request per watched repository, then reacts to the mention and starts a run using the same rules as webhook mode: the mention must be the newest comment, it must come from `--allowed-commenters`, and the ticket must not already be running. A mention posted on a pull request now starts a run on the issue that pull request closes, in every poll mode. One mention starts at most one run.
