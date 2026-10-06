@@ -389,3 +389,16 @@ func TestGhFixWaitsForCIInTheForegroundWhenNonInteractive(t *testing.T) {
 		}
 	}
 }
+
+func TestGhFixNeverMergesClosedWork(t *testing.T) {
+	body := ghFixSkill(t)
+	for _, required := range []string{
+		"confirm both the originating issue and the PR are still open",
+		"If either is closed, do not merge",
+		"must not be reopened or reused",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("gh-fix skill does not refuse to merge closed work %q", required)
+		}
+	}
+}

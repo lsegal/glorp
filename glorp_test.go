@@ -645,7 +645,7 @@ func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	src.mu.Lock()
-	src.state = OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Number: 9, State: "CLOSED"}}}
+	src.state = OriginatingWorkState{IssueState: "CLOSED", PullRequests: []PullRequestWorkState{{Number: 9, State: "OPEN"}}}
 	src.mu.Unlock()
 
 	deadline = time.Now().Add(time.Second)
@@ -656,7 +656,7 @@ func TestGlorpStopsAgentWhenOriginatingWorkCloses(t *testing.T) {
 			if err := <-done; err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(logs.String(), "stopping agent: pull request #9 was closed without merging") || !strings.Contains(logs.String(), "work closed by user") {
+			if !strings.Contains(logs.String(), "stopping agent: issue #7 was closed without a merge") || !strings.Contains(logs.String(), "work closed by user") {
 				t.Fatalf("closure failure was not logged:\n%s", logs.String())
 			}
 			return
@@ -826,16 +826,89 @@ func TestGlorpIgnoresCompetingClaimFromSameIdentity(t *testing.T) {
 	}
 }
 
-func TestClosedWorkReasonIgnoresPullRequestsAlreadyClosedAtStart(t *testing.T) {
+func TestRejectedPullRequestIgnoresPullRequestsAlreadyClosedAtStart(t *testing.T) {
 	closed := PullRequestWorkState{Number: 8, State: "CLOSED"}
 	previous := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{closed}}
 	current := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{closed, {Number: 9, State: "OPEN"}}}
-	if reason := closedWorkReason(previous, current, 7); reason != "" {
-		t.Fatalf("preexisting closed pull request stopped work: %s", reason)
+	if number, reason := rejectedPullRequest(previous, current); reason != "" {
+		t.Fatalf("preexisting closed pull request #%d restarted work: %s", number, reason)
 	}
 	current.PullRequests[1].State = "CLOSED"
-	if reason := closedWorkReason(previous, current, 7); reason != "pull request #9 was closed without merging" {
-		t.Fatalf("newly closed pull request reason = %q", reason)
+	if number, reason := rejectedPullRequest(previous, current); number != 9 || reason != "pull request #9 was closed without merging" {
+		t.Fatalf("newly closed pull request = (#%d, %q)", number, reason)
+	}
+}
+
+func TestClosedWorkDistinguishesIssueClosureFromRejectedPullRequest(t *testing.T) {
+	open := PullRequestWorkState{Number: 9, State: "OPEN"}
+	closed := PullRequestWorkState{Number: 9, State: "CLOSED"}
+	merged := PullRequestWorkState{Number: 9, State: "CLOSED", Merged: true}
+	working := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{open}}
+	for _, test := range []struct {
+		name               string
+		previous, current  OriginatingWorkState
+		wantStop           string
+		wantRestart        string
+		wantRestartRequest int
+	}{
+		{name: "issue closed", previous: working, current: OriginatingWorkState{IssueState: "CLOSED", PullRequests: []PullRequestWorkState{open}}, wantStop: "issue #7 was closed without a merge"},
+		{name: "pull request closed", previous: working, current: OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{closed}}, wantRestart: "pull request #9 was closed without merging", wantRestartRequest: 9},
+		{name: "both closed", previous: working, current: OriginatingWorkState{IssueState: "CLOSED", PullRequests: []PullRequestWorkState{closed}}, wantStop: "issue #7 was closed without a merge"},
+		{name: "pull request closed by the cleanup of a closed issue", previous: OriginatingWorkState{IssueState: "CLOSED", PullRequests: []PullRequestWorkState{open}}, current: OriginatingWorkState{IssueState: "CLOSED", PullRequests: []PullRequestWorkState{closed}}},
+		{name: "merged", previous: working, current: OriginatingWorkState{IssueState: "CLOSED", PullRequests: []PullRequestWorkState{merged}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if stop := closedWorkReason(test.previous, test.current, 7); stop != test.wantStop {
+				t.Errorf("closedWorkReason = %q, want %q", stop, test.wantStop)
+			}
+			if number, restart := rejectedPullRequest(test.previous, test.current); restart != test.wantRestart || number != test.wantRestartRequest {
+				t.Errorf("rejectedPullRequest = (#%d, %q), want (#%d, %q)", number, restart, test.wantRestartRequest, test.wantRestart)
+			}
+		})
+	}
+}
+
+func TestGlorpRestartsAgentWhenPullRequestClosesWithIssueOpen(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	src.state = OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Number: 9, State: "OPEN"}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 4)}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitForDispatch := func() {
+		t.Helper()
+		select {
+		case <-runner.dispatched:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for the agent to be launched:\n%s", logs.String())
+		}
+	}
+	waitForDispatch()
+	src.mu.Lock()
+	src.state = OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Number: 9, State: "CLOSED"}}}
+	src.mu.Unlock()
+	waitForDispatch()
+
+	if !strings.Contains(logs.String(), "restarting agent: pull request #9 was closed without merging") || !strings.Contains(logs.String(), "restarting the agent for a fresh attempt") {
+		t.Fatalf("rejected pull request did not restart the agent:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "work closed by user") {
+		t.Fatalf("rejected pull request stopped the work:\n%s", logs.String())
+	}
+	state, err := loadWorkState(statePath)
+	if err != nil || state[7].Status != "active" {
+		t.Fatalf("restarted work is not active, state=%v err=%v", state, err)
 	}
 }
 
@@ -3776,6 +3849,54 @@ func TestGlorpRelaysClosedWorkIntoTheSameSession(t *testing.T) {
 	state, err := loadWorkState(statePath)
 	if err != nil || state[7].Status != "active" {
 		t.Fatalf("relayed closure did not leave the work active, state=%v err=%v", state, err)
+	}
+}
+
+func TestGlorpRelaysRejectedPullRequestIntoTheSameSession(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		issueState string
+		want       []string
+		notWant    string
+	}{
+		{name: "issue open", issueState: "OPEN", want: []string{"Pull request #9 for issue #7 was closed without merging", "Do not merge, reopen, or reuse pull request #9", "start a fresh implementation"}, notWant: "Stop working"},
+		{name: "issue closed too", issueState: "CLOSED", want: []string{"Stop working on issue #7", "do not merge any pull request"}, notWant: "fresh implementation"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.json")
+			src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+			src.state = OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Number: 9, State: "OPEN"}}}
+			runner := &fakeSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4)}
+			w := &Glorp{
+				Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+				Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- w.Run(ctx) }()
+			defer func() {
+				cancel()
+				<-done
+			}()
+
+			first := waitForSession(t, runner.sessions)
+			src.mu.Lock()
+			src.state = OriginatingWorkState{IssueState: test.issueState, PullRequests: []PullRequestWorkState{{Number: 9, State: "CLOSED"}}}
+			src.mu.Unlock()
+
+			resumed := waitForSession(t, runner.sessions)
+			if !resumed.Resume || resumed.ID != first.ID {
+				t.Fatalf("closure did not resume the same session: first=%+v resumed=%+v", first, resumed)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(resumed.Update, want) {
+					t.Errorf("update %q does not contain %q", resumed.Update, want)
+				}
+			}
+			if strings.Contains(resumed.Update, test.notWant) {
+				t.Errorf("update %q contains %q", resumed.Update, test.notWant)
+			}
+		})
 	}
 }
 
