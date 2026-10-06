@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restart the work on an issue when a human closes its pull request without merging while the issue is still open, instead of stopping it (issue #690). The agent is told the attempt was rejected and starts a fresh implementation with a new branch and pull request, never reopening or reusing the closed one; an agent whose session cannot be resumed is started over in a new session. Closing the issue still stops the work, and wins when both are closed. The `gh-fix` skill now also checks that the issue and the pull request are both still open right before merging, and never merges if either is closed.
+
 ## v1.5.7 - 2026-10-05
 
 - Show webhook delivery as offline in both dashboards while the ngrok tunnel is down, instead of always showing it as online (issue #687). Push mode now reads "push (offline)" from the moment glorp finds the tunnel no longer reaches its webhook server, or cannot start a new one, until a check or restart succeeds. GitHub deliveries are lost while it lasts and glorp falls back to its 15-minute poll.
