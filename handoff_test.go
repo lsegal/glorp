@@ -98,17 +98,22 @@ type fakeCommentClient struct {
 	postErr   error
 	listErr   error
 	reactions []fakeReaction
-	reactErr  error
+	// reviews holds each pull request's review comments and review bodies.
+	reviews  map[string][]Comment
+	reactErr error
 }
 
 type fakeReaction struct {
 	Repo      string
 	CommentID int64
-	Content   string
+	// Kind and NodeID say which reaction endpoint was used (issue #695).
+	Kind    CommentKind
+	NodeID  string
+	Content string
 }
 
 func newFakeCommentClient() *fakeCommentClient {
-	return &fakeCommentClient{comments: make(map[string][]Comment)}
+	return &fakeCommentClient{comments: make(map[string][]Comment), reviews: make(map[string][]Comment)}
 }
 
 func (f *fakeCommentClient) key(repo string, number int) string {
@@ -1179,4 +1184,40 @@ func TestNegotiationNudgeFollowsHandshakeCompletion(t *testing.T) {
 		}
 		w.awaitNegotiations()
 	}
+}
+
+func (f *fakeCommentClient) AddReviewCommentReaction(_ context.Context, repo string, commentID int64, content string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reactErr != nil {
+		return f.reactErr
+	}
+	f.reactions = append(f.reactions, fakeReaction{Repo: repo, CommentID: commentID, Kind: ReviewComment, Content: content})
+	return nil
+}
+
+func (f *fakeCommentClient) AddReviewReaction(_ context.Context, repo string, nodeID string, content string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reactErr != nil {
+		return f.reactErr
+	}
+	f.reactions = append(f.reactions, fakeReaction{Repo: repo, Kind: ReviewBody, NodeID: nodeID, Content: content})
+	return nil
+}
+
+func (f *fakeCommentClient) ListReviewComments(_ context.Context, repo string, number int) ([]Comment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return slices.Clone(f.reviews[f.key(repo, number)]), nil
+}
+
+func (f *fakeCommentClient) injectReview(repo string, number int, comment Comment) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := f.key(repo, number)
+	f.reviews[key] = append(f.reviews[key], comment)
 }

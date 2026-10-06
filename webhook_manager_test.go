@@ -50,7 +50,7 @@ func TestWebhookSpecsSupportOrganizationProjects(t *testing.T) {
 	if specs[1].apiPath != "repos/example/alpha/hooks" || specs[2].apiPath != "repos/example/beta/hooks" {
 		t.Fatalf("webhook specs = %#v", specs)
 	}
-	if !reflect.DeepEqual(specs[1].events, []string{"issues", "issue_comment", "ping"}) {
+	if !reflect.DeepEqual(specs[1].events, []string{"issues", "issue_comment", "pull_request_review", "pull_request_review_comment", "ping"}) {
 		t.Fatalf("webhook spec events = %#v", specs[1].events)
 	}
 }
@@ -114,7 +114,7 @@ func TestWebhookSpecsWatchPersonalProjectRepositories(t *testing.T) {
 	if specs[0].apiPath != "repos/octocat/alpha/hooks" || specs[1].apiPath != "repos/octocat/beta/hooks" {
 		t.Fatalf("webhook specs = %#v", specs)
 	}
-	if !reflect.DeepEqual(specs[0].events, []string{"issues", "pull_request", "push", "ping", "issue_comment"}) {
+	if !reflect.DeepEqual(specs[0].events, []string{"issues", "pull_request", "push", "ping", "issue_comment", "pull_request_review", "pull_request_review_comment"}) {
 		t.Fatalf("webhook spec events = %#v", specs[0].events)
 	}
 }
@@ -166,7 +166,7 @@ func TestWebhookSpecsPreserveRepositoryEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 1 || specs[0].apiPath != "repos/owner/repo/hooks" || !reflect.DeepEqual(specs[0].events, []string{"issues", "pull_request", "push", "ping", "issue_comment"}) {
+	if len(specs) != 1 || specs[0].apiPath != "repos/owner/repo/hooks" || !reflect.DeepEqual(specs[0].events, []string{"issues", "pull_request", "push", "ping", "issue_comment", "pull_request_review", "pull_request_review_comment"}) {
 		t.Fatalf("webhook specs = %#v", specs)
 	}
 }

@@ -69,20 +69,6 @@ type ReviewMentionSource interface {
 	RecentReviewComments(ctx context.Context, repo string, since time.Time) ([]RecentComment, error)
 }
 
-// ReviewReactor reacts to pull request review comments and review bodies,
-// which the issue comment reaction endpoint does not reach (issue #695).
-type ReviewReactor interface {
-	AddReviewCommentReaction(ctx context.Context, repo string, commentID int64, content string) error
-	AddReviewReaction(ctx context.Context, repo string, nodeID string, content string) error
-}
-
-// ReviewCommentLister lists the inline review comments and submitted review
-// bodies on a pull request, oldest first, so a run in progress hears a
-// mention posted in a review of the pull request it opened (issue #695).
-type ReviewCommentLister interface {
-	ListReviewComments(ctx context.Context, repo string, number int) ([]Comment, error)
-}
-
 // mentionScanOverlap is how far each scan reaches back past the newest
 // comment the last one saw. GitHub can surface a comment in the listing a
 // little after its timestamp, and the overlap costs nothing because comments
