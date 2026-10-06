@@ -279,7 +279,7 @@ func repositoryWebhookSpec(repo string) webhookSpec {
 	return webhookSpec{
 		apiPath: "repos/" + repo + "/hooks",
 		name:    repo,
-		events:  []string{"issues", "pull_request", "push", "ping", "issue_comment"},
+		events:  []string{"issues", "pull_request", "push", "ping", "issue_comment", "pull_request_review", "pull_request_review_comment"},
 	}
 }
 
@@ -287,14 +287,16 @@ func repositoryWebhookSpec(repo string) webhookSpec {
 // needs beside its own board hook. It subscribes only to the issue traffic
 // the board's in-flight runs have to hear about, rather than the full
 // repository set: a board target dispatches from the board, so pushes and
-// pull-request activity are not its business. A repository that is also
+// pull-request activity are not its business. Pull request reviews are the
+// exception, because a direct mention can be posted in one (issue #695). A
+// repository that is also
 // watched as a repository target shares the one hook and keeps its wider
 // event set, because this narrower spec asks for nothing it is missing.
 func projectIssueWebhookSpec(repo string) webhookSpec {
 	return webhookSpec{
 		apiPath: "repos/" + repo + "/hooks",
 		name:    repo + " project issues",
-		events:  []string{"issues", "issue_comment", "ping"},
+		events:  []string{"issues", "issue_comment", "pull_request_review", "pull_request_review_comment", "ping"},
 	}
 }
 

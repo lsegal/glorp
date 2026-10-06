@@ -1089,8 +1089,10 @@ func (w *Glorp) commentsSeen(ctx context.Context, repo string, number int) map[s
 // without this a mention posted on the pull request the agent opened got its
 // eyes reaction and was never heard by the agent. Only mentions from allowed
 // commenters count: the agent itself posts on its pull request, and relaying
-// that would restart it on its own chatter. Every comment read is added to
-// seen, so one mention is relayed, or logged as skipped, once.
+// that would restart it on its own chatter. Review comments and review
+// bodies on those pull requests are read as well (issue #695). Every comment
+// read is added to seen, so one mention is relayed, or logged as skipped,
+// once.
 func (w *Glorp) pullRequestMentions(ctx context.Context, repo string, issue Issue, pullRequests []PullRequestWorkState, since time.Time, seen map[string]bool) []int {
 	if w.Identity == "" {
 		return nil
@@ -1106,6 +1108,16 @@ func (w *Glorp) pullRequestMentions(ctx context.Context, repo string, issue Issu
 				w.logf("issue #%d pull request #%d comment check failed: %v", issue.Number, pullRequest.Number, err)
 			}
 			continue
+		}
+		if lister, ok := w.Comments.(ReviewCommentLister); ok {
+			reviews, err := lister.ListReviewComments(ctx, repo, pullRequest.Number)
+			if err != nil {
+				if ctx.Err() == nil {
+					w.logf("issue #%d pull request #%d review check failed: %v", issue.Number, pullRequest.Number, err)
+				}
+			} else {
+				comments = append(comments, reviews...)
+			}
 		}
 		found := false
 		for _, comment := range comments {
@@ -1138,7 +1150,7 @@ func pullRequestMentionPrompt(issue Issue, pullRequests []int, issueComments int
 	if len(pullRequests) > 1 {
 		noun = "pull requests"
 	}
-	prompt := fmt.Sprintf("A comment addressed to you was posted on %s %s for issue #%d while you were working on it.\n\nReread the %s conversation from GitHub and treat that comment as an instruction for this work. Act on it: change the implementation and push new commits to the pull request when it asks for a change, reply on the pull request when it asks a question, or both, before continuing the rest of the work.", noun, formatIssueRefs(pullRequests), issue.Number, noun)
+	prompt := fmt.Sprintf("A comment addressed to you was posted on %s %s for issue #%d while you were working on it.\n\nReread the %s conversation, reviews, and inline review comments from GitHub and treat that comment as an instruction for this work. Act on it: change the implementation and push new commits to the pull request when it asks for a change, reply on the pull request when it asks a question, or both, before continuing the rest of the work.", noun, formatIssueRefs(pullRequests), issue.Number, noun)
 	if issueComments > 0 {
 		prompt += fmt.Sprintf(" Issue #%d also has %d new comment(s); reread its conversation too.", issue.Number, issueComments)
 	}
@@ -2705,41 +2717,44 @@ func (w *Glorp) Run(ctx context.Context) error {
 					}
 				}
 			}
-			if event.Kind == "issue_comment" && event.Action == "created" && mentionedIdentity(event.CommentBody, w.Identity) {
+			if kind, ok := webhookMentionKind(event); ok && mentionedIdentity(event.CommentBody, w.Identity) {
 				// Acknowledge the mention was read regardless of whether it goes on
 				// to authorize a run (issue #581): a human watching the thread should
 				// see the eyes reaction even when the mention is stale or from an
 				// unauthorized commenter, since either way this instance saw it.
-				if reactor, ok := w.Comments.(CommentReactor); ok && event.CommentID != 0 {
-					if err := reactor.AddReaction(ctx, event.Repository, event.CommentID, "eyes"); err != nil {
-						w.logf("issue #%d failed to react to mention of instance %s: %v", event.IssueNumber, w.Identity, err)
-					}
-				}
+				w.reactToMention(ctx, event.Repository, kind, event.IssueNumber, event.CommentID, event.CommentNodeID)
 				// A mention in the webhook payload alone is not enough to trigger a
-				// run (issue #294): the mentioning comment must also be the current
-				// last comment and come from an allowed commenter, both reverified
-				// against GitHub rather than trusted from the delivery.
+				// run (issue #294): the mentioning comment must also come from an
+				// allowed commenter and be on GitHub as delivered, reverified there
+				// rather than trusted from the delivery. A conversation comment
+				// must also still be the thread's last comment.
 				authorized := commenterAllowed(event.CommentAuthor, w.AllowedCommenters)
 				if authorized && w.Comments != nil {
 					var err error
-					authorized, err = authorizedDirectMention(ctx, w.Comments, event.Repository, event.IssueNumber, w.Identity, w.AllowedCommenters)
+					if kind == ConversationComment {
+						authorized, err = authorizedDirectMention(ctx, w.Comments, event.Repository, event.IssueNumber, w.Identity, w.AllowedCommenters)
+					} else if lister, ok := w.Comments.(ReviewCommentLister); ok {
+						authorized, err = reviewMentionOnGitHub(ctx, lister, event.Repository, event.IssueNumber, event.CommentBody, event.CommentAuthor)
+					}
 					if err != nil {
-						w.logf("issue #%d failed to verify direct mention of instance %s: %v", event.IssueNumber, w.Identity, err)
+						w.logf("issue #%d failed to verify direct mention of instance %s%s: %v", event.IssueNumber, w.Identity, mentionLocationSuffix(kind), err)
 						authorized = false
 					}
 				}
 				keys := webhookMentionKeys(event)
-				if !authorized {
+				if !authorized && kind == ConversationComment {
 					w.logf("issue #%d ignoring direct mention of instance %s: not the last comment or not from an allowed commenter", event.IssueNumber, w.Identity)
+				} else if !authorized {
+					w.logf("pull request #%d ignoring direct mention of instance %s in %s: not from an allowed commenter or not found on GitHub", event.IssueNumber, w.Identity, mentionLocation(kind))
 				} else if event.OnPullRequest && len(keys) == 0 {
-					w.logf("pull request #%d directly mentioned instance %s, but it closes no issue to run", event.IssueNumber, w.Identity)
+					w.logf("pull request #%d directly mentioned instance %s%s, but it closes no issue to run", event.IssueNumber, w.Identity, mentionLocationSuffix(kind))
 				} else if len(keys) > 0 {
 					key := keys[0]
 					for _, mentioned := range keys {
 						directMentions[mentioned] = true
 					}
 					if event.OnPullRequest {
-						w.logf("pull request #%d directly mentioned instance %s; refreshing for a threaded gh-fix run on %s", event.IssueNumber, w.Identity, formatIssueRefs(event.ClosesIssues))
+						w.logf("pull request #%d directly mentioned instance %s%s; refreshing for a threaded gh-fix run on %s", event.IssueNumber, w.Identity, mentionLocationSuffix(kind), formatIssueRefs(event.ClosesIssues))
 					} else {
 						w.logf("issue #%d directly mentioned instance %s; refreshing for a threaded gh-fix run", event.IssueNumber, w.Identity)
 					}
@@ -2931,7 +2946,7 @@ func stateFileFingerprint(path string) string {
 // subscribed event is never silently dropped.
 func webhookEventNeedsRefresh(event WebhookEvent) bool {
 	switch event.Kind {
-	case "push", "ping", "issue_comment":
+	case "push", "ping", "issue_comment", "pull_request_review", "pull_request_review_comment":
 		return false
 	case "pull_request":
 		return event.Action == "closed"
@@ -3017,6 +3032,23 @@ func webhookContinuationSweep(event WebhookEvent) map[string]bool {
 	return sweep
 }
 
+// webhookMentionKind reports whether a delivery is a newly posted comment a
+// direct mention could be in, and which kind: an issue or pull request
+// conversation comment, an inline review comment, or a submitted review's
+// body (issue #695).
+func webhookMentionKind(event WebhookEvent) (CommentKind, bool) {
+	switch {
+	case event.Kind == "issue_comment" && event.Action == "created":
+		return ConversationComment, true
+	case event.Kind == "pull_request_review_comment" && event.Action == "created":
+		return ReviewComment, true
+	case event.Kind == "pull_request_review" && event.Action == "submitted":
+		return ReviewBody, true
+	default:
+		return ConversationComment, false
+	}
+}
+
 // webhookIssueKey returns the "repo#number" key the delivery refers to, when it
 // names one.
 // webhookMentionKeys names the "repo#number" keys a direct mention in an
@@ -3066,6 +3098,10 @@ func (w *Glorp) logWebhookEvent(event WebhookEvent) {
 		w.logf("webhook project item received (action: %s)", event.Action)
 	case "issue_comment":
 		w.logf("webhook issue comment received (repository: %s, action: %s, issue: #%d)", event.Repository, event.Action, event.IssueNumber)
+	case "pull_request_review_comment":
+		w.logf("webhook review comment received (repository: %s, action: %s, pull request: #%d)", event.Repository, event.Action, event.IssueNumber)
+	case "pull_request_review":
+		w.logf("webhook review received (repository: %s, action: %s, pull request: #%d)", event.Repository, event.Action, event.IssueNumber)
 	case "discussion":
 		w.logf("webhook discussion received (repository: %s, action: %s, discussion: #%d %q)", event.Repository, event.Action, event.DiscussionNumber, event.DiscussionTitle)
 	default:

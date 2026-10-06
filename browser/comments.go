@@ -117,6 +117,38 @@ func (s *CommentSource) AddReaction(ctx context.Context, repo string, commentID 
 	return reactor.AddReaction(ctx, repo, commentID, content)
 }
 
+// AddReviewCommentReaction writes through the API client, same as
+// AddReaction, and is a no-op when it cannot react to review comments.
+func (s *CommentSource) AddReviewCommentReaction(ctx context.Context, repo string, commentID int64, content string) error {
+	reactor, ok := s.api.(core.ReviewReactor)
+	if !ok {
+		return nil
+	}
+	return reactor.AddReviewCommentReaction(ctx, repo, commentID, content)
+}
+
+// AddReviewReaction writes through the API client, same as AddReaction, and
+// is a no-op when it cannot react to reviews.
+func (s *CommentSource) AddReviewReaction(ctx context.Context, repo string, nodeID string, content string) error {
+	reactor, ok := s.api.(core.ReviewReactor)
+	if !ok {
+		return nil
+	}
+	return reactor.AddReviewReaction(ctx, repo, nodeID, content)
+}
+
+// ListReviewComments reads a pull request's review comments and review bodies
+// through the API client. The conversation page this source reads folds
+// inline comments into collapsed review threads, so the API is the reliable
+// reader. It returns nothing when the API client cannot list them.
+func (s *CommentSource) ListReviewComments(ctx context.Context, repo string, number int) ([]core.Comment, error) {
+	lister, ok := s.api.(core.ReviewCommentLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListReviewComments(ctx, repo, number)
+}
+
 // commentsURL is the conversation page for an issue or a pull request.
 // GitHub redirects /issues/N to /pull/N for a pull request, so the issue form
 // reaches both, which matters because the handoff protocol negotiates ownership

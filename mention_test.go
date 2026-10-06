@@ -16,12 +16,13 @@ import (
 type fakeMentionSource struct {
 	mu       sync.Mutex
 	comments map[string][]RecentComment
+	reviews  map[string][]RecentComment
 	closing  map[int][]int
 	scans    int
 }
 
 func newFakeMentionSource() *fakeMentionSource {
-	return &fakeMentionSource{comments: make(map[string][]RecentComment), closing: make(map[int][]int)}
+	return &fakeMentionSource{comments: make(map[string][]RecentComment), reviews: make(map[string][]RecentComment), closing: make(map[int][]int)}
 }
 
 func (f *fakeMentionSource) add(repo string, comment RecentComment) {
@@ -41,6 +42,18 @@ func (f *fakeMentionSource) RecentComments(_ context.Context, repo string, _ tim
 	defer f.mu.Unlock()
 	f.scans++
 	return slices.Clone(f.comments[repo]), nil
+}
+
+func (f *fakeMentionSource) addReview(repo string, comment RecentComment) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reviews[repo] = append(f.reviews[repo], comment)
+}
+
+func (f *fakeMentionSource) RecentReviewComments(_ context.Context, repo string, _ time.Time) ([]RecentComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.reviews[repo]), nil
 }
 
 func (f *fakeMentionSource) ClosingIssues(_ context.Context, _ string, number int) ([]int, error) {

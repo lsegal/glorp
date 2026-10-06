@@ -37,3 +37,19 @@ type CommentClient interface {
 type CommentReactor interface {
 	AddReaction(ctx context.Context, repo string, commentID int64, content string) error
 }
+
+// ReviewReactor reacts to pull request review comments and review bodies,
+// which the issue comment reaction endpoint does not reach (issue #695). A
+// review body has no REST reaction endpoint, so it is named by its GraphQL
+// node ID.
+type ReviewReactor interface {
+	AddReviewCommentReaction(ctx context.Context, repo string, commentID int64, content string) error
+	AddReviewReaction(ctx context.Context, repo string, nodeID string, content string) error
+}
+
+// ReviewCommentLister lists the inline review comments and submitted review
+// bodies on a pull request, oldest first, so a run in progress hears a
+// mention posted in a review of the pull request it opened (issue #695).
+type ReviewCommentLister interface {
+	ListReviewComments(ctx context.Context, repo string, number int) ([]Comment, error)
+}

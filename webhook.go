@@ -32,6 +32,9 @@ type WebhookEvent struct {
 	// CommentID is CommentBody's GitHub comment ID, used to react to the
 	// comment that carried a direct mention (issue #581).
 	CommentID int64
+	// CommentNodeID is CommentBody's GraphQL node ID. A pull_request_review
+	// delivery's review body can only be reacted to through it (issue #695).
+	CommentNodeID string
 	// MentionedIssues names same-repository issues referenced by a closed
 	// issue or pull request. The run loop uses these references to treat the
 	// resulting refresh as a continuation sweep, so unowned work goes through
@@ -40,7 +43,9 @@ type WebhookEvent struct {
 	// OnPullRequest reports that an issue_comment delivery's comment was
 	// posted on a pull request rather than an issue, and ClosesIssues names
 	// the issues that pull request's description closes, so a direct mention
-	// posted there reaches the issue it fixes (issue #689).
+	// posted there reaches the issue it fixes (issue #689). Review comment
+	// and review deliveries are always on a pull request, and IssueNumber
+	// names it (issue #695).
 	OnPullRequest bool
 	ClosesIssues  []int
 	// DiscussionNumber and DiscussionTitle carry the thread a `discussion`
@@ -81,7 +86,7 @@ func (h WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Header.Get("X-GitHub-Event") {
-	case "issues", "pull_request", "push", "ping", "projects_v2_item", "issue_comment", "discussion":
+	case "issues", "pull_request", "push", "ping", "projects_v2_item", "issue_comment", "pull_request_review", "pull_request_review_comment", "discussion":
 		event := decodeWebhookEvent(r.Header.Get("X-GitHub-Event"), body)
 		select {
 		case h.Events <- event:
@@ -110,19 +115,30 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 			PullRequest *json.RawMessage `json:"pull_request"`
 		} `json:"issue"`
 		PullRequest struct {
-			Body string `json:"body"`
+			Number int    `json:"number"`
+			Title  string `json:"title"`
+			Body   string `json:"body"`
 		} `json:"pull_request"`
 		Discussion struct {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
 		} `json:"discussion"`
 		Comment struct {
-			ID   int64  `json:"id"`
-			Body string `json:"body"`
-			User struct {
+			ID     int64  `json:"id"`
+			NodeID string `json:"node_id"`
+			Body   string `json:"body"`
+			User   struct {
 				Login string `json:"login"`
 			} `json:"user"`
 		} `json:"comment"`
+		Review struct {
+			ID     int64  `json:"id"`
+			NodeID string `json:"node_id"`
+			Body   string `json:"body"`
+			User   struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		} `json:"review"`
 		Commits []json.RawMessage `json:"commits"`
 	}
 	if json.Unmarshal(body, &payload) == nil {
@@ -145,6 +161,20 @@ func decodeWebhookEvent(kind string, body []byte) WebhookEvent {
 		if kind == "issue_comment" && payload.Issue.PullRequest != nil {
 			event.OnPullRequest = true
 			event.ClosesIssues = closingIssueNumbers(payload.Issue.Body, event.Repository)
+		}
+		switch kind {
+		case "pull_request_review_comment", "pull_request_review":
+			event.IssueNumber = payload.PullRequest.Number
+			event.IssueTitle = payload.PullRequest.Title
+			event.OnPullRequest = true
+			event.ClosesIssues = closingIssueNumbers(payload.PullRequest.Body, event.Repository)
+			event.CommentNodeID = payload.Comment.NodeID
+			if kind == "pull_request_review" {
+				event.CommentBody = payload.Review.Body
+				event.CommentAuthor = payload.Review.User.Login
+				event.CommentID = payload.Review.ID
+				event.CommentNodeID = payload.Review.NodeID
+			}
 		}
 		event.DiscussionNumber = payload.Discussion.Number
 		event.DiscussionTitle = payload.Discussion.Title
