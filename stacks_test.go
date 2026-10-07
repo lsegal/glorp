@@ -148,25 +148,6 @@ func TestGlorpCachesStackedPullRequestSetting(t *testing.T) {
 	}
 }
 
-func TestGhFixStacksOnOpenBlockingIssue(t *testing.T) {
-	body := ghFixSkill(t)
-	for _, required := range []string{
-		"## Stack on an open blocking issue",
-		"gh api repos/<OWNER>/<REPO>/stacks?per_page=1",
-		"exactly one open blocker",
-		"gh extension install github/gh-stack",
-		"gh stack link",
-		"gh stack rebase --upstack",
-		"Never commit to, rebase, push, or merge it",
-		"never merge the stack with `gh stack merge`",
-		"Never merge a stacked pull request while its base is anything other than the default branch",
-	} {
-		if !strings.Contains(body, required) {
-			t.Errorf("gh-fix skill does not describe stacking %q", required)
-		}
-	}
-}
-
 func TestOriginatingWorkStateReadsStackedPullRequestBase(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -327,17 +308,5 @@ func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "issue #7 unparked: its blocker is no longer open; resuming its stacked pull request") {
 		t.Fatalf("unparking was not logged:\n%s", logs)
-	}
-}
-
-func TestGhFixParksAStackedPullRequestWaitingOnItsBlocker(t *testing.T) {
-	body := ghFixSkill(t)
-	for _, required := range []string{
-		"end the run without waiting for the blocker to merge",
-		"glorp parks it",
-	} {
-		if !strings.Contains(body, required) {
-			t.Errorf("gh-fix skill does not describe parking %q", required)
-		}
 	}
 }

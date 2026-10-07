@@ -1034,27 +1034,6 @@ func TestRemoteControlCodexNoticeSilentWhenRemoteControlIsOff(t *testing.T) {
 	}
 }
 
-// TestReadmeDocumentsCodexRemoteControlBehaviour keeps the `--remote-control`
-// row honest about Codex: the flag reaches Claude runs only, and the row has to
-// say why rather than leaving Codex looking merely overlooked.
-func TestReadmeDocumentsCodexRemoteControlBehaviour(t *testing.T) {
-	var row string
-	for _, line := range strings.Split(readDoc(t, "README.md"), "\n") {
-		if strings.HasPrefix(line, "| `--remote-control` |") {
-			row = line
-			break
-		}
-	}
-	if row == "" {
-		t.Fatal("README.md has no `--remote-control` flag row")
-	}
-	for _, required := range []string{"Codex", "codex exec", "codex remote-control"} {
-		if !strings.Contains(row, required) {
-			t.Errorf("README `--remote-control` row does not mention %q", required)
-		}
-	}
-}
-
 // TestRemoteControlNoLeverFindingNamesEveryCandidate keeps the recorded finding
 // from #506 complete: the point of the constant is that the next reader does not
 // have to re-measure the three levers, so it has to name all of them and where
@@ -1073,28 +1052,6 @@ func TestRemoteControlNoLeverFindingNamesEveryCandidate(t *testing.T) {
 func TestRemoteControlUpstreamIssueIsAClaudeCodeIssue(t *testing.T) {
 	if !strings.HasPrefix(remoteControlUpstreamIssue, "https://github.com/anthropics/claude-code/issues/") {
 		t.Fatalf("remoteControlUpstreamIssue = %q, want an anthropics/claude-code issue URL", remoteControlUpstreamIssue)
-	}
-}
-
-// TestReadmeDocumentsRemoteControlHasNoAlternativeLever keeps the
-// `--remote-control` row from reading as though only the setting was tried. The
-// row is where someone looks before proposing a substitute, so it has to say
-// which substitutes were measured and rejected.
-func TestReadmeDocumentsRemoteControlHasNoAlternativeLever(t *testing.T) {
-	var row string
-	for _, line := range strings.Split(readDoc(t, "README.md"), "\n") {
-		if strings.HasPrefix(line, "| `--remote-control` |") {
-			row = line
-			break
-		}
-	}
-	if row == "" {
-		t.Fatal("README.md has no `--remote-control` flag row")
-	}
-	for _, required := range []string{"autoUploadSessions", "claude remote-control", remoteControlUpstreamIssue} {
-		if !strings.Contains(row, required) {
-			t.Errorf("README `--remote-control` row does not mention %q", required)
-		}
 	}
 }
 

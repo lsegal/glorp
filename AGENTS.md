@@ -4,5 +4,6 @@
 - Add new rules as more one-liners; do not write paragraphs or multi-line entries.
 - Never write a test that reads `CHANGELOG.md` or asserts on its text, including `## Unreleased`.
 - Releases reword, reformat, and promote changelog entries, so those tests break for no real reason.
-- Test the behavior instead: assert against the source, the flags, the workflow, or the README.
+- Test the behavior instead: assert against the program's code, flags, and output.
+- Never test whether support files (READMEs, LICENSEs, Markdown, docs, config) exist or what they say.
 - Still add a `## Unreleased` changelog entry for user-visible changes, matching the surrounding format.
