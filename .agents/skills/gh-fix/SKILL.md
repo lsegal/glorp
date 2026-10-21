@@ -97,14 +97,15 @@ Every time you write or replace the PR body (draft creation, checkpoint updates,
 
 ## Capture UI screenshots and screen recordings
 
-After implementation is complete, and only then, determine whether any changed file affects a user interface. If so:
+After implementation is complete, and only then, determine whether any changed file affects a user interface, including its audio behavior. If so:
 
 1. Capture screenshots that show the completed UI change in representative final states. When the change includes animation, interaction, or a state transition, capture a screen recording that demonstrates the behavior instead of or in addition to screenshots. For animations, plan a set of actions that "use" the full features in their entirety, including any secondary use cases like error handling.
-2. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture screenshots or a screen recording.
-3. For terminal based interfaces, copy output as text if there is no visual, animation, or state change.
-4. For all other non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to create a screen recording.
-5. When capturing a native window (any capture outside a browser, such as a desktop app or platform capture tool), crop the screenshot or recording to the bounds of the relevant window. Never keep a full-screen or full-display-resolution capture unless the app itself is genuinely full screen at capture time.
-6. Upload each screenshot or screen recording, then embed the returned URL directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI screenshots or screen recordings to repository assets or commit them to the branch.
+2. When the change affects audio behavior in a UI, such as sound effects, previews, playback, mixing, or feedback sounds, capture a screen recording with audio that demonstrates the new behavior, even when nothing visual changes. Screenshots alone never satisfy an audio change. Make sure the capture pipeline records sound, not just picture: capture system or tab audio, then play the result back or inspect its streams (for example, `ffprobe` shows an audio stream with nonsilent levels) before uploading. A recording without an audible track is a capture error.
+3. For browser-based interfaces, run the UI and use available browser tooling, such as CDP or browser automation, to capture screenshots or a screen recording.
+4. For terminal based interfaces, copy output as text if there is no visual, animation, audio, or state change.
+5. For all other non-browser interfaces, use an available local application or platform capture tool. If no suitable capture tool is installed, install Loom and use it to create a screen recording.
+6. When capturing a native window (any capture outside a browser, such as a desktop app or platform capture tool), crop the screenshot or recording to the bounds of the relevant window. Never keep a full-screen or full-display-resolution capture unless the app itself is genuinely full screen at capture time.
+7. Upload each screenshot or screen recording, then embed the returned URL directly in the pull request body as Markdown (for example, `![Dashboard after refresh](https://github.com/user-attachments/assets/...)`). Do not add UI screenshots or screen recordings to repository assets or commit them to the branch.
 
 GitHub has no documented public API for attaching files to issues, pull requests, or comments, but the same endpoint the web UI uses for drag-and-drop accepts a bearer token non-interactively. Upload with it directly:
 
@@ -118,7 +119,7 @@ curl -sf -X POST "https://uploads.github.com/user-attachments/assets?name=<FILEN
 
 The response is JSON with a `url` field (`https://github.com/user-attachments/assets/<uuid>`); embed that URL in the pull request body. This endpoint is undocumented and unofficial, so treat a failed or unexpected response as one of the capture errors below rather than retrying indefinitely.
 
-Skip this section only when the completed diff does not affect UI code in any way.
+Skip this section only when the completed diff does not affect UI code, including UI audio behavior, in any way.
 Skip if you run into 2+ errors trying to capture or upload results and mention this in the PR.
 
 ## Commit and push
@@ -139,9 +140,9 @@ Before the final push, verify that the branch contains the intended code, tests,
 
 ## Mark the pull request ready
 
-1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings. Preserve `Closes #<ISSUENUMBER>` on its own line and update the `**Agents:**` footer as described above rather than dropping or overwriting it. Keep every literal skip marker listed under "Commit and push" out of the title and body.
+1. Update the draft PR's title and body to describe the completed fix, including the root cause, change, user impact, changelog entry, tests, and any required UI screenshots or screen recordings, including with-audio recordings for audio changes. Preserve `Closes #<ISSUENUMBER>` on its own line and update the `**Agents:**` footer as described above rather than dropping or overwriting it. Keep every literal skip marker listed under "Commit and push" out of the title and body.
 2. Confirm the head branch, base branch, and changed-file scope are correct. A stacked pull request's changed files must only be this issue's changes on top of the blocker's branch.
-3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI screenshots or screen recordings are complete.
+3. Mark the draft PR ready for review only after implementation, local checks, the final push, and any required UI screenshots or screen recordings, including with-audio recordings for audio changes, are complete.
 
 ## Drive CI to completion
 
@@ -173,7 +174,7 @@ When validation recorded a do-not-merge directive, the run ends with a ready, un
 
 Skip this section entirely when the issue withheld merge authorization; follow "Hold the pull request when merging is withheld" instead.
 
-1. Before merging, fetch the latest PR state and confirm both the originating issue and the PR are still open. If either is closed, do not merge: a closed issue means stop work, and a PR closed without merging means that attempt was rejected and must not be reopened or reused. Then confirm its base is the default branch (a stacked pull request waits for its blocker to merge first), at least one CI run actually registered for the head SHA and every required check on it is successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI screenshots or screen recordings are present, and the head SHA is the one that passed CI. A check list that stays empty for the head SHA is not passing: when the repository has CI, check the head commit message and the PR title and body for a skip marker, remove it, and push a new commit so CI runs before merging.
+1. Before merging, fetch the latest PR state and confirm both the originating issue and the PR are still open. If either is closed, do not merge: a closed issue means stop work, and a PR closed without merging means that attempt was rejected and must not be reopened or reused. Then confirm its base is the default branch (a stacked pull request waits for its blocker to merge first), at least one CI run actually registered for the head SHA and every required check on it is successful, the PR is mergeable, no required review or unresolved conversation blocks it, required UI screenshots or screen recordings, including with-audio recordings for audio changes, are present, and the head SHA is the one that passed CI. A check list that stays empty for the head SHA is not passing: when the repository has CI, check the head commit message and the PR title and body for a skip marker, remove it, and push a new commit so CI runs before merging.
 2. Merge using the repository's required or established merge method. When the repository allows more than one method, prefer them in this order: squash, then merge, then rebase. When squashing, use the PR's title and body as the squash commit message rather than overriding it — the body already carries the standalone `Closes #<ISSUENUMBER>` line. If only merge or only rebase is available, use that method instead, keeping the standalone closing reference intact regardless of method.
 3. Delete the remote issue branch after a successful merge when repository policy permits.
 4. Verify the PR is merged, the merged commit is reachable from the remote default branch, and GitHub closed issue `#<ISSUENUMBER>`. Allow for a brief GitHub processing delay, but do not claim closure without checking.
