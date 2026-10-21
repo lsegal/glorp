@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Have the `gh-fix` skill record a screen recording with audio when a fix changes how a UI sounds, even if nothing on screen changes (issue #699). Before, recordings were only required for visual changes, so pull requests for sound effects, previews, or playback fixes had no evidence of the new behavior. `gh-fix` now checks that the recording actually contains sound before embedding it, and will not mark the pull request ready or merge it without that recording.
+
 ## v1.5.9 - 2026-10-06
 
 - Act on a direct `@/glorp:ID` mention posted in a pull request review or an inline review comment, not just in the pull request's conversation (issue #695). The mention gets the 👀 reaction, starts a run on the issue the pull request closes, or is relayed into the run already working on it, in every poll mode. Webhook mode now subscribes to `pull_request_review` and `pull_request_review_comment` deliveries, and existing glorp webhooks gain them on the next start. The same rules apply as for other mentions: only `--allowed-commenters` count, one mention starts at most one run, and a mention that is skipped logs why.
