@@ -123,7 +123,7 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
 
    ![](./recordings/crash.mp4)
    ```
-   Put a video reference alone in its own paragraph with empty alt text. Give a generated visual alt text that names the state or the diagram, and place it beside its heading and explanation.
+   Put a video reference alone in its own paragraph with empty alt text. Give a generated visual alt text that names the state or the diagram, and place it beside its heading and explanation. The path in the body must be the exact string you will pass to `--attach`, as step 3 explains, so decide where each file lives before writing its reference.
 3. Prefer the GitHub CLI's built-in upload. Check for it with `gh issue create --help`; when it lists `--attach`, pass one `--attach` per file:
    ```sh
    gh issue create --repo OWNER/REPO --title "TITLE" --body-file BODY.md \
@@ -131,6 +131,10 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
      --attach ./screenshots/settings.png --attach ./recordings/crash.mp4
    ```
    GitHub CLI uploads each file and replaces matching local paths in the body with the uploaded URLs. It appends any attached file the body does not reference to the end of the body, in the order the flags were given. Add alt text to an image with `--attach 'PATH#ALT TEXT'`; videos do not take alt text. The same flag works on `gh issue edit` and `gh issue comment`. Uploading needs push access to the repository, and only image and media files are accepted.
+
+   Every in-body reference must use the exact path string passed to `--attach`, without any `#ALT TEXT` suffix: `--attach './screenshots/settings.png#Settings page'` pairs with `![Settings page](./screenshots/settings.png)`. Attach the file from the path the body references, or reference the path you attach. A generated visual kept in a temporary directory is simplest with its absolute path in both places. Never write `./wireframe.png` in the body and attach `/tmp/wireframe.png`.
+
+   Two behaviors of `gh` combine into a silent failure when the paths differ. It replaces a reference only when that reference resolves to an attached file, trying a relative path beside the body file and then in the working directory. It then appends every attached file it did not replace. So a reference that does not resolve to the attached file stays in the body as a broken local path while the same image appears, working, at the bottom, and `gh` reports no error. An identical string always resolves, which is why this skill requires one.
 4. When `gh` has no `--attach` flag, or it fails, upload each file to GitHub's user-attachments endpoint and put the returned URL in the body yourself:
    ```sh
    REPO_ID=$(gh api repos/OWNER/REPO --jq .id)
@@ -140,7 +144,7 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
      --data-binary @PATH/TO/FILE
    ```
    The response is JSON whose `url` field is a `https://github.com/user-attachments/assets/...` address. Replace the local path in the body with that URL: `![alt text](URL)` for an image, and the bare URL alone on its own line for a video. This endpoint is undocumented, so treat an error or an unexpected response as a failed upload.
-5. If you have already created the issue and an upload failed, add the media later with `gh issue edit NUMBER --body-file BODY.md --attach PATH` or `gh issue comment NUMBER --attach PATH`, rather than filing a second issue.
+5. If you have already created the issue and an upload failed, add the media later with `gh issue edit NUMBER --body-file BODY.md --attach PATH`, keeping the same exact-path rule, or `gh issue comment NUMBER --attach PATH`, rather than filing a second issue.
 6. When a file still cannot be uploaded after these fallbacks, remove its local path from the body, describe what the media showed in words, and tell the user which file could not be attached and why. Never commit media to the repository to work around a failed upload.
 
 ## File and verify
@@ -151,11 +155,14 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
    gh issue view NUMBER --repo OWNER/REPO --json url,title,body,labels,assignees
    ```
    - The body has real line breaks, the structured sections, and the quoted original prompt at the bottom.
-   - Every referenced file and generated visual appears as a `https://github.com/user-attachments/...` URL or another uploaded GitHub URL, and no local path, `file://` URL, home directory, or placeholder remains.
+   - Every referenced file and generated visual appears as a `https://github.com/user-attachments/...` URL or another uploaded GitHub URL, and no local path, `file://` URL, home directory, or placeholder remains. An uploaded URL existing somewhere in the body does not pass this check on its own.
+   - Every image reference (`![...](...)` and `<img src="...">`) points at an `https://` URL. A filing that retains a local or relative image path has failed, even when the same image also renders elsewhere in the body.
+   - Each attached file appears exactly once, in the place written for it. A filing that shows an image twice has failed, including a broken local reference paired with a copy appended at the bottom.
    - The labels and assignee are the ones you chose.
    - Each wireframe sits under its state heading and each diagram is followed by its explanation.
    - Nothing private slipped through, checked against the scrub rules above.
 3. Fix any problem you find with `gh issue edit` on the same issue. Never file a second issue to correct the first.
+4. Repair a broken or duplicated image before reporting the result. Move the uploaded URL from the appended copy into the broken reference, keeping its alt text and position, and delete the appended copy. Save the corrected body with `gh issue edit NUMBER --repo OWNER/REPO --body-file BODY.md` and no `--attach`, because attaching the file again would upload and append it again. Read the issue back and repeat these checks until they pass.
 
 ## Report the result
 
