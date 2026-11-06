@@ -124,6 +124,8 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
    ![](./recordings/crash.mp4)
    ```
    Put a video reference alone in its own paragraph with empty alt text. Give a generated visual alt text that names the state or the diagram, and place it beside its heading and explanation.
+
+   The path in the body must be the exact same path string you pass to `--attach`: attach the file from the path the body references, or reference the path you attach. A `./wireframe.png` in the body attached as `/tmp/wireframe.png` is a mismatch. Use a relative path, with the body file and the media in one directory and `gh` run from that directory, so a missed replacement cannot leak a home directory. Keep references out of code fences and inline code, which the CLI leaves alone. A `#ALT TEXT` suffix belongs only to the `--attach` argument and is never part of the path in the body; a reference in the body keeps its own alt text.
 3. Prefer the GitHub CLI's built-in upload. Check for it with `gh issue create --help`; when it lists `--attach`, pass one `--attach` per file:
    ```sh
    gh issue create --repo OWNER/REPO --title "TITLE" --body-file BODY.md \
@@ -131,6 +133,8 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
      --attach ./screenshots/settings.png --attach ./recordings/crash.mp4
    ```
    GitHub CLI uploads each file and replaces matching local paths in the body with the uploaded URLs. It appends any attached file the body does not reference to the end of the body, in the order the flags were given. Add alt text to an image with `--attach 'PATH#ALT TEXT'`; videos do not take alt text. The same flag works on `gh issue edit` and `gh issue comment`. Uploading needs push access to the repository, and only image and media files are accepted.
+
+   Two CLI behaviors combine into a silent failure. Replacement happens only when a reference in the body resolves to an attached file, looking beside the body file and then in the working directory. Any attached file with no such reference is appended to the end of the body. So a mismatched path produces no error: the broken local reference stays where it was written, and a working copy of the same image appears at the bottom. Every file you attach here has a place in the body, so nothing should ever be appended.
 4. When `gh` has no `--attach` flag, or it fails, upload each file to GitHub's user-attachments endpoint and put the returned URL in the body yourself:
    ```sh
    REPO_ID=$(gh api repos/OWNER/REPO --jq .id)
@@ -152,10 +156,15 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
    ```
    - The body has real line breaks, the structured sections, and the quoted original prompt at the bottom.
    - Every referenced file and generated visual appears as a `https://github.com/user-attachments/...` URL or another uploaded GitHub URL, and no local path, `file://` URL, home directory, or placeholder remains.
+   - Every image reference in the body, as Markdown or `<img>`, points at an uploaded URL. A filing fails this check when any image reference still has a local or relative path.
+   - The number of image and video references equals the number of files attached, and each file appears once, where you placed it. A filing fails this check when an image also appears at the end of the body, which is how a broken local reference and its appended copy show up.
    - The labels and assignee are the ones you chose.
    - Each wireframe sits under its state heading and each diagram is followed by its explanation.
    - Nothing private slipped through, checked against the scrub rules above.
-3. Fix any problem you find with `gh issue edit` on the same issue. Never file a second issue to correct the first.
+3. Fix any problem you find with `gh issue edit` on the same issue before reporting. Never file a second issue to correct the first.
+   - To repair a broken local reference and its appended copy, put the appended image's uploaded URL in the local reference, keeping that reference's alt text, and delete the appended paragraph. Save this body with `gh issue edit NUMBER --repo OWNER/REPO --body-file FIXED.md` and no `--attach`, since the file is already uploaded and attaching it again would upload it twice.
+   - When a local reference has no appended copy, attach the file with the same path string the body uses: `gh issue edit NUMBER --repo OWNER/REPO --body-file FIXED.md --attach PATH`.
+   - Read the issue back again and repeat these checks.
 
 ## Report the result
 

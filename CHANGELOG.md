@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop the `gh-create` skill from filing a broken local image reference next to a duplicate copy of the same image (issue #705). The skill now writes the same path in the issue body that it passes to `--attach`, since a mismatch made `gh` leave the local reference in place and append the upload at the bottom. Reading the filed issue back now fails on any remaining local image path or duplicated image, and the skill repairs it on the same issue before reporting.
+
 ## v1.5.10 - 2026-11-06
 
 - Add a `glorp browser` command that opens a visible browser window on glorp's browser profile and does nothing else, so you can change the browser's configuration directly (issue #702). There is no watching, polling, or sign-in attached. glorp exits when you close the window or press Ctrl+C, and shuts the browser down cleanly so your changes stay on the profile for later `glorp watch --browser` and `glorp auth` runs. It refuses to open while another glorp instance has a browser on that profile, since Chrome allows only one process per profile directory.
