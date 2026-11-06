@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.11 - 2026-11-06
+
 - Stop the `gh-create` skill from filing an issue with a broken local image reference and a duplicate copy of the image at the bottom (issue #705). The skill now uses the same path in the body and in `--attach`, and its read-back fails a filing that keeps a local image path or shows an image twice, then repairs that issue before reporting.
 
 ## v1.5.10 - 2026-11-06
