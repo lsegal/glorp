@@ -1,11 +1,11 @@
 ---
 name: gh-create
-description: "File a well-formed GitHub issue from a short user request: expand it into a structured issue, quote the original prompt verbatim at the bottom, apply every matching existing label, assign it to the current gh user by default, upload and embed any referenced screenshots or videos, and scrub private data before filing. Use when the user invokes `/gh-create`, `$gh-create`, or asks an agent to create, file, or open a GitHub issue."
+description: "File a well-formed GitHub issue from a short user request: expand it into a structured issue, quote the original prompt verbatim at the bottom, apply every matching existing label, assign it to the current gh user by default, upload and embed any referenced screenshots or videos, create annotated wireframes for UI or UX changes and deployment or sequence diagrams for complex system interactions, and scrub private data before filing. Use when the user invokes `/gh-create`, `$gh-create`, or asks an agent to create, file, or open a GitHub issue."
 ---
 
 # File a GitHub Issue
 
-Treat `/gh-create [OWNER/REPO] <request>` as authorization to file one GitHub issue that describes the request. Every agent that uses this skill files issues the same way: the same structure, the same labels, the same assignee, properly attached media, and no leaked private data. This skill only creates and edits the one issue it files. It never changes code, branches, pull requests, or other issues.
+Treat `/gh-create [OWNER/REPO] <request>` as authorization to file one GitHub issue that describes the request. Every agent that uses this skill files issues the same way: the same structure, the same labels, the same assignee, properly attached media, explanatory visuals where they help, and no leaked private data. This skill only creates and edits the one issue it files. It never changes code, branches, pull requests, or other issues.
 
 ## Identify the target repository
 
@@ -36,6 +36,7 @@ Expand the request into a clear, structured issue that another person or agent c
    - For a feature or change: `## Requirements` as a numbered list, and `## Acceptance criteria` as concrete, checkable outcomes.
    - `## Scope` or `## Out of scope` when the boundary is not obvious.
    - `## Screenshots` or inline media where the user referenced any.
+   - `## Wireframes` and `## Diagrams` when "Create explanatory visuals" calls for them.
    - `## Notes` for research findings, related issues, and pointers to relevant files written as repository-relative paths.
 3. End every issue with the user's original prompt, quoted verbatim, so the issue is reproducible, replayable, and auditable. Put it last, in a collapsed block, with every line of the prompt prefixed by `> `:
    ```markdown
@@ -54,7 +55,7 @@ Expand the request into a clear, structured issue that another person or agent c
 
 ## Scrub private data
 
-Leave out anything private or sensitive, from the expanded body and from the quoted prompt alike. This applies to everything you write into the issue, including titles, alt text, and file names of uploaded media.
+Leave out anything private or sensitive, from the expanded body and from the quoted prompt alike. This applies to everything you write into the issue, including titles, alt text, file names of uploaded media, and the text inside generated wireframes and diagrams.
 
 1. Omit or replace local file paths and home directories (`/Users/name/...`, `C:\Users\name\...`), usernames, real names, email addresses, phone numbers, hostnames, internal URLs, IP addresses, access tokens, API keys, passwords, cookies, and any other credential or secret. Refer to repository files by repository-relative path only.
 2. Never mention a private repository, its name, its issues, or its code in an issue filed on a public repository, and never quote or paraphrase code from one. Assume anything that came from a private repository is private, even when it looks harmless.
@@ -81,18 +82,48 @@ Apply every existing label that fits, and never invent one.
 2. When the user names a different assignee, assign that user instead. When the user asks for no assignee, leave the issue unassigned.
 3. If the assignment is rejected, file the issue anyway, and report that the assignment failed.
 
-## Attach referenced media
+## Create explanatory visuals
 
-Screenshots, videos, and other files the user mentions or provides must be uploaded to GitHub and embedded in the issue. Never leave a local file path, a `file://` URL, or a placeholder where the media belongs: nobody else can open it.
+Create a visual only when it materially clarifies states or interactions that prose alone would leave unclear. Visuals are explanatory, never decorative. Skip them when the words already say it all, such as a label or copy change, a one-line bug, a crash with clear reproduction steps, or a change the user's own screenshots or mockups already show. A request can call for wireframes, diagrams, both, or neither.
 
-1. Collect every media file the user referenced, attached, or pointed to. Confirm each file exists and scrub it as described above.
+Everything in a visual follows "Write the issue": show what the request asks for and do not use a drawing to invent requirements. Mark any layout or design choice the request left open as an assumption. You may read the existing UI or system code to draw it accurately, under the same read-only limits as research.
+
+### Wireframes for UI or UX changes
+
+When the request changes what a user sees or how they move through an interface, create wireframes for its major states:
+
+1. List the states that logically explain the change: usually the current state followed by each new or changed state, and any empty, loading, error, or confirmation state the change introduces or depends on. Leave out states the change does not affect. Do not draw a state only to complete a set.
+2. Draw each state as a low-fidelity wireframe: grayscale boxes and plain labels showing layout and hierarchy, with one accent color reserved for annotations. Do not imitate a finished visual design. Use realistic placeholder content, never real user data.
+3. Annotate inside the wireframe wherever a reader needs an explanation, with short notes or numbered callouts pointing at the element they describe. Mark what is new or changed, and name the action that leads to the next state, such as `Click Save -> Saved state`.
+4. Order the states so they read as the flow of the change. Put them under `## Wireframes`, each with a short heading naming the state and one sentence on what it shows and what moves the user out of it.
+
+### Diagrams for complex system interactions
+
+When the request involves high-level interaction between systems, services, processes, or agents that is hard to follow in prose, create a diagram:
+
+1. Choose the type that answers the reader's question. Use a sequence diagram when the order of calls, events, retries, or failure handling matters. Use a deployment diagram when what runs where matters: processes, hosts, network or trust boundaries, and the connections between them. Create both only when both questions matter.
+2. Keep each diagram to the participants and steps the change involves, and mark what is new or changed. Name components by role, such as `API server` or `Webhook relay`, rather than by hostname, IP address, or internal URL.
+3. Put each diagram under `## Diagrams` and follow it with a written explanation: what it shows, a walk through the main path in order, what the change adds or alters, and any failure path it depicts. A reader who cannot see the image must still be able to follow the design from the explanation.
+
+### Render and check
+
+1. Keep source and rendered files in a new temporary directory outside any checkout. They are never committed.
+2. Render each visual to a PNG with an opaque white background, wide enough that its text stays readable at the width of a GitHub issue, because transparent images can become unreadable in a dark theme. Use whatever is available. For wireframes, write SVG or HTML and render it with `rsvg-convert`, ImageMagick, or a headless browser. For diagrams, write Mermaid and render it with `npx --yes @mermaid-js/mermaid-cli -i FILE.mmd -o FILE.png -b white -s 2`, or use Graphviz or SVG.
+3. Open each image and check it before attaching it: nothing is clipped or overlapping, callouts point at the right elements, it agrees with the written requirements, and it passes "Scrub private data". Fix it and render it again when it does not.
+4. Generating a visual must not stop the issue from being filed. When no renderer works, keep the diagram as a fenced `mermaid` code block in the body, which GitHub renders itself, and describe a wireframe's states in words. Tell the user which visual could not be rendered and why.
+
+## Attach media
+
+Generated wireframes and diagrams, and screenshots, videos, and other files the user mentions or provides, must be uploaded to GitHub and embedded in the issue. Attach generated visuals through this same flow. Never publish any of them through an asset branch, a gist, a file committed to a repository, or an external image host. Never leave a local file path, a `file://` URL, or a placeholder where the media belongs: nobody else can open it.
+
+1. Collect every media file the user referenced, attached, or pointed to, and every visual you generated. Confirm each file exists and scrub it as described above.
 2. Write each one into the body where it belongs, using its local path, so the issue reads correctly before upload:
    ```markdown
    ![Settings page after clicking Save](./screenshots/settings.png)
 
    ![](./recordings/crash.mp4)
    ```
-   Put a video reference alone in its own paragraph with empty alt text.
+   Put a video reference alone in its own paragraph with empty alt text. Give a generated visual alt text that names the state or the diagram, and place it beside its heading and explanation.
 3. Prefer the GitHub CLI's built-in upload. Check for it with `gh issue create --help`; when it lists `--attach`, pass one `--attach` per file:
    ```sh
    gh issue create --repo OWNER/REPO --title "TITLE" --body-file BODY.md \
@@ -120,11 +151,12 @@ Screenshots, videos, and other files the user mentions or provides must be uploa
    gh issue view NUMBER --repo OWNER/REPO --json url,title,body,labels,assignees
    ```
    - The body has real line breaks, the structured sections, and the quoted original prompt at the bottom.
-   - Every referenced file appears as a `https://github.com/user-attachments/...` URL or another uploaded GitHub URL, and no local path, `file://` URL, home directory, or placeholder remains.
+   - Every referenced file and generated visual appears as a `https://github.com/user-attachments/...` URL or another uploaded GitHub URL, and no local path, `file://` URL, home directory, or placeholder remains.
    - The labels and assignee are the ones you chose.
+   - Each wireframe sits under its state heading and each diagram is followed by its explanation.
    - Nothing private slipped through, checked against the scrub rules above.
 3. Fix any problem you find with `gh issue edit` on the same issue. Never file a second issue to correct the first.
 
 ## Report the result
 
-Give the issue URL, its title, the labels applied, the assignee, and the media that was attached. Name any requested label, assignee, or media file that could not be applied, and why. When you linked an existing issue instead of filing a duplicate, say so and give its URL.
+Give the issue URL, its title, the labels applied, the assignee, the media that was attached, and the wireframes and diagrams that were generated. Name any requested label, assignee, media file, or visual that could not be applied, and why. When you linked an existing issue instead of filing a duplicate, say so and give its URL.
