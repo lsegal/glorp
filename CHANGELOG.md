@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Have the `gh-create` skill draw explanatory visuals for the issues it files (issue #701). A UI or UX change now gets annotated wireframes of its major states, and a complex system interaction gets a deployment or sequence diagram followed by a written explanation. Visuals are only created where they clarify the change, are scrubbed of private data like the rest of the issue, and are uploaded with `gh issue create --attach` or the existing fallback.
 - Have the `gh-fix` skill record a screen recording with audio when a fix changes how a UI sounds, even if nothing on screen changes (issue #699). Before, recordings were only required for visual changes, so pull requests for sound effects, previews, or playback fixes had no evidence of the new behavior. `gh-fix` now checks that the recording actually contains sound before embedding it, and will not mark the pull request ready or merge it without that recording.
 
 ## v1.5.9 - 2026-10-06

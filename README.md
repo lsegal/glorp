@@ -71,7 +71,7 @@ Installer behavior can be overridden with environment variables:
 | `GLORP_VERSION` | Release tag to install, or `latest` | `latest` |
 | `GLORP_BIN_DIR` | Destination directory for the executable | `~/.local/bin` on Unix; `%USERPROFILE%\AppData\Local\glorp` on Windows |
 
-The public `.agents/skills/gh-fix`, `.agents/skills/gh-discuss`, and `.agents/skills/gh-create` directories in this repository are the skills.sh package sources. `gh-create` is not dispatched by glorp; run `/gh-create` from any agent to file a GitHub issue the same way every time: a structured body with the original prompt quoted at the bottom, every matching existing label, `@me` as the default assignee, referenced screenshots and videos uploaded and embedded, and private data scrubbed.
+The public `.agents/skills/gh-fix`, `.agents/skills/gh-discuss`, and `.agents/skills/gh-create` directories in this repository are the skills.sh package sources. `gh-create` is not dispatched by glorp; run `/gh-create` from any agent to file a GitHub issue the same way every time: a structured body with the original prompt quoted at the bottom, every matching existing label, `@me` as the default assignee, referenced screenshots and videos uploaded and embedded, annotated wireframes for UI or UX changes and deployment or sequence diagrams for complex system interactions where they clarify the change, and private data scrubbed.
 
 The installers cover the built-in agents only. An agent declared in `--config` may name its own skills.sh target with `"skills": {"target": "ID"}` -- a dedicated id such as `opencode`, `cline`, or `gemini-cli`, or `universal` for a CLI skills.sh has no dedicated id for -- and installs its own skills with the same command the installers use:
 
