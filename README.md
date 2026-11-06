@@ -100,6 +100,7 @@ Every glorp invocation starts with a subcommand:
 | `glorp watch [flags] [TARGET ...]` | Watch GitHub targets and dispatch agents for ready issues. |
 | `glorp agents [flags]` | Report on the agents glorp can dispatch to: whether each CLI is installed, signed in, its quota, and the models it accepts. With `-names`, one agent name per line; with `-skills`, the skills.sh target ids they install skills for. |
 | `glorp ui [flags]` | Open a running glorp dashboard in a browser. |
+| `glorp browser [flags]` | Open glorp's browser profile in a visible window to change its configuration. |
 | `glorp version` | Print the glorp version. |
 | `glorp upgrade` | Upgrade glorp to the latest release. |
 | `glorp help [command]` | Show help for glorp or one of its commands. |
