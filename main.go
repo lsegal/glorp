@@ -88,6 +88,8 @@ func commandFlags(name string) *flag.FlagSet {
 		return uiFlagSet()
 	case "auth":
 		return authFlagSet()
+	case "browser":
+		return browserFlagSet()
 	case "agents":
 		return agentsFlagSet(&agentsOptions{})
 	}

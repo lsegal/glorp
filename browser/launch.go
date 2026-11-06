@@ -346,26 +346,40 @@ func openPageTarget(ctx context.Context, baseURL string, timeout time.Duration) 
 // front-end itself, service workers, extension backgrounds -- is skipped: they
 // are not windows and cannot be navigated to GitHub.
 func pageTargetID(ctx context.Context, baseURL string) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/json/list", nil)
+	pages, err := openPages(ctx, baseURL)
 	if err != nil {
 		return "", err
+	}
+	if len(pages) == 0 {
+		return "", fmt.Errorf("browser DevTools endpoint reported no open page")
+	}
+	return pages[0], nil
+}
+
+// openPages asks the DevTools endpoint for its targets and returns the ids of
+// the pages among them.
+func openPages(ctx context.Context, baseURL string) ([]string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/json/list", nil)
+	if err != nil {
+		return nil, err
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("browser DevTools endpoint returned %s", response.Status)
+		return nil, fmt.Errorf("browser DevTools endpoint returned %s", response.Status)
 	}
 	var targets []targetInfo
 	if err := json.NewDecoder(response.Body).Decode(&targets); err != nil {
-		return "", err
+		return nil, err
 	}
+	var pages []string
 	for _, info := range targets {
 		if info.Type == "page" && info.ID != "" {
-			return info.ID, nil
+			pages = append(pages, info.ID)
 		}
 	}
-	return "", fmt.Errorf("browser DevTools endpoint reported no open page")
+	return pages, nil
 }

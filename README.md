@@ -236,6 +236,7 @@ glorp <command> [arguments]
 | `agents` | List the agents glorp can dispatch to, or with `-skills` the skills.sh target ids they install skills for. |
 | `ui` | Open a running glorp dashboard in a browser. |
 | `auth` | Sign glorp's browser profile in to GitHub for `--browser` mode. |
+| `browser` | Open glorp's browser profile in a visible window to change its configuration. |
 | `version` | Print the glorp version. |
 | `upgrade` | Upgrade glorp to the latest release. |
 | `help` | Show help for glorp or one of its commands. |
@@ -314,6 +315,21 @@ Chrome allows only one process per profile directory, so stop a running `glorp w
 | `--status` | `false` | Report whether the profile is currently signed in, and as whom, without opening a window. Exits 0 when signed in and 1 when not. |
 | `--browser-binary PATH` | auto-detected | Chromium-based browser executable, resolved the same way as `glorp watch --browser-binary`. |
 | `--browser-profile PATH` | `<config dir>/glorp/browser-data` | Profile directory to sign in. Defaults to the same profile `glorp watch --browser` uses: `~/Library/Application Support/glorp/browser-data` on macOS, `%AppData%\glorp\browser-data` on Windows, and `~/.config/glorp/browser-data` on Linux. |
+
+### `glorp browser`
+
+```text
+glorp browser [options]
+```
+
+Opens an ordinary, visible browser window on the profile `glorp watch --browser` uses, with no watching, polling, or sign-in attached, so you can change the browser's configuration directly: settings, extensions, site data, and so on. The command stays open with the window and exits when you close it, or when you press Ctrl+C. The browser is shut down cleanly either way, so your changes are saved to the profile and apply to later `glorp watch --browser` and `glorp auth` runs.
+
+Chrome allows only one process per profile directory, so glorp refuses to open the window while another glorp instance has a browser on that profile, rather than opening one on a throwaway directory whose changes would be lost. Stop the other run first, or point `--browser-profile` at a different directory. A `glorp watch --browser` started while the window is open runs in a private temporary directory and does not see your changes until a later run. On Linux with no display server, the command refuses to open a window and says so.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--browser-binary PATH` | auto-detected | Chromium-based browser executable, resolved the same way as `glorp watch --browser-binary`. |
+| `--browser-profile PATH` | `<config dir>/glorp/browser-data` | Profile directory to open. Defaults to the same profile `glorp watch --browser` uses. |
 
 Supported target forms are:
 

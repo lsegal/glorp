@@ -83,6 +83,22 @@ Flags:`,
 			run: runAuthCommand,
 		},
 		{
+			name:    "browser",
+			summary: "Open glorp's browser profile in a window to change its configuration",
+			usage: `Usage: glorp browser [flags]
+
+Open a normal browser window on the profile "glorp watch -browser" reads GitHub
+with, and do nothing else: no watching, no polling, no sign-in. Change whatever
+you need to in the window, such as settings or site data, and close it; glorp
+exits when it closes and the changes stay on the profile for later runs.
+
+Chrome allows one process per profile directory, so stop a running
+"glorp watch -browser" (or pass a different -browser-profile) first.
+
+Flags:`,
+			run: runBrowserCommand,
+		},
+		{
 			name:    "agents",
 			summary: "Report on the agents glorp can dispatch to",
 			usage: `Usage: glorp agents [flags]

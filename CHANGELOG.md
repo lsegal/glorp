@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a `glorp browser` command that opens a visible browser window on glorp's browser profile and does nothing else, so you can change the browser's configuration directly (issue #702). There is no watching, polling, or sign-in attached. glorp exits when you close the window or press Ctrl+C, and shuts the browser down cleanly so your changes stay on the profile for later `glorp watch --browser` and `glorp auth` runs. It refuses to open while another glorp instance has a browser on that profile, since Chrome allows only one process per profile directory.
 - Have the `gh-fix` skill record a screen recording with audio when a fix changes how a UI sounds, even if nothing on screen changes (issue #699). Before, recordings were only required for visual changes, so pull requests for sound effects, previews, or playback fixes had no evidence of the new behavior. `gh-fix` now checks that the recording actually contains sound before embedding it, and will not mark the pull request ready or merge it without that recording.
 
 ## v1.5.9 - 2026-10-06
