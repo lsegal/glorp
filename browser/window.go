@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/chromedp/cdproto"
 	cdpbrowser "github.com/chromedp/cdproto/browser"
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
 )
 
@@ -175,13 +175,16 @@ func (w *openWindow) stop() {
 	}
 }
 
-// closeOverDevTools sends the browser its own clean-shutdown command. It talks
-// to the browser target directly because a window with no pages left has nothing
-// to attach to, and creating a tab to send it from would flash a new window.
+// closeOverDevTools sends the browser its own clean-shutdown command. It writes
+// the message to the browser's WebSocket by hand because a window with no pages
+// left has nothing for chromedp to attach to, creating a tab to send it from
+// would flash a new window, and chromedp's Browser refuses to send this command
+// itself.
 func closeOverDevTools(ctx context.Context, wsURL string) error {
-	connection, err := chromedp.NewBrowser(ctx, wsURL)
+	connection, err := chromedp.DialContext(ctx, wsURL)
 	if err != nil {
 		return err
 	}
-	return cdpbrowser.Close().Do(cdp.WithExecutor(ctx, connection))
+	defer func() { _ = connection.Close() }()
+	return connection.Write(ctx, &cdproto.Message{ID: 1, Method: cdproto.MethodType(cdpbrowser.CommandClose)})
 }

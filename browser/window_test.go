@@ -246,3 +246,26 @@ func TestOpenWindowReportsAMissingBinary(t *testing.T) {
 		t.Fatal("OpenWindow() error = nil, want the missing binary reported")
 	}
 }
+
+// The shutdown request only means anything to a real browser, and chromedp's own
+// Browser refuses to send it, so this is what proves it arrives. It runs headless
+// and skips where no browser is installed, as the other live tests do.
+func TestCloseOverDevToolsShutsDownARealBrowser(t *testing.T) {
+	live := liveProfile(t, t.TempDir())
+	defer func() { _ = live.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	base := debugURL(live.cmd.port)
+	if err := closeOverDevTools(ctx, live.cmd.wsURL); err != nil {
+		t.Fatalf("closeOverDevTools() error = %v", err)
+	}
+	for {
+		if _, err := webSocketURL(ctx, base); err != nil {
+			if ctx.Err() != nil {
+				t.Fatal("the browser was still answering after being asked to shut down")
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
