@@ -42,6 +42,7 @@ func runFakeBrowser(args []string) {
 		os.Exit(0)
 	}
 	_ = singleton.Close()
+	serveFakeWindow(dataDir)
 	http.HandleFunc("/json/version", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, `{"webSocketDebuggerUrl":"ws://127.0.0.1:%s/devtools/browser/fake"}`, port)
 	})
