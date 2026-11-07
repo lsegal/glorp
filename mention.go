@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -39,9 +40,12 @@ type RecentComment struct {
 	// reacted to through.
 	NodeID string
 	// Number is the issue or pull request the comment was posted on.
-	Number    int
-	Body      string
-	Author    string
+	Number int
+	Body   string
+	Author string
+	// CreatedAt is when the comment was first posted, which UpdatedAt stops
+	// saying as soon as it is edited.
+	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
@@ -75,6 +79,117 @@ type ReviewMentionSource interface {
 // already handled are skipped by ID.
 const mentionScanOverlap = time.Minute
 
+// agentCommentGrace is how long after an agent finishes a comment from glorp's
+// own login is still attributed to that agent rather than to a human.
+const agentCommentGrace = 30 * time.Second
+
+// markdownNonMentions matches the parts of a comment where GitHub does not
+// treat @name as a mention: fenced code, inline code, and quoted lines.
+var markdownNonMentions = regexp.MustCompile("(?s)```.*?```|`[^`\\n]*`|(?m:^[ \\t]*>.*$)")
+
+// anyInstanceMention matches an @/glorp:ID mention of any instance.
+var anyInstanceMention = regexp.MustCompile(`(^|\s)@/glorp:\S`)
+
+// mentionedLogin reports whether body mentions the GitHub user login with an
+// ordinary @login. A longer login or a @login/team reference does not match.
+func mentionedLogin(body, login string) bool {
+	if login == "" {
+		return false
+	}
+	pattern := `(?i)(^|[^\w/-])@` + regexp.QuoteMeta(login) + `($|[^\w/-])`
+	return regexp.MustCompile(pattern).MatchString(markdownNonMentions.ReplaceAllString(body, " "))
+}
+
+// commentRequestsRecheck reports whether a comment that does not mention this
+// instance still triggers a recheck of its issue (issue #708): it must come
+// from an allowed commenter and mention the login glorp runs as. An empty
+// allowed list names nobody here, handshake comments are glorp's own, and a
+// comment addressed to another instance is not an instruction to this one.
+func (w *Glorp) commentRequestsRecheck(body, author string) bool {
+	if len(w.AllowedCommenters) == 0 || !commenterAllowed(author, w.AllowedCommenters) || !mentionedLogin(body, w.SelfLogin) {
+		return false
+	}
+	if _, _, ok := parseClaim(body); ok {
+		return false
+	}
+	return !anyInstanceMention.MatchString(body)
+}
+
+// queueCommentRecheck queues a run for each key a login-mention comment
+// addresses and returns the keys it queued. Only issues this instance watches
+// qualify. A comment from glorp's own login posted while its agent ran on the
+// issue is left out: agents post as that login, so it may be the agent's own,
+// and a human's is relayed by that run's watcher.
+func (w *Glorp) queueCommentRecheck(scan *mentionScan, keys []string, author string, at time.Time, listed, directMentions map[string]bool) []string {
+	var queued []string
+	for _, key := range keys {
+		if !listed[key] {
+			w.logf("%s ignoring comment mentioning %s: it is not among the open issues this instance watches", key, w.SelfLogin)
+			continue
+		}
+		if strings.EqualFold(author, w.SelfLogin) && scan.agentWasRunning(key, at) {
+			w.logf("%s not queuing a recheck for a comment from %s posted during this instance's agent run", key, author)
+			continue
+		}
+		if !directMentions[key] {
+			directMentions[key] = true
+			scan.rechecks[key] = true
+		}
+		w.logf("%s comment from %s mentions %s; queuing a threaded gh-fix run", key, author, w.SelfLogin)
+		queued = append(queued, key)
+	}
+	return queued
+}
+
+// handleScannedRecheck acts on one scanned comment that requests a recheck. It
+// reports false only when the issues it addresses could not be read and the
+// comment should be read again on the next scan.
+func (w *Glorp) handleScannedRecheck(ctx context.Context, scan *mentionScan, repo string, comment RecentComment, listed, directMentions map[string]bool) bool {
+	numbers := []int{comment.Number}
+	if comment.Kind != ConversationComment || !listed[repo+"#"+strconv.Itoa(comment.Number)] {
+		closing, err := w.Mentions.ClosingIssues(ctx, repo, comment.Number)
+		if err != nil {
+			w.logf("%s#%d failed to read which issues it closes: %v", repo, comment.Number, err)
+			return false
+		}
+		numbers = closing
+	}
+	keys := make([]string, 0, len(numbers))
+	for _, number := range numbers {
+		keys = append(keys, repo+"#"+strconv.Itoa(number))
+	}
+	if len(w.queueCommentRecheck(scan, keys, comment.Author, comment.CreatedAt, listed, directMentions)) > 0 {
+		w.reactToMention(ctx, repo, comment.Kind, comment.Number, comment.ID, comment.NodeID)
+	}
+	return true
+}
+
+// commentOnGitHub reports whether repo#number carries a comment of kind from
+// author with exactly body, so a webhook delivery is reverified rather than
+// trusted from its payload.
+func (w *Glorp) commentOnGitHub(ctx context.Context, kind CommentKind, repo string, number int, body, author string) (bool, error) {
+	if w.Comments == nil {
+		return true, nil
+	}
+	if kind != ConversationComment {
+		lister, ok := w.Comments.(ReviewCommentLister)
+		if !ok {
+			return true, nil
+		}
+		return reviewMentionOnGitHub(ctx, lister, repo, number, body, author)
+	}
+	comments, err := w.Comments.ListComments(ctx, repo, number)
+	if err != nil {
+		return false, err
+	}
+	for _, comment := range comments {
+		if comment.Body == body && strings.EqualFold(comment.Author, author) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // mentionScan is the run loop's memory of the direct mentions it has already
 // read. It is only touched from the run loop's own goroutine.
 type mentionScan struct {
@@ -85,6 +200,23 @@ type mentionScan struct {
 	// reacted to and dispatched at most once however many scans return it.
 	// The kind is part of the key because each comment API numbers its own.
 	handled map[mentionScanKey]bool
+	// seeded names the cursors that have completed a scan. Whatever the first
+	// scan of a cursor returns is already there when watching starts, so it
+	// seeds seen rather than counting as new.
+	seeded map[string]bool
+	// seen is every comment already considered for a login-mention recheck, so
+	// a comment is new only the first time it appears (issue #708).
+	seen map[mentionScanKey]bool
+	// rechecks names the "repo#number" keys in the direct-mention queue only
+	// because a comment mentioned the login, not this instance. It is not
+	// addressed to one instance, so unlike a direct mention it stays subject to
+	// the claims standing on the ticket. Webhook deliveries use it as well.
+	rechecks map[string]bool
+
+	// agentMu guards agentRunning and agentEnded, which run goroutines update.
+	agentMu      sync.Mutex
+	agentRunning map[string]bool
+	agentEnded   map[string]time.Time
 }
 
 type mentionScanKey struct {
@@ -93,7 +225,38 @@ type mentionScanKey struct {
 }
 
 func newMentionScan(start time.Time) *mentionScan {
-	return &mentionScan{start: start, since: make(map[string]time.Time), handled: make(map[mentionScanKey]bool)}
+	return &mentionScan{
+		start: start, since: make(map[string]time.Time), handled: make(map[mentionScanKey]bool),
+		seeded: make(map[string]bool), seen: make(map[mentionScanKey]bool), rechecks: make(map[string]bool),
+		agentRunning: make(map[string]bool), agentEnded: make(map[string]time.Time),
+	}
+}
+
+// agentStarted records that this instance began running an agent on key.
+func (s *mentionScan) agentStarted(key string) {
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
+	s.agentRunning[key] = true
+}
+
+// agentStopped records that the agent running on key has finished.
+func (s *mentionScan) agentStopped(key string, at time.Time) {
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
+	delete(s.agentRunning, key)
+	s.agentEnded[key] = at
+}
+
+// agentWasRunning reports whether this instance had an agent on key at the
+// given time, allowing agentCommentGrace for clocks and listing delay.
+func (s *mentionScan) agentWasRunning(key string, at time.Time) bool {
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
+	if s.agentRunning[key] {
+		return true
+	}
+	ended, ok := s.agentEnded[key]
+	return ok && !at.After(ended.Add(agentCommentGrace))
 }
 
 // mentionScanRepos lists the repositories a poll scans for mentions: every
@@ -155,25 +318,48 @@ func (w *Glorp) scanMentionStream(ctx context.Context, scan *mentionScan, repo, 
 	}
 	w.forgetLogged("mention-scan-" + cursor)
 	next := since
+	seeding := !scan.seeded[cursor]
+	stopped := false
 	for _, comment := range comments {
 		if candidate := comment.UpdatedAt.Add(-mentionScanOverlap); candidate.After(next) {
 			next = candidate
 		}
 		key := mentionScanKey{kind: comment.Kind, id: comment.ID}
-		if scan.handled[key] || !mentionedIdentity(comment.Body, w.Identity) {
+		if !mentionedIdentity(comment.Body, w.Identity) {
+			if scan.handled[key] || scan.seen[key] {
+				continue
+			}
+			// An edit brings an old comment back into the listing, so one
+			// posted before this watch began is history whatever its ID.
+			fresh := !seeding && !comment.CreatedAt.Before(scan.start)
+			if fresh && w.commentRequestsRecheck(comment.Body, comment.Author) && !w.handleScannedRecheck(ctx, scan, repo, comment, listed, directMentions) {
+				if next.After(comment.UpdatedAt.Add(-mentionScanOverlap)) {
+					next = comment.UpdatedAt.Add(-mentionScanOverlap)
+				}
+				stopped = true
+				break
+			}
+			scan.seen[key] = true
 			continue
 		}
-		if !w.handleScannedMention(ctx, repo, comment, listed, directMentions) {
+		if scan.handled[key] {
+			continue
+		}
+		if !w.handleScannedMention(ctx, scan, repo, comment, listed, directMentions) {
 			// Verification failed rather than ruling the mention out, so the
 			// next scan tries it again from where this one started.
 			if next.After(comment.UpdatedAt.Add(-mentionScanOverlap)) {
 				next = comment.UpdatedAt.Add(-mentionScanOverlap)
 			}
+			stopped = true
 			break
 		}
 		scan.handled[key] = true
 	}
 	scan.since[cursor] = next
+	if !stopped {
+		scan.seeded[cursor] = true
+	}
 }
 
 // handleScannedMention acts on one scanned mention of this instance, applying
@@ -184,7 +370,7 @@ func (w *Glorp) scanMentionStream(ctx context.Context, scan *mentionScan, repo, 
 // always on a pull request, so it addresses the issues that pull request
 // closes, or nothing. It reports false only when the mention could not be
 // verified and should be read again on the next scan.
-func (w *Glorp) handleScannedMention(ctx context.Context, repo string, comment RecentComment, listed map[string]bool, directMentions map[string]bool) bool {
+func (w *Glorp) handleScannedMention(ctx context.Context, scan *mentionScan, repo string, comment RecentComment, listed map[string]bool, directMentions map[string]bool) bool {
 	w.reactToMention(ctx, repo, comment.Kind, comment.Number, comment.ID, comment.NodeID)
 	authorized := commenterAllowed(comment.Author, w.AllowedCommenters)
 	if authorized && w.Comments != nil && comment.Kind == ConversationComment {
@@ -220,6 +406,7 @@ func (w *Glorp) handleScannedMention(ctx context.Context, repo string, comment R
 	}
 	for _, number := range issues {
 		directMentions[repo+"#"+strconv.Itoa(number)] = true
+		delete(scan.rechecks, repo+"#"+strconv.Itoa(number))
 		w.logf("issue #%d directly mentioned instance %s; queuing a threaded gh-fix run", number, w.Identity)
 	}
 	return true
@@ -343,6 +530,7 @@ func (g GHCLI) RecentComments(ctx context.Context, repo string, since time.Time)
 		ID        int64     `json:"id"`
 		Body      string    `json:"body"`
 		IssueURL  string    `json:"issue_url"`
+		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		User      struct {
 			Login string `json:"login"`
@@ -357,7 +545,7 @@ func (g GHCLI) RecentComments(ctx context.Context, repo string, since time.Time)
 		if err != nil {
 			continue
 		}
-		comments = append(comments, RecentComment{ID: comment.ID, Number: number, Body: comment.Body, Author: comment.User.Login, UpdatedAt: comment.UpdatedAt})
+		comments = append(comments, RecentComment{ID: comment.ID, Number: number, Body: comment.Body, Author: comment.User.Login, CreatedAt: comment.CreatedAt, UpdatedAt: comment.UpdatedAt})
 	}
 	return comments, nil
 }
@@ -403,6 +591,7 @@ func (g GHCLI) RecentReviewComments(ctx context.Context, repo string, since time
 		NodeID         string    `json:"node_id"`
 		Body           string    `json:"body"`
 		PullRequestURL string    `json:"pull_request_url"`
+		CreatedAt      time.Time `json:"created_at"`
 		UpdatedAt      time.Time `json:"updated_at"`
 		User           struct {
 			Login string `json:"login"`
@@ -417,7 +606,7 @@ func (g GHCLI) RecentReviewComments(ctx context.Context, repo string, since time
 		if err != nil {
 			continue
 		}
-		comments = append(comments, RecentComment{ID: comment.ID, Kind: ReviewComment, NodeID: comment.NodeID, Number: number, Body: comment.Body, Author: comment.User.Login, UpdatedAt: comment.UpdatedAt})
+		comments = append(comments, RecentComment{ID: comment.ID, Kind: ReviewComment, NodeID: comment.NodeID, Number: number, Body: comment.Body, Author: comment.User.Login, CreatedAt: comment.CreatedAt, UpdatedAt: comment.UpdatedAt})
 	}
 	query = url.Values{}
 	query.Set("state", "open")
@@ -449,7 +638,7 @@ func (g GHCLI) RecentReviewComments(ctx context.Context, repo string, since time
 			if review.SubmittedAt.Before(since) {
 				continue
 			}
-			comments = append(comments, RecentComment{ID: review.ID, Kind: ReviewBody, NodeID: review.NodeID, Number: pull.Number, Body: review.Body, Author: review.User.Login, UpdatedAt: review.SubmittedAt})
+			comments = append(comments, RecentComment{ID: review.ID, Kind: ReviewBody, NodeID: review.NodeID, Number: pull.Number, Body: review.Body, Author: review.User.Login, CreatedAt: review.SubmittedAt, UpdatedAt: review.SubmittedAt})
 		}
 	}
 	slices.SortStableFunc(comments, func(a, b RecentComment) int { return a.UpdatedAt.Compare(b.UpdatedAt) })

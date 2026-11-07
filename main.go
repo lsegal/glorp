@@ -69,7 +69,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
-	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a direct @/glorp:ID mention run (default: the authenticated gh user)")
+	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a run with a direct @/glorp:ID mention or a mention of the authenticated gh user (default: the authenticated gh user)")
 	flags.Bool("browser", false, "deprecated alias for -pollmode=browser")
 	flags.String("browser-profile", "", "Chrome profile directory for browser mode (default: <config dir>/glorp/browser-data)")
 	flags.String("browser-binary", "", "Chrome/Chromium/Edge executable for browser mode")
@@ -250,6 +250,12 @@ func runWatch(args []string) (code int) {
 		}
 		allowedCommenters = []string{login}
 	}
+	// A new comment mentioning this login rechecks its issue (issue #708). It
+	// is a convenience next to @/glorp:ID, so failing to read it is not fatal.
+	selfLogin, err := gh.resolveSelfLogin(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve authenticated gh user: %v; comments mentioning it will not trigger rechecks\n", err)
+	}
 	events := make(chan WebhookEvent, 1)
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
@@ -336,7 +342,7 @@ func runWatch(args []string) (code int) {
 	if webUI != nil {
 		webUIURL = webui.URL(bind, webPort)
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, SelfLogin: selfLogin, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
 	// Browser mode reads issues and boards off GitHub's rendered pages instead

@@ -67,6 +67,13 @@ func (f *fakeMentionSource) ClosingIssues(_ context.Context, _ string, number in
 // run to finish, and returns the run's pieces for the test to post a mention.
 func startPolledMentionRun(t *testing.T, allowed []string) (*fakeRunner, *fakeCommentClient, *fakeMentionSource, func()) {
 	t.Helper()
+	return startPolledRunAs(t, allowed, "")
+}
+
+// startPolledRunAs is startPolledMentionRun for an instance running as the
+// GitHub user selfLogin.
+func startPolledRunAs(t *testing.T, allowed []string, selfLogin string) (*fakeRunner, *fakeCommentClient, *fakeMentionSource, func()) {
+	t.Helper()
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 4)}
@@ -74,7 +81,7 @@ func startPolledMentionRun(t *testing.T, allowed []string) (*fakeRunner, *fakeCo
 	mentions := newFakeMentionSource()
 	w := &Glorp{
 		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
-		Issues: src, Runner: runner, Identity: "SELF", AllowedCommenters: allowed,
+		Issues: src, Runner: runner, Identity: "SELF", AllowedCommenters: allowed, SelfLogin: selfLogin,
 		Comments: comments, Mentions: mentions,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -432,5 +439,247 @@ func TestGHCLIRecentCommentsAndClosingIssues(t *testing.T) {
 	closing, err = gh.ClosingIssues(context.Background(), "o/r", 3)
 	if err != nil || len(closing) != 0 {
 		t.Fatalf("ClosingIssues(issue #3) = %v, %v; want none for an issue", closing, err)
+	}
+}
+
+func TestMentionedLoginMatchesOrdinaryMentionsOnly(t *testing.T) {
+	for _, body := range []string{"@lsegal please look", "cc @LSegal.", "thoughts, (@lsegal)?", "first line\n@lsegal"} {
+		if !mentionedLogin(body, "lsegal") {
+			t.Errorf("mentionedLogin(%q) = false, want true", body)
+		}
+	}
+	for _, body := range []string{"no mention", "lsegal without the at", "@lsegal2 is someone else", "@my-lsegal too", "@lsegal/team is a team", "user@lsegal.com", "`@lsegal` in code", "```\n@lsegal\n```", "> @lsegal wrote this"} {
+		if mentionedLogin(body, "lsegal") {
+			t.Errorf("mentionedLogin(%q) = true, want false", body)
+		}
+	}
+	if mentionedLogin("@lsegal", "") {
+		t.Error("an unknown login must never match")
+	}
+}
+
+func TestCommentRequestsRecheckRequiresAllowedAuthorAndLoginMention(t *testing.T) {
+	w := &Glorp{Identity: "SELF", SelfLogin: "bot", AllowedCommenters: []string{"lsegal", "bot"}}
+	if !w.commentRequestsRecheck("@bot please look", "LSegal") {
+		t.Error("an allowed commenter mentioning the login must request a recheck")
+	}
+	for _, c := range []struct{ body, author string }{
+		{"please look", "lsegal"},
+		{"@bot please look", "stranger"},
+		{"@bot and @/glorp:OTHER please look", "lsegal"},
+		{"Starting work on this issue for @bot /glorp:OTHER", "bot"},
+	} {
+		if w.commentRequestsRecheck(c.body, c.author) {
+			t.Errorf("commentRequestsRecheck(%q, %q) = true, want false", c.body, c.author)
+		}
+	}
+	w.AllowedCommenters = nil
+	if w.commentRequestsRecheck("@bot please look", "lsegal") {
+		t.Error("an empty allowed list must not let everyone request a recheck")
+	}
+}
+
+func TestPolledLoginMentionDispatchesOnce(t *testing.T) {
+	runner, comments, mentions, stop := startPolledRunAs(t, []string{"lsegal"}, "bot")
+	defer stop()
+
+	mentions.add("o/r", RecentComment{ID: 1, Number: 7, Body: "history @bot", Author: "lsegal", CreatedAt: time.Now().Add(-time.Hour), UpdatedAt: time.Now()})
+	waitForScans(t, mentions, 2)
+	mentions.add("o/r", RecentComment{ID: 42, Number: 7, Body: "@bot please revisit this", Author: "lsegal", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("login mention dispatched #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("login mention was not picked up by polling")
+	}
+	waitForScans(t, mentions, 5)
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("one comment dispatched a second run of #%d", n)
+	default:
+	}
+	if reactions := comments.reactionsSnapshot(); len(reactions) != 1 || reactions[0].CommentID != 42 {
+		t.Fatalf("reactions = %#v, want a single eyes reaction on comment 42", reactions)
+	}
+}
+
+func TestPolledCommentsThatDoNotQualifyChangeNothing(t *testing.T) {
+	runner, comments, mentions, stop := startPolledRunAs(t, []string{"lsegal"}, "bot")
+	defer stop()
+
+	now := time.Now()
+	mentions.add("o/r", RecentComment{ID: 50, Number: 7, Body: "please revisit this", Author: "lsegal", CreatedAt: now, UpdatedAt: now})
+	mentions.add("o/r", RecentComment{ID: 51, Number: 7, Body: "@bot please revisit this", Author: "stranger", CreatedAt: now, UpdatedAt: now})
+	mentions.add("o/r", RecentComment{ID: 52, Number: 99, Body: "@bot this issue is not watched", Author: "lsegal", CreatedAt: now, UpdatedAt: now})
+	waitForScans(t, mentions, 5)
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("comment dispatched a run of #%d", n)
+	default:
+	}
+	if reactions := comments.reactionsSnapshot(); len(reactions) != 0 {
+		t.Fatalf("reactions = %#v, want none", reactions)
+	}
+}
+
+func TestPolledLoginMentionOnPullRequestDispatchesClosedIssue(t *testing.T) {
+	runner, _, mentions, stop := startPolledRunAs(t, []string{"lsegal"}, "bot")
+	defer stop()
+
+	mentions.mu.Lock()
+	mentions.closing[12] = []int{7}
+	mentions.mu.Unlock()
+	mentions.addReview("o/r", RecentComment{ID: 43, Kind: ReviewComment, Number: 12, Body: "@bot this line is wrong", Author: "lsegal", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("pull request comment dispatched #%d, want the issue it closes, #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("login mention in a review comment was not picked up by polling")
+	}
+}
+
+func TestPolledCommentFromOwnLoginDuringAgentRunDoesNotDispatch(t *testing.T) {
+	runner, _, mentions, stop := startPolledRunAs(t, []string{"bot"}, "bot")
+	defer stop()
+
+	// The first run has only just finished, so this reads as that agent's.
+	mentions.add("o/r", RecentComment{ID: 60, Number: 7, Body: "@bot this needs a human", Author: "bot", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	waitForScans(t, mentions, 5)
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("the agent's own comment dispatched a run of #%d", n)
+	default:
+	}
+	// Past the grace period the same login is a human again.
+	later := time.Now().Add(2 * agentCommentGrace)
+	mentions.add("o/r", RecentComment{ID: 61, Number: 7, Body: "@bot please revisit this", Author: "bot", CreatedAt: later, UpdatedAt: later})
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("a later comment from the login was not picked up")
+	}
+}
+
+func TestPolledLoginMentionRespectsAnotherInstancesClaim(t *testing.T) {
+	runner, comments, mentions, stop := startPolledRunAs(t, []string{"lsegal"}, "bot")
+	defer stop()
+
+	comments.reset("o/r", 7)
+	comments.inject("o/r", 7, Comment{Body: signComment(startingClaimBody, "OTHER"), Author: "bot", CreatedAt: time.Now()})
+	mentions.add("o/r", RecentComment{ID: 70, Number: 7, Body: "@bot please revisit this", Author: "lsegal", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	waitForScans(t, mentions, 5)
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("a comment not addressed to this instance overrode another's claim on #%d", n)
+	default:
+	}
+}
+
+func TestScanSeedsCommentsVisibleWhenWatchingStarts(t *testing.T) {
+	start := time.Now()
+	mentions := newFakeMentionSource()
+	w := &Glorp{Identity: "SELF", SelfLogin: "bot", AllowedCommenters: []string{"lsegal"}, Mentions: mentions}
+	scan := newMentionScan(start)
+	listed := map[string]bool{"o/r#7": true}
+	queue := map[string]bool{}
+	scanned := func() { w.scanDirectMentions(context.Background(), scan, []string{"o/r"}, listed, queue) }
+
+	// Timestamped after start, but already there on the first scan.
+	mentions.add("o/r", RecentComment{ID: 1, Number: 7, Body: "@bot old", Author: "lsegal", CreatedAt: start.Add(time.Second), UpdatedAt: start.Add(time.Second)})
+	scanned()
+	scanned()
+	if len(queue) != 0 {
+		t.Fatalf("queue = %v, want the first scan's comments treated as history", queue)
+	}
+	// An edit returns an older comment to the listing under an unseen ID.
+	mentions.add("o/r", RecentComment{ID: 2, Number: 7, Body: "@bot edited", Author: "lsegal", CreatedAt: start.Add(-time.Hour), UpdatedAt: start.Add(time.Minute)})
+	scanned()
+	if len(queue) != 0 {
+		t.Fatalf("queue = %v, want an edited old comment treated as history", queue)
+	}
+	mentions.add("o/r", RecentComment{ID: 3, Number: 7, Body: "@bot new", Author: "lsegal", CreatedAt: start.Add(time.Minute), UpdatedAt: start.Add(time.Minute)})
+	scanned()
+	if !queue["o/r#7"] || !scan.rechecks["o/r#7"] {
+		t.Fatalf("queue = %v, rechecks = %v, want #7 queued as a recheck", queue, scan.rechecks)
+	}
+}
+
+func TestPullRequestMentionsRelaysLoginMentionFromAllowedCommenter(t *testing.T) {
+	since := time.Now()
+	comments := newFakeCommentClient()
+	w := &Glorp{Identity: "SELF", SelfLogin: "bot", AllowedCommenters: []string{"lsegal"}, Comments: comments}
+	issue := Issue{Number: 7}
+	pulls := []PullRequestWorkState{{Number: 12}}
+	seen := map[string]bool{}
+	comments.inject("o/r", 12, Comment{Body: "status update", Author: "lsegal", CreatedAt: since.Add(time.Second)})
+	comments.inject("o/r", 12, Comment{Body: "@bot from a stranger", Author: "stranger", CreatedAt: since.Add(time.Second)})
+	if got := w.pullRequestMentions(context.Background(), "o/r", issue, pulls, since, seen); len(got) != 0 {
+		t.Fatalf("relayed %v, want nothing", got)
+	}
+	comments.inject("o/r", 12, Comment{Body: "@bot use the other API", Author: "lsegal", CreatedAt: since.Add(time.Second)})
+	if got := w.pullRequestMentions(context.Background(), "o/r", issue, pulls, since, seen); !slices.Equal(got, []int{12}) {
+		t.Fatalf("relayed %v, want pull request #12", got)
+	}
+}
+
+func TestWebhookLoginMentionDispatchesWithoutInstanceMention(t *testing.T) {
+	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
+	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 4)}
+	comments := newFakeCommentClient()
+	events := make(chan WebhookEvent)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(t.TempDir(), "state.json"), UseWebhooks: true, Events: events,
+		Issues: src, Runner: runner, Identity: "SELF", SelfLogin: "bot", AllowedCommenters: []string{"lsegal"}, Comments: comments,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}()
+	select {
+	case <-runner.dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("initial issue was not dispatched")
+	}
+	close(runner.release)
+	deadline := time.Now().Add(time.Second)
+	for {
+		state, err := loadWorkState(w.StatePath)
+		if err == nil && state[7].Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial run of #7 did not complete")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	deliver := func(id int64, body, author string) {
+		comments.inject("o/r", 7, Comment{Body: body, Author: author, CreatedAt: time.Now()})
+		events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentID: id, CommentBody: body, CommentAuthor: author}
+	}
+	deliver(80, "no mention at all", "lsegal")
+	deliver(81, "@bot from a stranger", "stranger")
+	select {
+	case n := <-runner.dispatched:
+		t.Fatalf("an unqualified comment dispatched #%d", n)
+	case <-time.After(50 * time.Millisecond):
+	}
+	deliver(82, "@bot please revisit this", "lsegal")
+	select {
+	case n := <-runner.dispatched:
+		if n != 7 {
+			t.Fatalf("dispatched #%d, want #7", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("login mention delivered by webhook did not dispatch a run")
 	}
 }
