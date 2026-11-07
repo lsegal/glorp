@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.12 - 2026-11-07
+
 - Recheck a watched issue when an `--allowed-commenters` user posts a new comment mentioning the GitHub user glorp runs as, such as `@yourname`, with no `@/glorp:ID` needed (issue #708). The comment is picked up like a direct mention in every poll mode, on the issue or on the pull request that closes it, including reviews and inline review comments. Comments that already existed when the watch started are never replayed, and a comment glorp's own login posts while its agent is running on that issue does not start another run.
 
 ## v1.5.11 - 2026-11-06
