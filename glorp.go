@@ -213,6 +213,10 @@ type Glorp struct {
 	// @/glorp:ID mention run (issue #294). An empty list places no
 	// restriction; the CLI defaults it to the authenticated gh user.
 	AllowedCommenters []string
+	// SelfLogin is the GitHub login this instance runs as. A new comment from
+	// an allowed commenter that mentions it triggers a recheck of its issue
+	// (issue #708). Empty turns that trigger off.
+	SelfLogin string
 	// Comments drives the cooperative handoff handshake (issue #214). When
 	// nil, ownership negotiation is skipped and dispatch behaves as before.
 	Comments CommentClient
@@ -1127,6 +1131,7 @@ func (w *Glorp) pullRequestMentions(ctx context.Context, repo string, issue Issu
 			}
 			seen[key] = true
 			if !mentionedIdentity(comment.Body, w.Identity) {
+				found = found || w.commentRequestsRecheck(comment.Body, comment.Author)
 				continue
 			}
 			if !commenterAllowed(comment.Author, w.AllowedCommenters) {
@@ -1873,6 +1878,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			key := issueKey(issue)
 			mentionKey := issue.Repository + "#" + strconv.Itoa(issue.Number)
 			directMention := directMentions[mentionKey]
+			addressed := directMention && !mentions.rechecks[mentionKey]
 			swept := sweep[key] || sweep[mentionKey]
 			workMu.Lock()
 			state := work[key]
@@ -1906,6 +1912,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					// #693). Keeping it queued as well would start a second, fresh
 					// run on the same comment once this one finishes.
 					delete(directMentions, mentionKey)
+					delete(mentions.rechecks, mentionKey)
 					if nudge != nil {
 						select {
 						case nudge <- struct{}{}:
@@ -1921,6 +1928,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				seen[key] = true
 				delete(restored, key)
 				delete(directMentions, mentionKey)
+				delete(mentions.rechecks, mentionKey)
 				// A known local failure or an active resume is unambiguously
 				// this instance's own work; anything else reappearing after
 				// having a local record is a reclaim that must be negotiated
@@ -1958,7 +1966,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					session = AgentSession{}
 					contested = false
 				}
-				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session, mentioned: directMention})
+				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session, mentioned: addressed})
 			}
 		}
 		// A mention whose issue the poll did not list can never be dispatched,
@@ -2036,6 +2044,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			workMu.Lock()
 			key := issueKey(issue)
 			active[key] = session.ID
+			mentions.agentStarted(issue.Repository + "#" + strconv.Itoa(issue.Number))
 			spec, _ := parseAgentSpec(session.Agent)
 			jobMu.Lock()
 			jobs[key] = JobSnapshot{Number: issue.Number, Target: issue.Target, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Agent: spec.Name, Model: spec.Model, Effort: spec.Level, Started: time.Now()}
@@ -2325,6 +2334,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					workMu.Lock()
 					key := issueKey(i)
 					delete(active, key)
+					mentions.agentStopped(i.Repository+"#"+strconv.Itoa(i.Number), time.Now())
 					jobMu.Lock()
 					job := jobs[key]
 					job.Status = "failed"
@@ -2361,6 +2371,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					workMu.Lock()
 					key := issueKey(i)
 					delete(active, key)
+					mentions.agentStopped(i.Repository+"#"+strconv.Itoa(i.Number), time.Now())
 					jobMu.Lock()
 					job := jobs[key]
 					job.Status = "complete"
@@ -2717,6 +2728,26 @@ func (w *Glorp) Run(ctx context.Context) error {
 					}
 				}
 			}
+			// A direct mention is intentionally not an ordinary comment refresh:
+			// it must survive a lagging issue search (or a transient list
+			// failure) until the mentioned issue is actually dispatched. The
+			// normal webhook retry chain stops as soon as an issue is merely
+			// observed, which is insufficient here because local completed or
+			// active state can still defer the fresh threaded run.
+			followQueuedRun := func(key string, number int) {
+				if !directMentions[key] {
+					return
+				}
+				pendingWebhookIssue = key
+				retriesRemaining = webhookRetryLimit
+				if retryTimer == nil {
+					retryTimer = time.NewTimer(w.Interval)
+					retry = retryTimer.C
+					w.logf("issue #%d direct mention is still pending; scheduling follow-up refresh", number)
+				} else {
+					w.logf("issue #%d direct mention is still pending; using the scheduled follow-up refresh", number)
+				}
+			}
 			if kind, ok := webhookMentionKind(event); ok && mentionedIdentity(event.CommentBody, w.Identity) {
 				// Acknowledge the mention was read regardless of whether it goes on
 				// to authorize a run (issue #581): a human watching the thread should
@@ -2752,6 +2783,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					key := keys[0]
 					for _, mentioned := range keys {
 						directMentions[mentioned] = true
+						delete(mentions.rechecks, mentioned)
 					}
 					if event.OnPullRequest {
 						w.logf("pull request #%d directly mentioned instance %s%s; refreshing for a threaded gh-fix run on %s", event.IssueNumber, w.Identity, mentionLocationSuffix(kind), formatIssueRefs(event.ClosesIssues))
@@ -2761,24 +2793,34 @@ func (w *Glorp) Run(ctx context.Context) error {
 					if err := poll(nil); err != nil && ctx.Err() == nil {
 						reportPollError("direct-mention", err)
 					}
-					// A direct mention is intentionally not an ordinary comment refresh:
-					// it must survive a lagging issue search (or a transient list
-					// failure) until the mentioned issue is actually dispatched. The
-					// normal webhook retry chain stops as soon as an issue is merely
-					// observed, which is insufficient here because local completed or
-					// active state can still defer the fresh threaded run.
-					if directMentions[key] {
-						pendingWebhookIssue = key
-						retriesRemaining = webhookRetryLimit
-						if retryTimer == nil {
-							retryTimer = time.NewTimer(w.Interval)
-							retry = retryTimer.C
-							w.logf("issue #%d direct mention is still pending; scheduling follow-up refresh", event.IssueNumber)
-						} else {
-							w.logf("issue #%d direct mention is still pending; using the scheduled follow-up refresh", event.IssueNumber)
+					followQueuedRun(key, event.IssueNumber)
+					continue
+				}
+			}
+			if kind, ok := webhookMentionKind(event); ok && !mentionedIdentity(event.CommentBody, w.Identity) && w.commentRequestsRecheck(event.CommentBody, event.CommentAuthor) {
+				// The delivery marks the comment as new, so only its author, its
+				// mention of the login, and its presence on GitHub need checking
+				// (issue #708).
+				verified, err := w.commentOnGitHub(ctx, kind, event.Repository, event.IssueNumber, event.CommentBody, event.CommentAuthor)
+				if err != nil {
+					w.logf("issue #%d failed to verify comment mentioning %s: %v", event.IssueNumber, w.SelfLogin, err)
+				} else if !verified {
+					w.logf("issue #%d ignoring comment mentioning %s: not found on GitHub", event.IssueNumber, w.SelfLogin)
+				} else {
+					keys := webhookMentionKeys(event)
+					if slices.ContainsFunc(keys, func(key string) bool { return !observed[key] }) {
+						if err := poll(nil); err != nil && ctx.Err() == nil {
+							reportPollError("comment-recheck", err)
 						}
 					}
-					continue
+					if queued := w.queueCommentRecheck(mentions, keys, event.CommentAuthor, time.Now(), observed, directMentions); len(queued) > 0 {
+						w.reactToMention(ctx, event.Repository, kind, event.IssueNumber, event.CommentID, event.CommentNodeID)
+						if err := poll(nil); err != nil && ctx.Err() == nil {
+							reportPollError("comment-recheck", err)
+						}
+						followQueuedRun(queued[0], event.IssueNumber)
+						continue
+					}
 				}
 			}
 			// The payload alone decides whether this delivery could have
