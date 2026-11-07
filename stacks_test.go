@@ -190,6 +190,16 @@ func (f *fakeParkingSource) OriginatingWorkState(_ context.Context, _ string, nu
 
 func (f *fakeParkingSource) StacksEnabled(context.Context, string) (bool, error) { return true, nil }
 
+// mergeBlocker makes every later poll report issue #7's blocker as closed. The
+// test calls it only after seeing the issue parked: with the merge scripted
+// into a fixed batch, a poll can unpark the issue before the test reads the
+// parked state, and the state never shows it again (issue #710).
+func (f *fakeParkingSource) mergeBlocker() {
+	f.fakeSource.mu.Lock()
+	defer f.fakeSource.mu.Unlock()
+	f.batches = [][]Issue{blockedOn12("closed")}
+}
+
 func parkingSource(batches ...[]Issue) *fakeParkingSource {
 	return &fakeParkingSource{
 		fakeSource: &fakeSource{batches: batches},
@@ -280,7 +290,7 @@ func TestGlorpCompletesAHeldPullRequestThatIsNotStacked(t *testing.T) {
 
 func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	src := parkingSource(blockedOn12("open"), blockedOn12("open"), blockedOn12("closed"))
+	src := parkingSource(blockedOn12("open"))
 	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
 	logs := &syncBuffer{}
 	w := &Glorp{
@@ -302,6 +312,7 @@ func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
 	src.mu.Lock()
 	src.states[7] = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", IsDraft: true}}}
 	src.mu.Unlock()
+	src.mergeBlocker()
 	resumed := waitForSession(t, runner.sessions)
 	if !resumed.Resume || resumed.ID != first.ID || !strings.Contains(resumed.Update, "The blocker is no longer open") {
 		t.Fatalf("parked issue was not resumed with its blocker merged: first=%+v resumed=%+v", first, resumed)
