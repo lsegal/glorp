@@ -659,6 +659,29 @@ func (g GHCLI) StacksEnabled(ctx context.Context, repo string) (bool, error) {
 	return true, nil
 }
 
+// ForkFor reports where a fix for an issue in repo is pushed (issue #712): an
+// empty string when the authenticated user can push to repo, and otherwise
+// the OWNER/REPO of the user's fork of it. GitHub's create-fork call returns
+// the existing fork when there already is one, so it doubles as the lookup.
+func (g GHCLI) ForkFor(ctx context.Context, repo string) (string, error) {
+	output, err := g.run(ctx, "api", "repos/"+repo, "--jq", ".permissions.push")
+	if err != nil {
+		return "", fmt.Errorf("read permissions on %s: %w: %s", repo, err, strings.TrimSpace(string(output)))
+	}
+	if strings.TrimSpace(string(output)) == "true" {
+		return "", nil
+	}
+	output, err = g.run(ctx, "api", "-X", "POST", "repos/"+repo+"/forks", "--jq", ".full_name")
+	if err != nil {
+		return "", fmt.Errorf("fork %s: %w: %s", repo, err, strings.TrimSpace(string(output)))
+	}
+	fork := strings.TrimSpace(string(output))
+	if !validRepo(fork) {
+		return "", fmt.Errorf("fork %s: unexpected repository name %q", repo, fork)
+	}
+	return fork, nil
+}
+
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
 	public := g.isPublicRepo(ctx, repo)
 	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number))
@@ -1840,6 +1863,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		}
 		if !isDiscussionTarget(target) && r.NoChangelog {
 			prompt += " and no changelog"
+		}
+		// The user cannot write to the issue's repository, so the fix is pushed
+		// to their fork and its pull request opened from there (issue #712).
+		if !isDiscussionTarget(target) && issue.Fork != "" {
+			prompt += " and use fork " + issue.Fork
 		}
 		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	} else if session.Update != "" {

@@ -136,6 +136,7 @@ type (
 
 type ProjectStateSource = core.ProjectStateSource
 type StackSource = core.StackSource
+type ForkSource = core.ForkSource
 type IssueStatuser interface {
 	SetIssueStatus(context.Context, string, Issue, string) error
 }
@@ -274,8 +275,12 @@ type Glorp struct {
 	// GitHub stacked pull requests enabled (issue #657). Blocked issues are
 	// re-evaluated on every poll, so the answer is cached rather than asked
 	// again each tick.
-	stacksMu      sync.Mutex
-	stacks        map[string]stacksProbe
+	stacksMu sync.Mutex
+	stacks   map[string]stacksProbe
+	// forksMu guards forks, the last answer to where each repository's fixes are
+	// pushed (issue #712), so permission is not read again for every dispatch.
+	forksMu       sync.Mutex
+	forks         map[string]forkProbe
 	jobActionOnce sync.Once
 	jobActions    chan jobActionRequest
 	// settingsOnce/settingsRequests carry live settings updates (issue #341)
@@ -1789,6 +1794,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			counts[target] = count
 		}
 		polled := lastPoll
+		watched := targets
 		jobMu.Unlock()
 		sortJobSnapshots(list)
 		if len(list) > maxVisibleJobs {
@@ -1802,7 +1808,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if online && w.WebhookOnline != nil {
 			online = w.WebhookOnline()
 		}
-		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: targets, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list})
+		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list})
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent
@@ -2014,6 +2020,31 @@ func (w *Glorp) Run(ctx context.Context) error {
 						w.releasePendingClaim(ctx, pending, "creating its session identifier failed, so it was never dispatched")
 						return err
 					}
+				}
+			}
+			// A repository the user cannot write to has its fix pushed to the
+			// user's fork instead (issue #712). The issue, its claim, and its
+			// status all stay on the original repository; only the branch and
+			// pull request come from the fork, which joins the watched targets
+			// so its activity is watched without a restart.
+			fork, forkErr := w.forkFor(ctx, issueRepository(issue.Target, issue))
+			if forkErr != nil {
+				w.logf("issue #%d not dispatched; failed to read write permission on its repository: %v", issue.Number, forkErr)
+				w.releasePendingClaim(ctx, pending, "reading write permission on its repository failed, so it was never dispatched")
+				continue
+			}
+			if fork != "" {
+				issue.Fork = fork
+				if !slices.Contains(targets, fork) {
+					// Dispatch goroutines read targets under workMu and the
+					// dashboard snapshot under jobMu, so the list is replaced
+					// rather than appended to in place, under both.
+					workMu.Lock()
+					jobMu.Lock()
+					targets = append(append([]string(nil), targets...), fork)
+					jobMu.Unlock()
+					workMu.Unlock()
+					w.logf("issue #%d will open its pull request from fork %s (no write permission on %s); added %s to the watched targets", issue.Number, fork, issueRepository(issue.Target, issue), fork)
 				}
 			}
 			if w.Status != nil {
@@ -3512,6 +3543,45 @@ func (w *Glorp) stacksEnabled(ctx context.Context, repo string) bool {
 	w.stacks[repo] = stacksProbe{enabled: enabled, at: time.Now()}
 	w.stacksMu.Unlock()
 	return enabled
+}
+
+// forkProbeTTL is how long a repository's answer to where its fixes are pushed
+// is trusted before write permission is read again, so being granted (or
+// losing) write access is noticed without a restart.
+const forkProbeTTL = time.Hour
+
+type forkProbe struct {
+	fork string
+	at   time.Time
+}
+
+// forkFor returns the OWNER/REPO of the fork an issue in repo pushes its fix
+// to, or an empty string when the user can write to repo itself (issue #712).
+// The answer is cached for forkProbeTTL. A source that cannot answer keeps the
+// same-repository flow, while a failed read is returned so the issue is not
+// dispatched to push where it cannot.
+func (w *Glorp) forkFor(ctx context.Context, repo string) (string, error) {
+	source, ok := w.Issues.(ForkSource)
+	if !ok || repo == "" {
+		return "", nil
+	}
+	w.forksMu.Lock()
+	probe, cached := w.forks[repo]
+	w.forksMu.Unlock()
+	if cached && time.Since(probe.at) < forkProbeTTL {
+		return probe.fork, nil
+	}
+	fork, err := source.ForkFor(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	w.forksMu.Lock()
+	if w.forks == nil {
+		w.forks = make(map[string]forkProbe)
+	}
+	w.forks[repo] = forkProbe{fork: fork, at: time.Now()}
+	w.forksMu.Unlock()
+	return fork, nil
 }
 
 // stackableOnDependency reports whether a blocked issue can be dispatched
