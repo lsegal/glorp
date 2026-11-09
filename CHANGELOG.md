@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Work issues on repositories you cannot write to by opening the fix pull request from your fork (issue #712). When glorp dispatches an issue, it checks whether the authenticated user can push to the issue's repository. If not, it creates (or reuses) the user's fork, adds the fork to the running watch's targets with no restart needed, and passes `gh-fix` the new trailing `and use fork OWNER/REPO` advice. `gh-fix` then pushes the branch to the fork and opens a cross-repository pull request that still closes the original issue, and it stops at a ready, green pull request because only the repository's maintainers can merge it. Issues, claim comments, and project status stay on the original repository, and repositories you can write to work exactly as before.
+
 ## v1.5.12 - 2026-11-07
 
 - Recheck a watched issue when an `--allowed-commenters` user posts a new comment mentioning the GitHub user glorp runs as, such as `@yourname`, with no `@/glorp:ID` needed (issue #708). The comment is picked up like a direct mention in every poll mode, on the issue or on the pull request that closes it, including reviews and inline review comments. Comments that already existed when the watch started are never replayed, and a comment glorp's own login posts while its agent is running on that issue does not start another run.

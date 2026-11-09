@@ -24,6 +24,9 @@ type Issue struct {
 	ProjectStatus string            `json:"projectStatus,omitempty"`
 	ProjectItemID string            `json:"-"`
 	Target        string            `json:"-"`
+	// Fork is the OWNER/REPO of the user's fork the fix is pushed to when the
+	// user cannot write to Repository (issue #712). Empty pushes to Repository.
+	Fork string `json:"-"`
 }
 
 // IssueLabel is one label on an issue.
@@ -105,4 +108,12 @@ type StackSource interface {
 // actually changes, instead of waiting out the fallback interval.
 type ProjectStateSource interface {
 	ProjectState(context.Context, string) (string, error)
+}
+
+// ForkSource decides where the fix for a repository's issue is pushed (issue
+// #712). It answers an empty string when the authenticated user can write to
+// repo, and otherwise the OWNER/REPO of the user's fork of it, creating that
+// fork when it does not exist yet.
+type ForkSource interface {
+	ForkFor(context.Context, string) (string, error)
 }
