@@ -290,6 +290,17 @@ func TestOwnershipTargetForPrefersOpenPullRequest(t *testing.T) {
 	}
 }
 
+func TestOwnershipTargetForAdoptsCrossRepoPullRequest(t *testing.T) {
+	checker := &fakeClosureSource{state: OriginatingWorkState{
+		IssueState:   "open",
+		PullRequests: []PullRequestWorkState{{Repository: "fork/r", Number: 4, State: "open"}},
+	}}
+	target := ownershipTargetFor(context.Background(), checker, Issue{Number: 1, Repository: "o/r", Target: "o/r"})
+	if !target.Continue || target.Repo != "fork/r" || target.Number != 4 {
+		t.Fatalf("target = %+v, want continue on fork/r#4", target)
+	}
+}
+
 func TestOwnershipTargetForFallsBackToIssueWithoutOpenPullRequest(t *testing.T) {
 	checker := &fakeClosureSource{state: OriginatingWorkState{IssueState: "open"}}
 	target := ownershipTargetFor(context.Background(), checker, Issue{Number: 3, Repository: "o/r", Target: "o/r"})

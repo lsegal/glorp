@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Recognize a pull request opened in another repository, such as from a fork, as the work for the issue it closes (issue #718). glorp now reads that pull request back from its own repository when it closes the issue with a fully-qualified `OWNER/REPO#N` reference or an issue URL, so a resumed run adopts the existing pull request instead of starting the fix over, and pull-request mentions, ownership handoffs, and closed-without-merging restarts follow it there. A bare `#N` in another repository's pull request still refers to that repository's own issue and is ignored.
+
+- Recognize a pull request opened in another repository, such as from a fork, as the work on the issue it closes (issue #718). glorp now reads each cross-referenced pull request back from its own repository and accepts a fully qualified `OWNER/REPO#N` reference or issue URL as its closing reference. A resumed run adopts that open pull request instead of starting the fix over, and a merged one counts as the issue's merge. A bare `#N` in another repository's pull request still refers to that repository's own issue and is ignored.
+
 ## v1.5.13 - 2026-11-09
 
 - Work issues on repositories you cannot write to by opening the fix pull request from your fork (issue #712). When glorp dispatches an issue, it checks whether the authenticated user can push to the issue's repository. If not, it creates (or reuses) the user's fork, adds the fork to the running watch's targets with no restart needed, and passes `gh-fix` the new trailing `and use fork OWNER/REPO` advice. `gh-fix` then pushes the branch to the fork and opens a cross-repository pull request that still closes the original issue, and it stops at a ready, green pull request because only the repository's maintainers can merge it. Issues, claim comments, and project status stay on the original repository, and repositories you can write to work exactly as before.
