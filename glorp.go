@@ -1316,6 +1316,46 @@ func parkedWorkPrompt(issue Issue) string {
 	return fmt.Sprintf("Your pull request for issue #%d was parked, stacked on its blocker's branch and waiting for that blocker to merge. The blocker is no longer open.\n\nPick the work back up: rebase or retarget the pull request onto the default branch as the gh-fix stacking steps describe (or unstack it if the blocker's pull request closed without merging), drive CI to green on the new head, and merge it so issue #%d closes.", issue.Number, issue.Number)
 }
 
+// completedWorkRejected reports a completed issue, still open, whose pull
+// request was closed without merging after its run ended (issue #729). A run
+// only completes with its issue still open when it left a ready pull request
+// for a human, so no open or merged pull request remaining means that one was
+// rejected. A failed check reports nothing, leaving the issue suppressed until
+// a later poll can read it.
+func (w *Glorp) completedWorkRejected(ctx context.Context, checker WorkClosureChecker, issue Issue) (int, string) {
+	state, err := checker.OriginatingWorkState(ctx, issueRepository(issue.Target, issue), issue.Number)
+	if err != nil {
+		if ctx.Err() == nil {
+			w.logChanged("rejected-check-"+issueKey(issue), err.Error(), "issue #%d completed-work check failed: %v", issue.Number, err)
+		}
+		return 0, ""
+	}
+	return completedPullRequestRejected(state)
+}
+
+// completedPullRequestRejected reports the pull request closed without merging
+// that rejects completed work: the issue is open, none of its pull requests is
+// open or merged, and at least one was closed unmerged. A closed issue or a
+// merged pull request means the work is done and is never restarted.
+func completedPullRequestRejected(state OriginatingWorkState) (int, string) {
+	if strings.EqualFold(state.IssueState, "closed") {
+		return 0, ""
+	}
+	rejected := 0
+	for _, pullRequest := range state.PullRequests {
+		if pullRequest.Merged || strings.EqualFold(pullRequest.State, "open") {
+			return 0, ""
+		}
+		if strings.EqualFold(pullRequest.State, "closed") && pullRequest.Number > rejected {
+			rejected = pullRequest.Number
+		}
+	}
+	if rejected == 0 {
+		return 0, ""
+	}
+	return rejected, fmt.Sprintf("pull request #%d was closed without merging", rejected)
+}
+
 // closedWorkReason reports why work must stop because its issue was closed
 // without a merge. A pull request closed while the issue is still open is not
 // a reason to stop; rejectedPullRequest reports it instead (issue #690).
@@ -1949,6 +1989,18 @@ func (w *Glorp) Run(ctx context.Context) error {
 				w.logf("issue #%d not picked up: its stopped run is still exiting", issue.Number)
 				continue
 			}
+			// A completed run's ready pull request can still be closed without
+			// merging after the run ended. That rejects the attempt exactly as
+			// it does mid-run (issue #690), so the completed record stops
+			// suppressing the issue and the work restarts (issue #729).
+			rejected := 0
+			if wasCompleted && !isActive && closureChecker != nil {
+				if number, reason := w.completedWorkRejected(ctx, closureChecker, issue); reason != "" {
+					rejected = number
+					wasCompleted = false
+					w.logf("issue #%d restarting completed work: %s while the issue is still open; starting a fresh attempt", issue.Number, reason)
+				}
+			}
 			if directMention && isActive {
 				if resumable {
 					// The run's watcher reads the issue and the pull requests it
@@ -1968,7 +2020,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logChanged("mention-active-"+key, "waiting", "issue #%d direct mention of instance %s waits for the run in progress to finish: that run's session cannot be resumed to relay it", issue.Number, w.Identity)
 				}
 			}
-			if issue.Number > 0 && (wasFailed || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) || (swept && !isActive && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || (directMention && !isActive)) {
+			if issue.Number > 0 && (wasFailed || rejected > 0 || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) || (swept && !isActive && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || (directMention && !isActive)) {
 				seen[key] = true
 				delete(restored, key)
 				delete(directMentions, mentionKey)
@@ -1980,7 +2032,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// sitting at "In Progress" that this instance has no record of
 				// is another instance's apparent work (typically stranded by
 				// one that died mid-run), so it must be negotiated too.
-				contested := (hadLocalRecord && !wasFailed && !wasActive && !wasParked) || (!hadLocalRecord && (projectItemInProgress(issue.Target, issue) || swept))
+				contested := (hadLocalRecord && !wasFailed && !wasActive && !wasParked && rejected == 0) || (!hadLocalRecord && (projectItemInProgress(issue.Target, issue) || swept))
 				session := AgentSession{
 					ID: state.SessionID, Agent: state.Agent, CheckoutDirectory: state.CheckoutDirectory,
 					// Persisted work is not an active worker after a daemon restart or
@@ -2001,6 +2053,16 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d unparked: its blocker is no longer open; resuming its stacked pull request", issue.Number)
 					if session.Resume {
 						session.Update = parkedWorkPrompt(issue)
+					}
+				}
+				if rejected > 0 {
+					// Like a rejection mid-run, a resumable session is told the
+					// attempt was rejected and one that cannot be resumed starts
+					// over; neither reuses the closed pull request.
+					if session.Resume {
+						session.Update = rejectedPullRequestPrompt(issue, rejected)
+					} else {
+						session = AgentSession{}
 					}
 				}
 				if directMention {
