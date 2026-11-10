@@ -110,7 +110,7 @@ func TestOriginatingWorkStateLoadsLinkedPullRequest(t *testing.T) {
 		return responses[len(calls)-1], nil
 	}}
 	state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
-	if err != nil || state.IssueState != "OPEN" || len(state.PullRequests) != 1 || state.PullRequests[0] != (PullRequestWorkState{Number: 9, State: "closed"}) {
+	if err != nil || state.IssueState != "OPEN" || len(state.PullRequests) != 1 || state.PullRequests[0] != (PullRequestWorkState{Repository: "owner/repo", Number: 9, State: "closed"}) {
 		t.Fatalf("OriginatingWorkState() = (%#v, %v)", state, err)
 	}
 	want := []string{"api", "repos/owner/repo/pulls/9"}
@@ -131,8 +131,86 @@ func TestOriginatingWorkStateReadsPullRequestDraftStatus(t *testing.T) {
 		return responses[len(calls)-1], nil
 	}}
 	state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
-	if err != nil || len(state.PullRequests) != 1 || state.PullRequests[0] != (PullRequestWorkState{Number: 9, State: "open", IsDraft: false}) {
+	if err != nil || len(state.PullRequests) != 1 || state.PullRequests[0] != (PullRequestWorkState{Repository: "owner/repo", Number: 9, State: "open", IsDraft: false}) {
 		t.Fatalf("OriginatingWorkState() = (%#v, %v)", state, err)
+	}
+}
+
+func TestOriginatingWorkStateRecognizesCrossRepoPullRequest(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		pull   string
+		want   PullRequestWorkState
+	}{
+		{
+			name:   "merged with qualified reference",
+			source: `{"number":3,"body":"Closes owner/repo#7","repository":{"full_name":"fork/repo"},"pull_request":{}}`,
+			pull:   `{"state":"closed","merged_at":"2026-11-09T12:00:00Z"}`,
+			want:   PullRequestWorkState{Repository: "fork/repo", Number: 3, State: "closed", Merged: true},
+		},
+		{
+			name:   "open draft with issue URL",
+			source: `{"number":3,"body":"Fixes https://github.com/owner/repo/issues/7","repository_url":"https://api.github.com/repos/fork/repo","pull_request":{}}`,
+			pull:   `{"state":"open","draft":true}`,
+			want:   PullRequestWorkState{Repository: "fork/repo", Number: 3, State: "open", IsDraft: true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			responses := [][]byte{
+				[]byte(`{"state":"OPEN"}`),
+				[]byte(`[{"event":"cross-referenced","source":{"issue":` + test.source + `}}]`),
+				[]byte(test.pull),
+			}
+			var calls [][]string
+			gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+				calls = append(calls, append([]string(nil), args...))
+				return responses[len(calls)-1], nil
+			}}
+			state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
+			if err != nil || len(state.PullRequests) != 1 || state.PullRequests[0] != test.want {
+				t.Fatalf("OriginatingWorkState() = (%#v, %v), want pull request %#v", state, err, test.want)
+			}
+			if want := []string{"api", "repos/fork/repo/pulls/3"}; !reflect.DeepEqual(calls[2], want) {
+				t.Fatalf("pull request state call = %#v, want %#v", calls[2], want)
+			}
+		})
+	}
+}
+
+func TestOriginatingWorkStateIgnoresCrossRepoBareReference(t *testing.T) {
+	responses := [][]byte{
+		[]byte(`{"state":"OPEN"}`),
+		[]byte(`[{"event":"cross-referenced","source":{"issue":{"number":3,"body":"Closes #7","repository":{"full_name":"other/repo"},"pull_request":{}}}}]`),
+	}
+	call := 0
+	gh := GHCLI{runCommand: func(_ context.Context, _ ...string) ([]byte, error) {
+		response := responses[call]
+		call++
+		return response, nil
+	}}
+	state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
+	if err != nil || len(state.PullRequests) != 0 || call != 2 {
+		t.Fatalf("OriginatingWorkState() = (%#v, %v) after %d calls, want no pull requests", state, err, call)
+	}
+}
+
+func TestClosesIssue(t *testing.T) {
+	for _, test := range []struct {
+		body, pullRepo string
+		want           bool
+	}{
+		{body: "Closes #7", pullRepo: "owner/repo", want: true},
+		{body: "fixes: owner/repo#7", pullRepo: "owner/repo", want: true},
+		{body: "Closes #7", pullRepo: "fork/repo", want: false},
+		{body: "Closes owner/repo#7", pullRepo: "fork/repo", want: true},
+		{body: "Resolves https://github.com/Owner/Repo/issues/7", pullRepo: "fork/repo", want: true},
+		{body: "Closes owner/repo#70", pullRepo: "fork/repo", want: false},
+		{body: "Closes other/repo#7", pullRepo: "fork/repo", want: false},
+	} {
+		if got := closesIssue(test.body, test.pullRepo, "owner/repo", 7); got != test.want {
+			t.Errorf("closesIssue(%q, %q) = %v, want %v", test.body, test.pullRepo, got, test.want)
+		}
 	}
 }
 

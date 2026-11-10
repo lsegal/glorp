@@ -67,8 +67,8 @@ type PullRequestWorkState struct {
 	// a fork, and is empty when unknown (issue #718).
 	Repository string
 	Number     int
-	State  string
-	Merged bool
+	State      string
+	Merged     bool
 	// IsDraft reports whether the pull request is still a draft. A run that
 	// finishes with an open, unmerged, non-draft pull request left behind has
 	// deliberately marked its fix ready and is waiting on a human rather than
