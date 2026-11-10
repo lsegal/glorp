@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop relaying new issue comments from anyone outside `--allowed-commenters` into a running agent (issue #717). Before, any GitHub user who could comment on a dispatched issue could interrupt the agent and have their text treated as part of the request. Now only allowed commenters' comments interrupt and resume the run; anyone else's comment is logged as ignored and never reaches the agent.
+
 ## v1.5.13 - 2026-11-09
 
 - Work issues on repositories you cannot write to by opening the fix pull request from your fork (issue #712). When glorp dispatches an issue, it checks whether the authenticated user can push to the issue's repository. If not, it creates (or reuses) the user's fork, adds the fork to the running watch's targets with no restart needed, and passes `gh-fix` the new trailing `and use fork OWNER/REPO` advice. `gh-fix` then pushes the branch to the fork and opens a cross-repository pull request that still closes the original issue, and it stops at a ready, green pull request because only the repository's maintainers can merge it. Issues, claim comments, and project status stay on the original repository, and repositories you can write to work exactly as before.

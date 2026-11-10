@@ -211,8 +211,9 @@ type Glorp struct {
 	// generated once at startup and never persisted.
 	Identity Identity
 	// AllowedCommenters restricts which GitHub logins may trigger a direct
-	// @/glorp:ID mention run (issue #294). An empty list places no
-	// restriction; the CLI defaults it to the authenticated gh user.
+	// @/glorp:ID mention run (issue #294), and whose new comments are relayed
+	// into a running agent (issue #717). An empty list places no restriction;
+	// the CLI defaults it to the authenticated gh user.
 	AllowedCommenters []string
 	// SelfLogin is the GitHub login this instance runs as. A new comment from
 	// an allowed commenter that mentions it triggers a recheck of its issue
@@ -1052,11 +1053,20 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 			}
 			continue
 		}
+		// Only allowed commenters may steer a running agent (issue #717):
+		// anyone else's comment is marked seen and logged once, never relayed.
 		added := 0
 		for _, comment := range comments {
-			if relayableComment(comment, watch.since) && !seen[commentKey(comment)] {
-				added++
+			key := commentKey(comment)
+			if seen[key] || !relayableComment(comment, watch.since) {
+				continue
 			}
+			if !commenterAllowed(comment.Author, w.AllowedCommenters) {
+				seen[key] = true
+				w.logf("issue #%d ignoring new comment: %s is not an allowed commenter", issue.Number, comment.Author)
+				continue
+			}
+			added++
 		}
 		if mentioned := w.pullRequestMentions(ctx, repo, issue, previous.PullRequests, watch.since, seen); len(mentioned) > 0 {
 			w.logf("issue #%d interrupting agent: instance %s was mentioned on pull request %s; relaying it into the same session", issue.Number, w.Identity, formatIssueRefs(mentioned))
