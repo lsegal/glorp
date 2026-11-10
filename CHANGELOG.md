@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make the dashboard's stop button wait until the agent process has actually exited before reporting the job stopped (issue #719). Before, stop replied as soon as it signalled the agent, while the agent could still be writing, pushing, or posting. Retrying a running job waits the same way. While a stopped run is still exiting, its issue is reserved: no poll starts a new run for it, and a direct mention posted meanwhile stays queued and starts a fresh run once the old one is gone, instead of being relayed into the run being stopped.
+
 ## v1.5.13 - 2026-11-09
 
 - Work issues on repositories you cannot write to by opening the fix pull request from your fork (issue #712). When glorp dispatches an issue, it checks whether the authenticated user can push to the issue's repository. If not, it creates (or reuses) the user's fork, adds the fork to the running watch's targets with no restart needed, and passes `gh-fix` the new trailing `and use fork OWNER/REPO` advice. `gh-fix` then pushes the branch to the fork and opens a cross-repository pull request that still closes the original issue, and it stops at a ready, green pull request because only the repository's maintainers can merge it. Issues, claim comments, and project status stay on the original repository, and repositories you can write to work exactly as before.
