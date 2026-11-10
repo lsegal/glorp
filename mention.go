@@ -146,7 +146,8 @@ func (w *Glorp) queueCommentRecheck(scan *mentionScan, keys []string, author str
 // comment should be read again on the next scan.
 func (w *Glorp) handleScannedRecheck(ctx context.Context, scan *mentionScan, repo string, comment RecentComment, listed, directMentions map[string]bool) bool {
 	numbers := []int{comment.Number}
-	if comment.Kind != ConversationComment || !listed[repo+"#"+strconv.Itoa(comment.Number)] {
+	linked := scan.linked.issues(repo, comment.Number)
+	if len(linked) == 0 && (comment.Kind != ConversationComment || !listed[repo+"#"+strconv.Itoa(comment.Number)]) {
 		closing, err := w.Mentions.ClosingIssues(ctx, repo, comment.Number)
 		if err != nil {
 			w.logf("%s#%d failed to read which issues it closes: %v", repo, comment.Number, err)
@@ -157,6 +158,9 @@ func (w *Glorp) handleScannedRecheck(ctx context.Context, scan *mentionScan, rep
 	keys := make([]string, 0, len(numbers))
 	for _, number := range numbers {
 		keys = append(keys, repo+"#"+strconv.Itoa(number))
+	}
+	if len(linked) > 0 {
+		keys = linked
 	}
 	if len(w.queueCommentRecheck(scan, keys, comment.Author, comment.CreatedAt, listed, directMentions)) > 0 {
 		w.reactToMention(ctx, repo, comment.Kind, comment.Number, comment.ID, comment.NodeID)
@@ -212,6 +216,9 @@ type mentionScan struct {
 	// addressed to one instance, so unlike a direct mention it stays subject to
 	// the claims standing on the ticket. Webhook deliveries use it as well.
 	rechecks map[string]bool
+	// linked is the derived watch on pull requests that work on an issue
+	// from another repository, such as a fork (issue #723).
+	linked *linkedPullRequests
 
 	// agentMu guards agentRunning and agentEnded, which run goroutines update.
 	agentMu      sync.Mutex
@@ -229,6 +236,7 @@ func newMentionScan(start time.Time) *mentionScan {
 		start: start, since: make(map[string]time.Time), handled: make(map[mentionScanKey]bool),
 		seeded: make(map[string]bool), seen: make(map[mentionScanKey]bool), rechecks: make(map[string]bool),
 		agentRunning: make(map[string]bool), agentEnded: make(map[string]time.Time),
+		linked: newLinkedPullRequests(),
 	}
 }
 
@@ -295,16 +303,38 @@ func mentionScanRepos(targets []string, issues []Issue) []string {
 func (w *Glorp) scanDirectMentions(ctx context.Context, scan *mentionScan, repos []string, listed map[string]bool, directMentions map[string]bool) {
 	reviews, _ := w.Mentions.(ReviewMentionSource)
 	for _, repo := range repos {
-		w.scanMentionStream(ctx, scan, repo, repo, "recent comments", w.Mentions.RecentComments, listed, directMentions)
+		w.scanMentionStream(ctx, scan, repo, repo, "recent comments", w.Mentions.RecentComments, nil, listed, directMentions)
 		if reviews != nil {
-			w.scanMentionStream(ctx, scan, repo, repo+" reviews", "recent pull request reviews", reviews.RecentReviewComments, listed, directMentions)
+			w.scanMentionStream(ctx, scan, repo, repo+" reviews", "recent pull request reviews", reviews.RecentReviewComments, nil, listed, directMentions)
+		}
+	}
+	w.scanLinkedPullRequests(ctx, scan, repos, listed, directMentions)
+}
+
+// scanLinkedPullRequests scans the repositories hosting linked pull requests
+// (issue #723) that covered does not already reach, and acts only on comments
+// posted on those pull requests. covered is the repositories scanned in full
+// or receiving webhook deliveries. A comment on any other issue or pull
+// request in such a repository is never acted on, so the derived watch never
+// dispatches that repository's own issues.
+func (w *Glorp) scanLinkedPullRequests(ctx context.Context, scan *mentionScan, covered []string, listed map[string]bool, directMentions map[string]bool) {
+	reviews, _ := w.Mentions.(ReviewMentionSource)
+	for _, repo := range scan.linked.repos() {
+		if slices.ContainsFunc(covered, func(candidate string) bool { return strings.EqualFold(candidate, repo) }) {
+			continue
+		}
+		only := func(number int) bool { return len(scan.linked.issues(repo, number)) > 0 }
+		w.scanMentionStream(ctx, scan, repo, repo, "linked pull request comments", w.Mentions.RecentComments, only, listed, directMentions)
+		if reviews != nil {
+			w.scanMentionStream(ctx, scan, repo, repo+" reviews", "linked pull request reviews", reviews.RecentReviewComments, only, listed, directMentions)
 		}
 	}
 }
 
 // scanMentionStream reads one listing of repo's recent comments from the
-// cursor stored under cursor and acts on each new mention in it.
-func (w *Glorp) scanMentionStream(ctx context.Context, scan *mentionScan, repo, cursor, label string, list func(context.Context, string, time.Time) ([]RecentComment, error), listed map[string]bool, directMentions map[string]bool) {
+// cursor stored under cursor and acts on each new mention in it. When only is
+// set, comments on numbers it rejects are skipped.
+func (w *Glorp) scanMentionStream(ctx context.Context, scan *mentionScan, repo, cursor, label string, list func(context.Context, string, time.Time) ([]RecentComment, error), only func(int) bool, listed map[string]bool, directMentions map[string]bool) {
 	since, ok := scan.since[cursor]
 	if !ok {
 		// An identity is new on every start, so nothing posted before this
@@ -325,6 +355,9 @@ func (w *Glorp) scanMentionStream(ctx context.Context, scan *mentionScan, repo, 
 			next = candidate
 		}
 		key := mentionScanKey{kind: comment.Kind, id: comment.ID}
+		if only != nil && !only(comment.Number) {
+			continue
+		}
 		if !mentionedIdentity(comment.Body, w.Identity) {
 			if scan.handled[key] || scan.seen[key] {
 				continue
@@ -386,6 +419,17 @@ func (w *Glorp) handleScannedMention(ctx context.Context, scan *mentionScan, rep
 			w.logf("%s#%d ignoring direct mention of instance %s: not the last comment or not from an allowed commenter", repo, comment.Number, w.Identity)
 		} else {
 			w.logf("%s#%d ignoring direct mention of instance %s in %s: %s is not an allowed commenter", repo, comment.Number, w.Identity, mentionLocation(comment.Kind), comment.Author)
+		}
+		return true
+	}
+	if linked := scan.linked.issues(repo, comment.Number); len(linked) > 0 {
+		// A linked pull request in another repository addresses the issue
+		// it works, wherever that issue lives (issue #723).
+		w.logf("%s pull request #%d directly mentioned instance %s%s; it is linked to %s", repo, comment.Number, w.Identity, mentionLocationSuffix(comment.Kind), strings.Join(linked, ", "))
+		for _, key := range linked {
+			directMentions[key] = true
+			delete(scan.rechecks, key)
+			w.logf("issue %s directly mentioned instance %s; queuing a threaded gh-fix run", key, w.Identity)
 		}
 		return true
 	}
