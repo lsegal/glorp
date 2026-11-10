@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Recognize a pull request opened in another repository, such as from a fork, as the work on the issue it closes (issue #718). glorp now reads each cross-referenced pull request back from its own repository and accepts a fully qualified `OWNER/REPO#N` reference or issue URL as its closing reference. A resumed run adopts that open pull request instead of starting the fix over, and a merged one counts as the issue's merge. A bare `#N` in another repository's pull request still refers to that repository's own issue and is ignored.
+- Stop relaying new issue comments from anyone outside `--allowed-commenters` into a running agent (issue #717). Before, any GitHub user who could comment on a dispatched issue could interrupt the agent and have their text treated as part of the request. Now only allowed commenters' comments interrupt and resume the run; anyone else's comment is logged as ignored and never reaches the agent.
 - Make the dashboard's stop button wait until the agent process has actually exited before reporting the job stopped (issue #719). Before, stop replied as soon as it signalled the agent, while the agent could still be writing, pushing, or posting. Retrying a running job waits the same way. While a stopped run is still exiting, its issue is reserved: no poll starts a new run for it, and a direct mention posted meanwhile stays queued and starts a fresh run once the old one is gone, instead of being relayed into the run being stopped.
 
 ## v1.5.13 - 2026-11-09
