@@ -703,9 +703,13 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 		Event  string `json:"event"`
 		Source struct {
 			Issue struct {
-				Number      int    `json:"number"`
-				State       string `json:"state"`
-				Body        string `json:"body"`
+				Number        int    `json:"number"`
+				State         string `json:"state"`
+				Body          string `json:"body"`
+				RepositoryURL string `json:"repository_url"`
+				Repository    struct {
+					FullName string `json:"full_name"`
+				} `json:"repository"`
 				PullRequest *struct {
 					MergedAt *time.Time `json:"merged_at"`
 				} `json:"pull_request"`
@@ -718,12 +722,22 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 	state := OriginatingWorkState{IssueState: issue.State, IssueBody: issue.Body}
 	for _, event := range events {
 		pullRequest := event.Source.Issue
-		if event.Event != "cross-referenced" || pullRequest.PullRequest == nil || !closesIssue(pullRequest.Body, repo, number) {
+		if event.Event != "cross-referenced" || pullRequest.PullRequest == nil {
 			continue
 		}
-		output, err := g.apiGET(ctx, public, "repos/"+repo+"/pulls/"+strconv.Itoa(pullRequest.Number))
+		// A pull request in another repository, such as one opened from a
+		// fork, is read back from its own repository (issue #718).
+		pullRepo := timelineSourceRepo(pullRequest.Repository.FullName, pullRequest.RepositoryURL, repo)
+		if !closesIssue(pullRequest.Body, pullRepo, repo, number) {
+			continue
+		}
+		pullPublic := public
+		if !strings.EqualFold(pullRepo, repo) {
+			pullPublic = g.isPublicRepo(ctx, pullRepo)
+		}
+		output, err := g.apiGET(ctx, pullPublic, "repos/"+pullRepo+"/pulls/"+strconv.Itoa(pullRequest.Number))
 		if err != nil {
-			return OriginatingWorkState{}, fmt.Errorf("read pull request #%d state for issue #%d: %w: %s", pullRequest.Number, number, err, strings.TrimSpace(string(output)))
+			return OriginatingWorkState{}, fmt.Errorf("read pull request %s#%d state for issue #%d: %w: %s", pullRepo, pullRequest.Number, number, err, strings.TrimSpace(string(output)))
 		}
 		var currentPullRequest struct {
 			State    string     `json:"state"`
@@ -737,18 +751,41 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 			} `json:"base"`
 		}
 		if err := json.Unmarshal(output, &currentPullRequest); err != nil {
-			return OriginatingWorkState{}, fmt.Errorf("decode pull request #%d state for issue #%d: %w", pullRequest.Number, number, err)
+			return OriginatingWorkState{}, fmt.Errorf("decode pull request %s#%d state for issue #%d: %w", pullRepo, pullRequest.Number, number, err)
 		}
 		base := currentPullRequest.Base
 		stacked := base.Ref != "" && base.Repo.DefaultBranch != "" && base.Ref != base.Repo.DefaultBranch
-		state.PullRequests = append(state.PullRequests, PullRequestWorkState{Number: pullRequest.Number, State: currentPullRequest.State, Merged: currentPullRequest.MergedAt != nil, IsDraft: currentPullRequest.Draft, Stacked: stacked})
+		state.PullRequests = append(state.PullRequests, PullRequestWorkState{Repository: pullRepo, Number: pullRequest.Number, State: currentPullRequest.State, Merged: currentPullRequest.MergedAt != nil, IsDraft: currentPullRequest.Draft, Stacked: stacked})
 	}
 	return state, nil
 }
 
-func closesIssue(body, repo string, number int) bool {
-	pattern := `(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:` + regexp.QuoteMeta(repo) + `)?#` + strconv.Itoa(number) + `\b`
+// closesIssue reports whether a pull request body hosted in pullRepo closes
+// issue number in repo. A bare #N only names repo's issue when the pull
+// request lives there too; from another repository the reference must be
+// fully qualified as OWNER/REPO#N or an issue URL (issue #718).
+func closesIssue(body, pullRepo, repo string, number int) bool {
+	quoted := regexp.QuoteMeta(repo)
+	reference := quoted + `#|https://github\.com/` + quoted + `/issues/`
+	if strings.EqualFold(pullRepo, repo) {
+		reference += `|#`
+	}
+	pattern := `(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:` + reference + `)` + strconv.Itoa(number) + `\b`
 	return regexp.MustCompile(pattern).MatchString(body)
+}
+
+// timelineSourceRepo returns the OWNER/REPO a timeline event's source issue or
+// pull request lives in, falling back to repo when the event omits it.
+func timelineSourceRepo(fullName, repositoryURL, repo string) string {
+	if validRepo(fullName) {
+		return fullName
+	}
+	if index := strings.Index(repositoryURL, "/repos/"); index >= 0 {
+		if candidate := repositoryURL[index+len("/repos/"):]; validRepo(candidate) {
+			return candidate
+		}
+	}
+	return repo
 }
 
 const defaultIssueFilter = core.DefaultIssueFilter

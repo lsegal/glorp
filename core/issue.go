@@ -7,6 +7,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -61,9 +62,13 @@ func IssueRepository(target string, issue Issue) string {
 // PullRequestWorkState is one pull request linked to an issue an agent is
 // working, and how far along it is.
 type PullRequestWorkState struct {
-	Number int
-	State  string
-	Merged bool
+	// Repository is the OWNER/REPO hosting the pull request. It differs from
+	// the issue's repository when the fix was opened elsewhere, such as from
+	// a fork, and is empty when unknown (issue #718).
+	Repository string
+	Number     int
+	State      string
+	Merged     bool
 	// IsDraft reports whether the pull request is still a draft. A run that
 	// finishes with an open, unmerged, non-draft pull request left behind has
 	// deliberately marked its fix ready and is waiting on a human rather than
@@ -74,6 +79,21 @@ type PullRequestWorkState struct {
 	// an open blocker's branch looks until that blocker merges. A ready one
 	// is parked waiting on its base rather than held for a human (issue #659).
 	Stacked bool
+}
+
+// RepoOr returns the repository hosting the pull request, or fallback (the
+// issue's repository) when it was not recorded.
+func (p PullRequestWorkState) RepoOr(fallback string) string {
+	if p.Repository == "" {
+		return fallback
+	}
+	return p.Repository
+}
+
+// InRepo reports whether the pull request lives in repo, treating an
+// unrecorded repository as the issue's own.
+func (p PullRequestWorkState) InRepo(repo string) bool {
+	return p.Repository == "" || strings.EqualFold(p.Repository, repo)
 }
 
 // OriginatingWorkState is what a run reads back about the issue an agent is

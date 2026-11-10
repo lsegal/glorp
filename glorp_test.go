@@ -932,6 +932,14 @@ func TestRejectedPullRequestIgnoresPullRequestsAlreadyClosedAtStart(t *testing.T
 	}
 }
 
+func TestRejectedPullRequestKeysPullRequestsByRepository(t *testing.T) {
+	previous := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Repository: "o/r", Number: 9, State: "CLOSED"}}}
+	current := OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Repository: "o/r", Number: 9, State: "CLOSED"}, {Repository: "fork/r", Number: 9, State: "CLOSED"}}}
+	if number, reason := rejectedPullRequest(previous, current); number != 9 || reason == "" {
+		t.Fatalf("cross-repo pull request closed alongside a same-numbered one = (#%d, %q), want a restart", number, reason)
+	}
+}
+
 func TestClosedWorkDistinguishesIssueClosureFromRejectedPullRequest(t *testing.T) {
 	open := PullRequestWorkState{Number: 9, State: "OPEN"}
 	closed := PullRequestWorkState{Number: 9, State: "CLOSED"}
