@@ -132,14 +132,14 @@ describe("jobWaitLabel", () => {
 		expect(jobWaitLabel({ WakeAt: "0001-01-01T00:00:00Z" })).toBe("waiting");
 	});
 
-	it("says what parked work waits on", () => {
+	it("says what paused work waits on", () => {
 		expect(
 			jobWaitLabel({
-				Status: "parked",
+				Status: "paused",
 				WaitReason: "its pull request waits to be merged or closed",
 				WakeAt: "0001-01-01T00:00:00Z",
 			}),
-		).toBe("parked: its pull request waits to be merged or closed");
+		).toBe("paused: its pull request waits to be merged or closed");
 	});
 });
 

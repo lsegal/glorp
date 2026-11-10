@@ -120,8 +120,8 @@ function JobIcon({ status }) {
 		return <Activity className="status-icon active" aria-label="active" />;
 	if (status === "waiting")
 		return <Clock className="status-icon waiting" aria-label="waiting" />;
-	if (status === "parked")
-		return <CirclePause className="status-icon parked" aria-label="parked" />;
+	if (status === "paused")
+		return <CirclePause className="status-icon paused" aria-label="paused" />;
 	return <Circle className="status-icon queued" aria-label="queued" />;
 }
 
@@ -157,7 +157,7 @@ function JobCard({ job }) {
 			<div className="meta" title={jobAgentSummary(job)}>
 				<Cpu /> agent: {jobAgentSummary(job)}
 			</div>
-			{(job.Status === "waiting" || job.Status === "parked") && (
+			{(job.Status === "waiting" || job.Status === "paused") && (
 				<div className="meta" title={jobWaitLabel(job)}>
 					<Clock /> {jobWaitLabel(job)}
 				</div>
@@ -204,9 +204,9 @@ function formatQuotas(snapshot) {
 function StatusBar({ snapshot, connected }) {
 	const active = (snapshot.Running || 0) + (snapshot.Queued || 0);
 	const idle = Math.max(0, (snapshot.Concurrency || 0) - active);
-	const parked = snapshot.Parked || 0;
+	const paused = snapshot.Paused || 0;
 	const total =
-		(snapshot.Completed || 0) + (snapshot.Failed || 0) + parked + active;
+		(snapshot.Completed || 0) + (snapshot.Failed || 0) + paused + active;
 	const delivery = deliveryLabel(snapshot);
 	const targets = (snapshot.Targets || [])
 		.map(
@@ -221,9 +221,9 @@ function StatusBar({ snapshot, connected }) {
 			<div className="status-cell jobs">
 				jobs: <span className="idle">{idle}</span> idle{" "}
 				<span className="active-text">{active}</span> active{" "}
-				{parked > 0 && (
+				{paused > 0 && (
 					<>
-						<span className="idle">{parked}</span> parked{" "}
+						<span className="idle">{paused}</span> paused{" "}
 					</>
 				)}
 				<span className="total">{total}</span> total
