@@ -398,7 +398,7 @@ func (m dashboard) View() string {
 		if status == "waiting" {
 			indicator = "⏸"
 		}
-		if status == "parked" {
+		if status == "paused" {
 			indicator = "⧗"
 		}
 		cardWidth := jobCardWidth(m.width)
@@ -407,8 +407,8 @@ func (m dashboard) View() string {
 		metadataWidth := max(1, cardWidth-2)
 		checkout := muted.Render(truncate("checkout: "+job.CheckoutDirectory, metadataWidth))
 		session := muted.Render(truncate("session: "+job.SessionID, metadataWidth))
-		if status == "waiting" || status == "parked" {
-			// A waiting or parked job says what it waits for (and when it
+		if status == "waiting" || status == "paused" {
+			// A waiting or paused job says what it waits for (and when it
 			// resumes) in place of its session line, so the card keeps its
 			// height.
 			session = muted.Render(truncate(jobWaitLabel(job, time.Now()), metadataWidth))
@@ -597,12 +597,12 @@ func deliveryText(snapshot GlorpSnapshot) string {
 func renderJobCounts(snapshot GlorpSnapshot) string {
 	idle := max(0, snapshot.Concurrency-snapshot.Running-snapshot.Queued)
 	activeJobs := snapshot.Running + snapshot.Queued
-	total := snapshot.Completed + snapshot.Failed + snapshot.Parked + activeJobs
-	// Parked work is neither active nor completed (issue #732), so it gets
+	total := snapshot.Completed + snapshot.Failed + snapshot.Paused + activeJobs
+	// Paused work is neither active nor completed (issue #732), so it gets
 	// its own count, shown only while there is some.
-	parked := ""
-	if snapshot.Parked > 0 {
-		parked = idleCountStyle.Render(fmt.Sprint(snapshot.Parked)) + countLabelStyle.Render(" parked ")
+	paused := ""
+	if snapshot.Paused > 0 {
+		paused = idleCountStyle.Render(fmt.Sprint(snapshot.Paused)) + countLabelStyle.Render(" paused ")
 	}
 	// Render every visible character with the cell background. A nested
 	// Lipgloss span resets its parent style when it ends, so relying on an
@@ -613,7 +613,7 @@ func renderJobCounts(snapshot GlorpSnapshot) string {
 		countLabelStyle.Render(" idle "),
 		activeCountStyle.Render(fmt.Sprint(activeJobs)),
 		countLabelStyle.Render(" active "),
-		parked,
+		paused,
 		totalCountStyle.Render(fmt.Sprint(total)),
 		countLabelStyle.Render(" total "),
 	)

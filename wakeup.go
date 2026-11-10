@@ -125,8 +125,8 @@ func (w *Glorp) wakeupDelay(wakeup scheduledWakeup) time.Duration {
 // as "waiting: CI is running, resumes in 4m".
 func jobWaitLabel(job JobSnapshot, now time.Time) string {
 	label := "waiting"
-	if job.Status == "parked" {
-		label = "parked"
+	if job.Status == "paused" {
+		label = "paused"
 	}
 	if job.WaitReason != "" {
 		label += ": " + job.WaitReason

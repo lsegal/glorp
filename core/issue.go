@@ -77,7 +77,7 @@ type PullRequestWorkState struct {
 	// Stacked reports whether the pull request targets a branch other than
 	// its repository's default branch, which is how a pull request stacked on
 	// an open blocker's branch looks until that blocker merges. A ready one
-	// is parked waiting on its base rather than held for a human (issue #659).
+	// is paused waiting on its base rather than held for a human (issue #659).
 	Stacked bool
 }
 

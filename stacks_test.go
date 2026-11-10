@@ -176,34 +176,34 @@ func TestOriginatingWorkStateReadsStackedPullRequestBase(t *testing.T) {
 	}
 }
 
-// fakeParkingSource answers per issue number, so a dependent issue's stacked
+// fakePausingSource answers per issue number, so a dependent issue's stacked
 // pull request and its blocker's pull request can be told apart (issue #659).
-type fakeParkingSource struct {
+type fakePausingSource struct {
 	*fakeSource
 	mu     sync.Mutex
 	states map[int]OriginatingWorkState
 }
 
-func (f *fakeParkingSource) OriginatingWorkState(_ context.Context, _ string, number int) (OriginatingWorkState, error) {
+func (f *fakePausingSource) OriginatingWorkState(_ context.Context, _ string, number int) (OriginatingWorkState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.states[number], nil
 }
 
-func (f *fakeParkingSource) StacksEnabled(context.Context, string) (bool, error) { return true, nil }
+func (f *fakePausingSource) StacksEnabled(context.Context, string) (bool, error) { return true, nil }
 
 // mergeBlocker makes every later poll report issue #7's blocker as closed. The
-// test calls it only after seeing the issue parked: with the merge scripted
-// into a fixed batch, a poll can unpark the issue before the test reads the
-// parked state, and the state never shows it again (issue #710).
-func (f *fakeParkingSource) mergeBlocker() {
+// test calls it only after seeing the issue paused: with the merge scripted
+// into a fixed batch, a poll can unpause the issue before the test reads the
+// paused state, and the state never shows it again (issue #710).
+func (f *fakePausingSource) mergeBlocker() {
 	f.fakeSource.mu.Lock()
 	defer f.fakeSource.mu.Unlock()
 	f.batches = [][]Issue{blockedOn12("closed")}
 }
 
-func parkingSource(batches ...[]Issue) *fakeParkingSource {
-	return &fakeParkingSource{
+func pausingSource(batches ...[]Issue) *fakePausingSource {
+	return &fakePausingSource{
 		fakeSource: &fakeSource{batches: batches},
 		states: map[int]OriginatingWorkState{
 			7:  {IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", Stacked: true}}},
@@ -231,9 +231,9 @@ func waitForWorkStatus(t *testing.T, statePath string, number int, status string
 	}
 }
 
-func TestGlorpParksAStackedPullRequestWaitingOnItsBlocker(t *testing.T) {
+func TestGlorpPausesAStackedPullRequestWaitingOnItsBlocker(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	src := parkingSource(blockedOn12("open"))
+	src := pausingSource(blockedOn12("open"))
 	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
 	logs := &syncBuffer{}
 	w := &Glorp{
@@ -249,29 +249,29 @@ func TestGlorpParksAStackedPullRequestWaitingOnItsBlocker(t *testing.T) {
 	}()
 
 	waitForSession(t, runner.sessions)
-	waitForWorkStatus(t, statePath, 7, "parked")
+	waitForWorkStatus(t, statePath, 7, "paused")
 	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(logs.String(), "issue #7 parked: depends on #12 (open); its stacked pull request waits for that to merge") {
+	for !strings.Contains(logs.String(), "issue #7 paused: depends on #12 (open); its stacked pull request waits for that to merge") {
 		if time.Now().After(deadline) {
-			t.Fatalf("a later poll did not leave the parked issue waiting:\n%s", logs)
+			t.Fatalf("a later poll did not leave the paused issue waiting:\n%s", logs)
 		}
 		time.Sleep(time.Millisecond)
 	}
 	select {
 	case extra := <-runner.sessions:
-		t.Fatalf("a parked stacked pull request relaunched its agent while its blocker is open: %+v", extra)
+		t.Fatalf("a paused stacked pull request relaunched its agent while its blocker is open: %+v", extra)
 	default:
 	}
-	if !strings.Contains(logs.String(), "issue #7 parked: its stacked pull request is ready and waits on its blocker to merge; freeing its slot") {
-		t.Fatalf("parking was not logged:\n%s", logs)
+	if !strings.Contains(logs.String(), "issue #7 paused: its stacked pull request is ready and waits on its blocker to merge; freeing its slot") {
+		t.Fatalf("pausing was not logged:\n%s", logs)
 	}
 }
 
-func TestGlorpParksAHeldPullRequestThatIsNotStackedOnItsPullRequest(t *testing.T) {
+func TestGlorpPausesAHeldPullRequestThatIsNotStackedOnItsPullRequest(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	src := parkingSource(blockedOn12("open"))
+	src := pausingSource(blockedOn12("open"))
 	// Merge withheld on a pull request that already targets the default
-	// branch: a donotmerge hold, not a parked stack (issue #628).
+	// branch: a donotmerge hold, not a paused stack (issue #628).
 	src.states[7] = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open"}}}
 	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
 	w := &Glorp{
@@ -287,12 +287,12 @@ func TestGlorpParksAHeldPullRequestThatIsNotStackedOnItsPullRequest(t *testing.T
 	}()
 
 	waitForSession(t, runner.sessions)
-	waitForParked(t, statePath, 7, core.ParkedPullRequest)
+	waitForPaused(t, statePath, 7, core.PausedPullRequest)
 }
 
-func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
+func TestGlorpRedispatchesAPausedIssueOnceItsBlockerMerges(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
-	src := parkingSource(blockedOn12("open"))
+	src := pausingSource(blockedOn12("open"))
 	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
 	logs := &syncBuffer{}
 	w := &Glorp{
@@ -308,7 +308,7 @@ func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
 	}()
 
 	first := waitForSession(t, runner.sessions)
-	waitForWorkStatus(t, statePath, 7, "parked")
+	waitForWorkStatus(t, statePath, 7, "paused")
 	// The blocker merged: its issue closed and the stacked pull request was
 	// retargeted, so the dependent issue is dispatched again to finish it.
 	src.mu.Lock()
@@ -317,9 +317,9 @@ func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
 	src.mergeBlocker()
 	resumed := waitForSession(t, runner.sessions)
 	if !resumed.Resume || resumed.ID != first.ID || !strings.Contains(resumed.Update, "The blocker is no longer open") {
-		t.Fatalf("parked issue was not resumed with its blocker merged: first=%+v resumed=%+v", first, resumed)
+		t.Fatalf("paused issue was not resumed with its blocker merged: first=%+v resumed=%+v", first, resumed)
 	}
-	if !strings.Contains(logs.String(), "issue #7 unparked: its blocker is no longer open; resuming its stacked pull request") {
-		t.Fatalf("unparking was not logged:\n%s", logs)
+	if !strings.Contains(logs.String(), "issue #7 unpaused: its blocker is no longer open; resuming its stacked pull request") {
+		t.Fatalf("unpausing was not logged:\n%s", logs)
 	}
 }
