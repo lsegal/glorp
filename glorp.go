@@ -599,6 +599,11 @@ type pendingIssue struct {
 	// explicit instruction addressed to this instance, so it overrides the
 	// claims standing on the ticket rather than being filtered by them.
 	mentioned bool
+	// woken marks parked work whose wake condition fired (issue #732). It
+	// goes back through the claim protocol even when its session resumes, so
+	// when several instances see the same wake only the first to claim it
+	// takes it.
+	woken bool
 	// claim names the target this instance holds an ownership claim on,
 	// posted by the handoff handshake before the dispatch it announces has
 	// happened. A dispatch that is skipped after that point must withdraw the
@@ -650,7 +655,7 @@ func (w *Glorp) standDownForStandingClaims(ctx context.Context, checker WorkClos
 		// Resumed sessions are this instance's own work, contested candidates
 		// are negotiated by the reap that follows, and a direct mention is an
 		// instruction addressed to this instance by name.
-		if pending.session.Resume || pending.contested || pending.mentioned {
+		if (pending.session.Resume && !pending.woken) || pending.contested || pending.mentioned {
 			keep[i] = true
 			continue
 		}
@@ -1249,36 +1254,43 @@ func unclosedWorkPrompt(issue Issue) string {
 // whether GitHub answered at all, so a check that could not be made is never
 // mistaken for an issue that is still open. A merge GitHub has not finished
 // processing is allowed for by re-reading once after the closure interval
-// before the work is treated as unfinished. It also reports whether the ready
-// pull request is parked: stacked on a base other than the default branch,
-// so it can only merge after its blocker does (issue #659).
-func (w *Glorp) confirmIssueClosed(ctx context.Context, checker WorkClosureChecker, issue Issue) (closed, answered, parked bool) {
+// before the work is treated as unfinished. When the run is done because its
+// ready pull request is held rather than because the issue closed, it also
+// returns the parked record for that pull request (issue #732): stacked when
+// the pull request is built on a base other than the default branch, so it can
+// only merge after its blocker does (issue #659), and otherwise held for a
+// human to merge or close.
+func (w *Glorp) confirmIssueClosed(ctx context.Context, checker WorkClosureChecker, issue Issue) (closed, answered bool, held *core.ParkedWork) {
 	repo := issueRepository(issue.Target, issue)
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return false, false, false
+				return false, false, nil
 			case <-time.After(w.activeWorkClosureInterval()):
 			}
 		}
 		state, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
 		if err != nil {
 			if ctx.Err() != nil {
-				return false, false, false
+				return false, false, nil
 			}
 			w.logf("issue #%d completion check failed: %v", issue.Number, err)
 			continue
 		}
 		answered = true
 		if strings.EqualFold(state.IssueState, "closed") {
-			return true, true, false
+			return true, true, nil
 		}
 		if pullRequestHeldForReview(state) {
-			return true, true, pullRequestParkedOnStack(state)
+			held = &core.ParkedWork{Kind: core.ParkedPullRequest, PullRequests: core.OpenPullRequests(state)}
+			if pullRequestParkedOnStack(state) {
+				held.Kind = core.ParkedStacked
+			}
+			return true, true, held
 		}
 	}
-	return false, answered, false
+	return false, answered, nil
 }
 
 // pullRequestHeldForReview reports whether state carries a pull request that
@@ -1316,6 +1328,57 @@ func parkedWorkPrompt(issue Issue) string {
 	return fmt.Sprintf("Your pull request for issue #%d was parked, stacked on its blocker's branch and waiting for that blocker to merge. The blocker is no longer open.\n\nPick the work back up: rebase or retarget the pull request onto the default branch as the gh-fix stacking steps describe (or unstack it if the blocker's pull request closed without merging), drive CI to green on the new head, and merge it so issue #%d closes.", issue.Number, issue.Number)
 }
 
+// parkedRecord returns what parked work waits on. A record saved before parked
+// work had kinds is a stacked pull request waiting on its blocker (issue #659).
+func parkedRecord(state workState) core.ParkedWork {
+	if state.Parked == nil || state.Parked.Kind == "" {
+		return core.ParkedWork{Kind: core.ParkedStacked}
+	}
+	return *state.Parked
+}
+
+// parkedWake reads the GitHub state that parked work's wake check needs and
+// decides it (issue #732). An issue that only waits on its blockers is decided
+// from the issue as the poll listed it. Work that left a pull request behind
+// also reads that pull request back, and a stacked one still blocked reads its
+// blockers' pull requests too. It also returns the rejected pull request when
+// the work restarts. A read that fails is left out, so it never wakes work.
+func (w *Glorp) parkedWake(ctx context.Context, checker WorkClosureChecker, parked core.ParkedWork, issue Issue) (core.ParkedWake, string, int) {
+	check := core.ParkedCheck{Issue: issue}
+	if checker != nil && parked.Kind != core.ParkedBlocked {
+		repo := issueRepository(issue.Target, issue)
+		state, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
+		if err == nil {
+			check.Own = &state
+		} else if ctx.Err() == nil {
+			w.logChanged("parked-check-"+issueKey(issue), err.Error(), "issue #%d parked-work check failed: %v", issue.Number, err)
+		}
+		if blocked, _ := issueBlocked(issue); blocked && parked.Kind == core.ParkedStacked {
+			check.Blockers = make(map[int]OriginatingWorkState)
+			for _, number := range core.OpenDependencies(issue) {
+				if blocker, err := checker.OriginatingWorkState(ctx, repo, number); err == nil {
+					check.Blockers[number] = blocker
+				}
+			}
+		}
+	}
+	wake, reason := core.WakeParked(parked, check)
+	rejected := 0
+	if wake == core.ParkedRestart && check.Own != nil {
+		rejected, _ = core.RejectedPullRequest(*check.Own)
+	}
+	return wake, reason, rejected
+}
+
+// parkedJobReason is what the dashboards say parked work waits on when it
+// parks at the end of a run.
+func parkedJobReason(parked core.ParkedWork) string {
+	if parked.Kind == core.ParkedStacked {
+		return "its stacked pull request waits on its blocker to merge"
+	}
+	return "its pull request waits to be merged or closed"
+}
+
 // completedWorkRejected reports a completed issue, still open, whose pull
 // request was closed without merging after its run ended (issue #729). A run
 // only completes with its issue still open when it left a ready pull request
@@ -1334,26 +1397,9 @@ func (w *Glorp) completedWorkRejected(ctx context.Context, checker WorkClosureCh
 }
 
 // completedPullRequestRejected reports the pull request closed without merging
-// that rejects completed work: the issue is open, none of its pull requests is
-// open or merged, and at least one was closed unmerged. A closed issue or a
-// merged pull request means the work is done and is never restarted.
+// that rejects completed work (core.RejectedPullRequest).
 func completedPullRequestRejected(state OriginatingWorkState) (int, string) {
-	if strings.EqualFold(state.IssueState, "closed") {
-		return 0, ""
-	}
-	rejected := 0
-	for _, pullRequest := range state.PullRequests {
-		if pullRequest.Merged || strings.EqualFold(pullRequest.State, "open") {
-			return 0, ""
-		}
-		if strings.EqualFold(pullRequest.State, "closed") && pullRequest.Number > rejected {
-			rejected = pullRequest.Number
-		}
-	}
-	if rejected == 0 {
-		return 0, ""
-	}
-	return rejected, fmt.Sprintf("pull request #%d was closed without merging", rejected)
+	return core.RejectedPullRequest(state)
 }
 
 // closedWorkReason reports why work must stop because its issue was closed
@@ -1444,6 +1490,10 @@ type workState struct {
 	// this ticket through the handoff protocol, cached to help future reaps
 	// recognize their own prior work.
 	Owner string `json:"owner,omitempty"`
+	// Parked describes what work with Status "parked" waits on (issue #732).
+	// A "parked" record without it predates parked kinds and is a stacked
+	// pull request waiting on its blocker (issue #659).
+	Parked *core.ParkedWork `json:"parked,omitempty"`
 }
 
 // activeCountsByTarget counts, per configured target, the work this instance
@@ -1932,27 +1982,121 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if !w.UseWebhooks && w.Mentions != nil {
 			w.scanDirectMentions(ctx, mentions, mentionScanRepos(targets, issues), observed, directMentions)
 		}
+		// parkJob shows parked work on the dashboards, apart from both active
+		// and completed work (issue #732).
+		parkJob := func(issue Issue, key, reason string) {
+			jobMu.Lock()
+			job, ok := jobs[key]
+			if !ok {
+				job = JobSnapshot{Number: issue.Number, Target: issue.Target, Title: issue.Title}
+			}
+			if job.Title == "" {
+				job.Title = issue.Title
+			}
+			changed := job.Status != "parked" || job.WaitReason != reason
+			job.Status, job.WaitReason = "parked", reason
+			jobs[key] = job
+			jobMu.Unlock()
+			if changed {
+				publish()
+			}
+		}
+		// finishParked ends parked work whose pull request merged or whose
+		// issue closed. A run that left a pull request behind is booked as
+		// completed then, not when it parked; an issue that was only waiting
+		// on its blockers never ran, so its record is dropped.
+		finishParked := func(issue Issue, key string, parked core.ParkedWork, reason string) {
+			ran := parked.Kind != core.ParkedBlocked
+			workMu.Lock()
+			if ran {
+				state := work[key]
+				state.Status, state.Parked = "completed", nil
+				work[key] = state
+			} else {
+				delete(work, key)
+			}
+			workMu.Unlock()
+			jobMu.Lock()
+			if job, ok := jobs[key]; ok && ran {
+				job.Status, job.WaitReason = "complete", ""
+				jobs[key] = job
+			} else {
+				delete(jobs, key)
+			}
+			jobMu.Unlock()
+			if ran {
+				tasks.mu.Lock()
+				tasks.completed++
+				tasks.mu.Unlock()
+				if w.Status != nil {
+					if statusErr := w.Status.SetIssueStatus(ctx, issue.Target, issue, "Done"); statusErr != nil {
+						w.logf("issue #%d failed to update project status: %v", issue.Number, statusErr)
+					}
+				}
+			}
+			w.logf("issue #%d unparked: %s; its parked work is finished", issue.Number, reason)
+			publish()
+		}
+		observedWork := make(map[string]bool, len(issues))
+		for _, issue := range issues {
+			observedWork[issueKey(issue)] = true
+		}
 		newIssues := make([]pendingIssue, 0)
 		for _, issue := range issues {
+			key := issueKey(issue)
 			workMu.Lock()
-			wasParked := work[issueKey(issue)].Status == "parked"
+			parkedState := work[key]
+			_, running := active[key]
 			workMu.Unlock()
-			if blocked, reason := issueBlocked(issue); blocked {
-				// A parked stacked pull request is already ready; only its
-				// blocker merging gives a run anything left to do, so it
-				// waits without taking a slot until then (issue #659).
-				if wasParked {
-					w.logChanged("parked-"+issueKey(issue), reason, "issue #%d parked: %s; its stacked pull request waits for that to merge", issue.Number, reason)
+			// Parked work is out of the queue and holds no slot until its
+			// wake condition, read from GitHub here, fires (issue #732).
+			wasParked := parkedState.Status == "parked" && !running
+			var parked core.ParkedWork
+			wake, wakeReason, wakeRejected := core.ParkedStay, "", 0
+			if wasParked {
+				parked = parkedRecord(parkedState)
+				wake, wakeReason, wakeRejected = w.parkedWake(ctx, closureChecker, parked, issue)
+				if wake == core.ParkedStay && parked.Kind == core.ParkedBlocked {
+					if pullRequest, ok := w.stackableOnDependency(ctx, closureChecker, issue); ok {
+						w.logChanged("stack-"+key, strconv.Itoa(pullRequest), "issue #%d %s; stacking it on pull request #%d", issue.Number, wakeReason, pullRequest)
+						wake, wakeReason = core.ParkedResume, fmt.Sprintf("its blocker has pull request #%d to stack on", pullRequest)
+					}
+				}
+				mentioned := directMentions[issue.Repository+"#"+strconv.Itoa(issue.Number)]
+				switch {
+				case wake == core.ParkedStay && mentioned && parked.Kind == core.ParkedPullRequest:
+					// A direct mention is an instruction addressed to this
+					// instance, not review activity, so it is acted on below
+					// as it was before the pull request was parked.
+					w.logf("issue #%d parked work has a direct mention of instance %s; dispatching it", issue.Number, w.Identity)
+				case wake == core.ParkedStay:
+					w.logChanged("parked-"+key, wakeReason, "issue #%d parked: %s", issue.Number, wakeReason)
+					parkJob(issue, key, wakeReason)
+					continue
+				case wake == core.ParkedComplete:
+					finishParked(issue, key, parked, wakeReason)
 					continue
 				}
+			} else if blocked, reason := issueBlocked(issue); blocked {
 				if pullRequest, ok := w.stackableOnDependency(ctx, closureChecker, issue); ok {
-					w.logChanged("stack-"+issueKey(issue), strconv.Itoa(pullRequest), "issue #%d %s; stacking it on pull request #%d", issue.Number, reason, pullRequest)
-				} else {
+					w.logChanged("stack-"+key, strconv.Itoa(pullRequest), "issue #%d %s; stacking it on pull request #%d", issue.Number, reason, pullRequest)
+				} else if issue.HasSubIssues || running || parkedState.Status == "completed" {
 					w.logf("issue #%d not picked up: %s", issue.Number, reason)
+					continue
+				} else {
+					// A dependency-blocked issue is parked until its blockers
+					// close, keeping any session it already has.
+					workMu.Lock()
+					state := work[key]
+					state.Status = "parked"
+					state.Parked = &core.ParkedWork{Kind: core.ParkedBlocked, WaitingOn: core.OpenDependencies(issue)}
+					work[key] = state
+					workMu.Unlock()
+					w.logChanged("parked-"+key, reason, "issue #%d not picked up: %s; parked until it closes", issue.Number, reason)
+					parkJob(issue, key, reason)
 					continue
 				}
 			}
-			key := issueKey(issue)
 			mentionKey := issue.Repository + "#" + strconv.Itoa(issue.Number)
 			directMention := directMentions[mentionKey]
 			addressed := directMention && !mentions.rechecks[mentionKey]
@@ -1994,6 +2138,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 			// it does mid-run (issue #690), so the completed record stops
 			// suppressing the issue and the work restarts (issue #729).
 			rejected := 0
+			if wake == core.ParkedRestart {
+				rejected = wakeRejected
+				w.logf("issue #%d unparked: %s while the issue is still open; starting a fresh attempt", issue.Number, wakeReason)
+			}
 			if wasCompleted && !isActive && closureChecker != nil {
 				if number, reason := w.completedWorkRejected(ctx, closureChecker, issue); reason != "" {
 					rejected = number
@@ -2020,7 +2168,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logChanged("mention-active-"+key, "waiting", "issue #%d direct mention of instance %s waits for the run in progress to finish: that run's session cannot be resumed to relay it", issue.Number, w.Identity)
 				}
 			}
-			if issue.Number > 0 && (wasFailed || rejected > 0 || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) || (swept && !isActive && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || (directMention && !isActive)) {
+			if issue.Number > 0 && (wasFailed || rejected > 0 || wasParked || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) || (swept && !isActive && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || (directMention && !isActive)) {
 				seen[key] = true
 				delete(restored, key)
 				delete(directMentions, mentionKey)
@@ -2049,8 +2197,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d discarded persisted agent %q; it is no longer configured", issue.Number, session.Agent)
 					session.ID, session.Agent, session.Resume = "", "", false
 				}
-				if wasParked {
-					w.logf("issue #%d unparked: its blocker is no longer open; resuming its stacked pull request", issue.Number)
+				if wake == core.ParkedResume && parked.Kind == core.ParkedBlocked {
+					w.logf("issue #%d unparked: %s; dispatching it", issue.Number, wakeReason)
+				} else if wake == core.ParkedResume {
+					w.logf("issue #%d unparked: %s; resuming its stacked pull request", issue.Number, wakeReason)
 					if session.Resume {
 						session.Update = parkedWorkPrompt(issue)
 					}
@@ -2072,7 +2222,34 @@ func (w *Glorp) Run(ctx context.Context) error {
 					session = AgentSession{}
 					contested = false
 				}
-				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session, mentioned: addressed})
+				newIssues = append(newIssues, pendingIssue{issue: issue, contested: contested, session: session, mentioned: addressed, woken: wasParked})
+			}
+		}
+		// Parked work whose issue the poll no longer lists cannot be woken by
+		// it, so its own pull requests are read back once per poll to finish
+		// it when its issue closed or its pull request merged (issue #732).
+		if closureChecker != nil {
+			workMu.Lock()
+			unlisted := make(map[string]core.ParkedWork)
+			for key, state := range work {
+				if _, running := active[key]; state.Status == "parked" && !running && !observedWork[key] {
+					unlisted[key] = parkedRecord(state)
+				}
+			}
+			workMu.Unlock()
+			for key, parked := range unlisted {
+				target, number, ok := parseIssueWorkKey(key)
+				if !ok || !slices.Contains(targets, target) {
+					continue
+				}
+				issue := Issue{Number: number, Target: target, Repository: issueRepository(target, Issue{})}
+				state, err := closureChecker.OriginatingWorkState(ctx, issue.Repository, number)
+				if err != nil {
+					continue
+				}
+				if wake, reason := core.WakeParked(parked, core.ParkedCheck{Issue: issue, Own: &state}); wake == core.ParkedComplete {
+					finishParked(issue, key, parked, reason)
+				}
 			}
 		}
 		// A mention whose issue the poll did not list can never be dispatched,
@@ -2157,7 +2334,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			// Contested issues already posted their starting/continuing claim
 			// during negotiation. Uncontested first-time pickups still need to
 			// announce ownership so other instances know it's spoken for.
-			if w.Comments != nil && !session.Resume && !pending.contested {
+			if w.Comments != nil && (!session.Resume || pending.woken) && !pending.contested {
 				repo := issueRepository(issue.Target, issue)
 				claim := claimComment(w.Identity, false)
 				alreadyLast, err := w.lastCommentMatches(ctx, repo, issue.Number, claim)
@@ -2292,7 +2469,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				// work receives it rather than the change waiting out the run
 				// (issue #469).
 				alreadyClosed := false
-				parked := false
+				var parked *core.ParkedWork
 				keepalives := 0
 				// wakeup is the ScheduleWakeup the agent's last turn left
 				// pending, which the next pass waits out before resuming the
@@ -2419,15 +2596,25 @@ func (w *Glorp) Run(ctx context.Context) error {
 						// GitHub says the issue is closed; while it is still
 						// open the work is kept alive and continued instead of
 						// being reported as finished.
-						closed, answered, stacked := w.confirmIssueClosed(ctx, closureChecker, i)
+						closed, answered, held := w.confirmIssueClosed(ctx, closureChecker, i)
 						if closed || !answered || ctx.Err() != nil {
-							// A ready pull request stacked on the blocker the
-							// issue was dispatched with can only merge once that
-							// blocker does. Park the work so its slot is freed
-							// and the next poll that finds the blocker gone
-							// dispatches it again (issue #659).
-							_, blockedOnStack := stackableDependency(i)
-							parked = closed && stacked && blockedOnStack
+							// A run that finished with a ready pull request
+							// still open is parked on that pull request, so its
+							// slot is freed and a later poll wakes it on a merge
+							// or a close (issue #732). One stacked on the blocker
+							// the issue was dispatched with waits for that
+							// blocker instead (issue #659); stacked on anything
+							// else, it is a hold for a human like any other.
+							if closed && held != nil {
+								if held.Kind == core.ParkedStacked {
+									if dependency, ok := stackableDependency(i); ok {
+										held.WaitingOn = []int{dependency.Number}
+									} else {
+										held.Kind = core.ParkedPullRequest
+									}
+								}
+								parked = held
+							}
 							break
 						}
 						keepalives++
@@ -2506,7 +2693,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				} else {
 					// Parked work is not done, so its project item stays in
 					// progress rather than moving to Done.
-					if w.Status != nil && !parked {
+					if w.Status != nil && parked == nil {
 						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, "Done"); statusErr != nil {
 							w.logf("issue #%d failed to update project status: %v", i.Number, statusErr)
 						}
@@ -2518,23 +2705,33 @@ func (w *Glorp) Run(ctx context.Context) error {
 					jobMu.Lock()
 					job := jobs[key]
 					job.Status = "complete"
+					if parked != nil {
+						job.Status = "parked"
+						job.WaitReason = parkedJobReason(*parked)
+					}
 					jobs[key] = job
 					jobMu.Unlock()
 					state := work[key]
 					state.Status = "completed"
-					if parked {
+					state.Parked = nil
+					if parked != nil {
 						state.Status = "parked"
+						state.Parked = parked
 					}
 					work[key] = state
 					_ = saveScopedWorkState(w.StatePath, work, targets)
 					workMu.Unlock()
 					tasks.mu.Lock()
 					tasks.running--
-					tasks.completed++
+					if parked == nil {
+						tasks.completed++
+					}
 					running, queued, completed, failed := tasks.running, tasks.queued, tasks.completed, tasks.failed
 					tasks.mu.Unlock()
-					if parked {
+					if parked != nil && parked.Kind == core.ParkedStacked {
 						w.logf("issue #%d parked: its stacked pull request is ready and waits on its blocker to merge; freeing its slot (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
+					} else if parked != nil {
+						w.logf("issue #%d parked: its pull request is ready and waits to be merged or closed; freeing its slot (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
 					} else {
 						w.logf("issue #%d completed (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
 					}

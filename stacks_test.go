@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 )
 
 // fakeStackSource is a closure source whose repository reports whether
@@ -265,7 +267,7 @@ func TestGlorpParksAStackedPullRequestWaitingOnItsBlocker(t *testing.T) {
 	}
 }
 
-func TestGlorpCompletesAHeldPullRequestThatIsNotStacked(t *testing.T) {
+func TestGlorpParksAHeldPullRequestThatIsNotStackedOnItsPullRequest(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	src := parkingSource(blockedOn12("open"))
 	// Merge withheld on a pull request that already targets the default
@@ -285,7 +287,7 @@ func TestGlorpCompletesAHeldPullRequestThatIsNotStacked(t *testing.T) {
 	}()
 
 	waitForSession(t, runner.sessions)
-	waitForWorkStatus(t, statePath, 7, "completed")
+	waitForParked(t, statePath, 7, core.ParkedPullRequest)
 }
 
 func TestGlorpRedispatchesAParkedIssueOnceItsBlockerMerges(t *testing.T) {
