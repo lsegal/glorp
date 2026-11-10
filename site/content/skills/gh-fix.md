@@ -21,7 +21,7 @@ ogimage: images/og-gh-fix.png
 </section>
 
 <section class="process-strip" aria-label="gh-fix process">
-  <div><b>01</b><span>Read the full issue<br>and its context</span></div><div><b>02</b><span>Open a draft PR<br>in an isolated clone</span></div><div><b>03</b><span>Build, test, show<br>the finished UI</span></div><div><b>04</b><span>Stabilize CI, merge,<br>close follow-ups</span></div>
+  <div><b>01</b><span>Read the full issue<br>and its context</span></div><div><b>02</b><span>Open a draft PR<br>before writing code</span></div><div><b>03</b><span>Build, test, show<br>the finished UI</span></div><div><b>04</b><span>Stabilize CI, merge,<br>close follow-ups</span></div>
 </section>
 
 <section class="split-section">

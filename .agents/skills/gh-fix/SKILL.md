@@ -7,6 +7,8 @@ description: "Fix a numbered GitHub issue end to end from an isolated clone: und
 
 Treat `/gh-fix OWNER/REPO#ISSUENUMBER` as authorization to implement, publish, continuously repair, and merge the fix for that issue. The invocation may append `identity:/glorp:<ID>` to identify the Glorp instance that dispatched it. Work autonomously until the PR merges, the issue withholds merge authorization, or a genuine external blocker requires the user. Never alter the user's existing checkout; perform all changes in a separate clone.
 
+**Open the draft pull request before any implementation work.** As soon as validation has settled the approach (what to fix, where the branch starts, and whether it stacks or uses a fork), open the linked draft pull request as "Open the draft pull request" describes: before cloning when the tooling allows, otherwise immediately after cloning. Until it exists, nobody can see the issue is being worked, and an interrupted run leaves nothing for the next run to adopt. Do not inspect code in depth, reproduce the bug, edit files, or run tests before the draft pull request exists.
+
 ## Validate the request
 
 1. Require exactly one positive integer GitHub issue number; accept an optional leading `#`. Use GitHub-style `#NNN` references everywhere this workflow names that issue (branches, commits, PR bodies, comments, and follow-ups). Never substitute an ambient external tracker identifier such as `ABCD-123` for the issue number, even if it appears in the issue, commits, or other context. Also accept one optional trailing `identity:/glorp:<ID>` argument and retain that identity for comment handling. Accept the optional trailing advice `and do not merge`, after the identity when present, as a do-not-merge directive for this run. Accept the further optional trailing advice `and no changelog`, after the identity and any do-not-merge advice when present, as a no-changelog directive for this run: skip step 4 of "Implement the fix" and add no changelog entry, regardless of what the issue or repository conventions otherwise call for. Accept the further optional trailing advice `and use fork <FORKOWNER>/<FORKREPO>`, after the identity and any other advice when present, as a fork directive for this run: the authenticated user cannot write to the issue's repository, so follow "Work from a fork when the repository is not writable".
@@ -47,7 +49,7 @@ An issue blocked by another open issue does not have to wait for it when the rep
 2. Detect whether stacked pull requests are enabled for the repository with `gh api repos/<OWNER>/<REPO>/stacks?per_page=1`. A successful response means they are enabled; `404 Not Found` means they are not.
 3. Stack only when stacks are enabled, there is exactly one open blocker, and that blocker has an open pull request that closes it. Record that blocker pull request's number and head branch as the stacking base. In every other case, do not stack: build from the default branch exactly as the rest of this workflow describes.
 4. Install the extension when it is missing with `gh extension install github/gh-stack`. If it cannot be installed, still stack the branch and pull request as described below, skip the `gh stack` commands, and say in the pull request body that the stack could not be linked.
-5. Create the new branch from the blocker's head branch instead of the default branch, and open the draft pull request against that branch instead of the default branch. Everything else about the draft pull request stays the same.
+5. Create the new branch from the blocker's head branch instead of the default branch, and open the draft pull request against that branch instead of the default branch. Everything else about the draft pull request stays the same, including opening it before cloning when the tooling allows.
 6. Link the pull requests into a stack on GitHub with `gh stack link`. If the blocker's pull request already belongs to a stack (`gh api repos/<OWNER>/<REPO>/stacks?pull_request=<BLOCKERPR>`), pass that stack's pull requests bottom to top followed by this pull request; otherwise pass `<BLOCKERPR> <PRNUMBER>`. Name the blocker pull request in the pull request body.
 7. The blocker's branch belongs to another run. Never commit to, rebase, push, or merge it, and never merge the stack with `gh stack merge`. This also rules out `gh stack sync` and `gh stack push`, which push every branch in the stack.
 8. Check for upstream changes before every push and while waiting on CI: fetch and compare the blocker's head branch with this branch's base. When the blocker has moved, or has merged, update this branch with `gh stack rebase --upstack` from this branch (it switches to `--onto` automatically for a merged blocker), resolve any conflicts, rerun the affected checks, and push only this branch with `git push --force-with-lease=<BRANCH>:<PREVIOUSREMOTESHA> origin <BRANCH>`. This lease-protected push of this run's own branch, after a `gh stack` rebase, is the only exception to never force-pushing. Without the extension, merge the blocker's branch into this branch and push normally instead.
@@ -59,31 +61,28 @@ An issue blocked by another open issue does not have to wait for it when the rep
 A fork directive means the branch and pull request live on the named fork while the issue stays on the original repository. Record the fork during validation and apply it to the whole run; without the directive, every step below is skipped and the same-repository flow is unchanged.
 
 1. Read, comment on, label, and close issues only on the original repository, exactly as without a fork. Only the branch, its pushes, and the pull request's head move to the fork.
-2. Clone the original repository as described under "Create an isolated clone and branch", then add the fork as a second remote named `fork` and fetch it. Push every branch, checkpoint, and repair to `fork`, never to `origin`, with upstream tracking set to `fork`.
+2. Clone the original repository as described under "Create an isolated clone and branch", then add the fork as a second remote named `fork` and fetch it. Push every branch, checkpoint, and repair to `fork`, never to `origin`, with upstream tracking set to `fork`. Create the branch on the fork with the remote steps under "Open the draft pull request" when they succeed against the fork; otherwise push the new branch to `fork` and open the draft pull request immediately after cloning, before any implementation work.
 3. Open the draft pull request on the original repository from the fork's branch: `gh pr create --repo <OWNER>/<REPO> --head <FORKOWNER>:<BRANCH> --base <DEFAULTBRANCH> --draft`. The pull request lives in the original repository, so its body still carries the plain `Closes #<ISSUENUMBER>` on its own line, not the fully qualified form, which closes the original repository's issue when a maintainer merges it.
 4. When resuming, search the original repository's open pull requests whose head is `<FORKOWNER>:fix/issue-<N>-*` and clone that branch from the fork.
 5. Do not stack on a blocker's branch while working from a fork; build from the original repository's default branch.
 6. Merging needs write permission on the original repository, which is what is missing, so a fork run never merges. Mark the pull request ready and drive CI to completion as usual, then end the run instead of following "Merge and verify": post one comment on the pull request saying it is **Ready**, summarizing the fix, the tests, and the CI result, and stating that the merge is left to the repository's maintainers because the pull request comes from a fork. Do not delete the fork's branch and do not close the issue. List follow-ups and manual verification items in that comment exactly as "Hold the pull request when merging is withheld" describes, without filing them.
 7. If CI on a fork pull request is waiting for a maintainer to approve the workflow run, that is the end of what this run can do: report it in the same comment rather than treating it as a failure.
 
-## Create an isolated clone and branch
-
-1. Resolve the canonical `OWNER/REPO`, clone URL, and default branch.
-2. Before changing directories, record whether the invocation directory contains `.glorp.json`. Preserve this fact for follow-up routing because the state file is normally ignored and will not appear in the isolated clone.
-3. Create a uniquely named sibling or temporary directory outside the current checkout, such as `<repo>-gh-fix-<N>`. Never reuse or modify the user's current working tree, and do not substitute a worktree for the separate clone.
-4. Clone the repository normally. If resuming per the section above, clone and check out the existing branch and verify its HEAD matches the remote; otherwise verify the clone's default-branch HEAD matches the remote.
-5. Immediately after verifying the clone, emit `GLORP_CHECKOUT_DIRECTORY=<absolute clone path>` as an exact, plain-text progress line without Markdown formatting. This lets callers display and persist the real isolated checkout. Emit the line again if a missing checkout is regenerated while resuming.
-6. When not resuming an existing branch, create a new branch from the current remote default branch, or from the blocker's head branch when "Stack on an open blocking issue" decided to stack. Prefer `fix/issue-<N>-<short-slug>` unless repository instructions require another naming scheme.
-7. Register cleanup of every clone directory created by this workflow immediately after it is created. Remove those directories before exiting, including on normal completion, errors, or panics. Do not remove the user's existing checkout or unrelated directories.
-
-The cleanup must be unconditional: use a deferred/finally-style cleanup guard as soon as each clone is created, and make cleanup errors visible while preserving the original failure when one exists.
-
 ## Open the draft pull request
 
-Immediately after creating the branch, publish it and open a draft pull request so progress is visible throughout development. Skip this section entirely when resuming an existing draft PR per "Resume existing work" above — it already has an open PR.
+Open the draft pull request as soon as validation has settled the approach, so progress is visible and adoptable throughout development. Open it before cloning whenever the remote steps below work; otherwise open it immediately after cloning. In both cases it must exist before any implementation work begins. Skip this section entirely when resuming an existing draft PR per "Resume existing work" above — it already has an open PR.
 
-1. Create an empty initial commit such as `Start work on issue #<ISSUENUMBER> [skip ci]`, then push the new branch with upstream tracking. The `[skip ci]` marker keeps CI from running on a tree identical to the default branch; only this commit and the checkpoint commits described under "Implement the fix" carry it. Never force-push.
-2. Open a draft PR against the current default branch, or against the blocker's head branch when stacking, with a concise title describing the intended fix.
+1. Choose the branch name (`fix/issue-<N>-<short-slug>` unless repository instructions require another scheme) and its base: the default branch, or the blocker's head branch when stacking. Create the branch on GitHub with an empty initial commit such as `Start work on issue #<ISSUENUMBER> [skip ci]`, before cloning:
+
+   ```sh
+   BASE_SHA=$(gh api repos/<OWNER>/<REPO>/git/ref/heads/<BASEBRANCH> --jq .object.sha)
+   TREE_SHA=$(gh api repos/<OWNER>/<REPO>/git/commits/$BASE_SHA --jq .tree.sha)
+   START_SHA=$(gh api repos/<OWNER>/<REPO>/git/commits -f message='Start work on issue #<ISSUENUMBER> [skip ci]' -f tree=$TREE_SHA -f "parents[]=$BASE_SHA" --jq .sha)
+   gh api repos/<OWNER>/<REPO>/git/refs -f ref=refs/heads/<BRANCH> -f sha=$START_SHA
+   ```
+
+   If any of these calls fails, create the branch right after verifying the clone instead, before anything else: commit the same empty start commit there and push the new branch with upstream tracking. The `[skip ci]` marker keeps CI from running on a tree identical to the base; only this commit and the checkpoint commits described under "Implement the fix" carry it. Never force-push.
+2. Open a draft PR from that branch with `gh pr create --repo <OWNER>/<REPO> --draft --head <BRANCH> --base <BASEBRANCH>` and a concise title describing the intended fix. `--repo` and `--head` let this run before any clone exists.
 3. Write a real Markdown body that summarizes the issue and planned work. Build the exact multiline Markdown in a file or on standard input and pass it with `gh pr create --body-file` (or the equivalent `gh pr edit --body-file`); never put literal `\n` escape sequences in a `--body` argument to represent paragraph breaks. Include `Closes #<ISSUENUMBER>` on its own line so the draft links to and will close the original issue when merged. The pull request always lives in the issue's own repository, so use this plain `#<ISSUENUMBER>` form and never the fully qualified `<OWNER>/<REPO>#<ISSUENUMBER>` form, which is only for a pull request hosted in a different repository than its issue. Then read the created PR body back and verify it contains actual line breaks rather than literal `\n` text.
 4. End the body with a `**Agents:**` footer line naming the current agent CLI and model handling the issue (for example `**Agents:** claude-code (claude-sonnet-5)`), identified from your own runtime context. This is the contributing-agents footer described below.
 5. Record the PR number and URL, then confirm the head and base branches are correct.
@@ -97,7 +96,21 @@ Every time you write or replace the PR body (draft creation, checkpoint updates,
 3. If the footer is missing, add it with just your own entry. If it already lists one or more agent/model entries, keep every distinct existing entry and append your own only if it is not already present, comma-separated in the order encountered (for example `**Agents:** codex (gpt-5), claude-code (claude-sonnet-5)`).
 4. This makes the footer accumulate every agent and model that has touched the issue, which matters when a different agent or model resumes a draft mid-flight.
 
+## Create an isolated clone and branch
+
+1. Resolve the canonical `OWNER/REPO`, clone URL, and default branch.
+2. Before changing directories, record whether the invocation directory contains `.glorp.json`. Preserve this fact for follow-up routing because the state file is normally ignored and will not appear in the isolated clone.
+3. Create a uniquely named sibling or temporary directory outside the current checkout, such as `<repo>-gh-fix-<N>`. Never reuse or modify the user's current working tree, and do not substitute a worktree for the separate clone.
+4. Clone the repository normally. If resuming per "Resume existing work", or when "Open the draft pull request" already created the branch on GitHub, clone and check out that existing branch and verify its HEAD matches the remote; otherwise verify the clone's default-branch HEAD matches the remote.
+5. Immediately after verifying the clone, emit `GLORP_CHECKOUT_DIRECTORY=<absolute clone path>` as an exact, plain-text progress line without Markdown formatting. This lets callers display and persist the real isolated checkout. Emit the line again if a missing checkout is regenerated while resuming.
+6. When the branch does not exist yet, because the remote steps under "Open the draft pull request" failed, create it now from the current remote default branch, or from the blocker's head branch when "Stack on an open blocking issue" decided to stack, and finish "Open the draft pull request" immediately, before any other step.
+7. Register cleanup of every clone directory created by this workflow immediately after it is created. Remove those directories before exiting, including on normal completion, errors, or panics. Do not remove the user's existing checkout or unrelated directories.
+
+The cleanup must be unconditional: use a deferred/finally-style cleanup guard as soon as each clone is created, and make cleanup errors visible while preserving the original failure when one exists.
+
 ## Implement the fix
+
+Start only once the draft pull request is open and linked to the issue. If it is not, stop and open it first.
 
 1. Reproduce or otherwise verify the reported behavior when practical.
 2. Inspect the relevant code and history, then implement the smallest complete fix consistent with repository conventions.
