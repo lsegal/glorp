@@ -4319,7 +4319,7 @@ func TestGlorpCompletesWhenTheIssueIsActuallyClosed(t *testing.T) {
 	}
 }
 
-func TestGlorpParksAPullRequestHeldReadyForReview(t *testing.T) {
+func TestGlorpPausesAPullRequestHeldReadyForReview(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
 	// The issue stays open on purpose -- a gh-fix run held the merge for a
@@ -4340,12 +4340,12 @@ func TestGlorpParksAPullRequestHeldReadyForReview(t *testing.T) {
 	}()
 
 	waitForSession(t, runner.sessions)
-	// The run is done, but the work is parked on its pull request rather than
+	// The run is done, but the work is paused on its pull request rather than
 	// booked as completed, until that pull request merges or closes (issue
 	// #732).
-	parked := waitForParked(t, statePath, 7, core.ParkedPullRequest)
-	if len(parked.PullRequests) != 1 || parked.PullRequests[0] != 8 {
-		t.Fatalf("parked record = %+v, want it to name pull request #8", parked)
+	paused := waitForPaused(t, statePath, 7, core.PausedPullRequest)
+	if len(paused.PullRequests) != 1 || paused.PullRequests[0] != 8 {
+		t.Fatalf("paused record = %+v, want it to name pull request #8", paused)
 	}
 	select {
 	case extra := <-runner.sessions:
@@ -4371,7 +4371,7 @@ func runHeldPullRequestToCompletion(t *testing.T, src *fakeClosureSource, runner
 		<-done
 	})
 	first := waitForSession(t, runner.sessions)
-	waitForParked(t, statePath, 7, core.ParkedPullRequest)
+	waitForPaused(t, statePath, 7, core.PausedPullRequest)
 	return first
 }
 
@@ -4402,7 +4402,7 @@ func TestGlorpNeverRestartsCompletedWorkWhosePullRequestMerged(t *testing.T) {
 	}{
 		"merged":       {OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed", Merged: true}}}, "completed"},
 		"issue closed": {OriginatingWorkState{IssueState: "closed", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed"}}}, "completed"},
-		"still held":   {OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open"}}}, "parked"},
+		"still held":   {OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open"}}}, "paused"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			statePath := filepath.Join(t.TempDir(), "state.json")
@@ -4415,7 +4415,7 @@ func TestGlorpNeverRestartsCompletedWorkWhosePullRequestMerged(t *testing.T) {
 			src.state = test.final
 			src.mu.Unlock()
 
-			// A merge or a close is the parked pull request's terminal event,
+			// A merge or a close is the paused pull request's terminal event,
 			// which completes the work (issue #732).
 			waitForWorkStatus(t, statePath, 7, test.status)
 			select {

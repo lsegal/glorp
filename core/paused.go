@@ -5,28 +5,28 @@ import (
 	"strings"
 )
 
-// The kinds of parked work (issue #732). Parked work is out of the dispatch
+// The kinds of paused work (issue #732). Paused work is out of the dispatch
 // queue and holds no agent slot. It waits on one GitHub terminal event (a
 // merge or a close) and goes back into the queue through the normal claim path
 // when that event happens. Review activity never wakes it.
 const (
-	// ParkedBlocked is an issue waiting for the open issues it depends on to
+	// PausedBlocked is an issue waiting for the open issues it depends on to
 	// close.
-	ParkedBlocked = "blocked"
-	// ParkedStacked is a ready pull request stacked on its blocker's branch,
+	PausedBlocked = "blocked"
+	// PausedStacked is a ready pull request stacked on its blocker's branch,
 	// waiting for the blocker's pull request to merge or close (issue #659).
-	ParkedStacked = "stacked"
-	// ParkedPullRequest is a finished run whose ready pull request is held
+	PausedStacked = "stacked"
+	// PausedPullRequest is a finished run whose ready pull request is held
 	// for a human to merge (a DONOTMERGE directive). It waits for that pull
 	// request to merge, which completes the work, or to close unmerged, which
 	// restarts it fresh (issues #690, #729).
-	ParkedPullRequest = "pull-request"
+	PausedPullRequest = "pull-request"
 )
 
-// ParkedWork is the one record every kind of parked work shares: what kind it
+// PausedWork is the one record every kind of paused work shares: what kind it
 // is, the issues it waits on, and the pull requests it left behind. The record
 // only saves work; whether it wakes is always read back from GitHub.
-type ParkedWork struct {
+type PausedWork struct {
 	Kind string `json:"kind"`
 	// WaitingOn lists the open issues the work is blocked by.
 	WaitingOn []int `json:"waitingOn,omitempty"`
@@ -34,27 +34,27 @@ type ParkedWork struct {
 	PullRequests []int `json:"pullRequests,omitempty"`
 }
 
-// ParkedWake is what a parked record's wake check decided.
-type ParkedWake int
+// PausedWake is what a paused record's wake check decided.
+type PausedWake int
 
 const (
-	// ParkedStay leaves the work parked.
-	ParkedStay ParkedWake = iota
-	// ParkedResume puts the work back in the queue to pick it back up.
-	ParkedResume
-	// ParkedRestart puts the work back in the queue to start over, because
+	// PausedStay leaves the work paused.
+	PausedStay PausedWake = iota
+	// PausedResume puts the work back in the queue to pick it back up.
+	PausedResume
+	// PausedRestart puts the work back in the queue to start over, because
 	// its pull request was closed without merging.
-	ParkedRestart
-	// ParkedComplete ends the work: its pull request merged or its issue
+	PausedRestart
+	// PausedComplete ends the work: its pull request merged or its issue
 	// closed.
-	ParkedComplete
+	PausedComplete
 )
 
-// ParkedCheck is the GitHub state a wake check reads. Issue is the issue as
+// PausedCheck is the GitHub state a wake check reads. Issue is the issue as
 // the poll listed it. Own is the state of the issue's own pull requests, and
 // Blockers holds the state of each issue it waits on. A state that could not
 // be read is left out, and a check never wakes on missing state.
-type ParkedCheck struct {
+type PausedCheck struct {
 	Issue    Issue
 	Own      *OriginatingWorkState
 	Blockers map[int]OriginatingWorkState
@@ -84,58 +84,58 @@ func OpenPullRequests(state OriginatingWorkState) []int {
 	return open
 }
 
-// WakeParked decides whether parked work wakes, and why. It only reads GitHub
+// WakePaused decides whether paused work wakes, and why. It only reads GitHub
 // terminal state: issue and pull request open, closed, and merged. Reviews,
 // review comments, and approvals are not part of the input, so they can never
-// wake parked work. Every instance that reads the same GitHub state decides
+// wake paused work. Every instance that reads the same GitHub state decides
 // the same thing.
-func WakeParked(parked ParkedWork, check ParkedCheck) (ParkedWake, string) {
+func WakePaused(paused PausedWork, check PausedCheck) (PausedWake, string) {
 	if strings.EqualFold(check.Issue.State, "closed") || (check.Own != nil && strings.EqualFold(check.Own.IssueState, "closed")) {
-		return ParkedComplete, fmt.Sprintf("issue #%d was closed", check.Issue.Number)
+		return PausedComplete, fmt.Sprintf("issue #%d was closed", check.Issue.Number)
 	}
 	if check.Own != nil {
 		for _, pullRequest := range check.Own.PullRequests {
 			if pullRequest.Merged {
-				return ParkedComplete, fmt.Sprintf("pull request #%d merged", pullRequest.Number)
+				return PausedComplete, fmt.Sprintf("pull request #%d merged", pullRequest.Number)
 			}
 		}
 	}
-	switch parked.Kind {
-	case ParkedBlocked:
+	switch paused.Kind {
+	case PausedBlocked:
 		if blocked, reason := IssueBlocked(check.Issue); blocked {
-			return ParkedStay, reason
+			return PausedStay, reason
 		}
-		return ParkedResume, "its blockers are closed"
-	case ParkedPullRequest:
+		return PausedResume, "its blockers are closed"
+	case PausedPullRequest:
 		if check.Own == nil {
-			return ParkedStay, "waiting for its pull request to merge"
+			return PausedStay, "waiting for its pull request to merge"
 		}
 		if number, reason := RejectedPullRequest(*check.Own); number > 0 {
-			return ParkedRestart, reason
+			return PausedRestart, reason
 		}
 		open := OpenPullRequests(*check.Own)
 		if len(open) == 0 {
-			return ParkedStay, "waiting for its pull request to merge"
+			return PausedStay, "waiting for its pull request to merge"
 		}
-		return ParkedStay, fmt.Sprintf("its pull request %s waits to merge", formatNumbers(open))
+		return PausedStay, fmt.Sprintf("its pull request %s waits to merge", formatNumbers(open))
 	default:
-		// Stacked, including records written before parked work had a kind.
+		// Stacked, including records written before paused work had a kind.
 		blocked, reason := IssueBlocked(check.Issue)
 		if !blocked {
-			return ParkedResume, "its blocker is no longer open"
+			return PausedResume, "its blocker is no longer open"
 		}
 		if check.Own != nil {
 			if number, rejected := RejectedPullRequest(*check.Own); number > 0 {
-				return ParkedRestart, rejected
+				return PausedRestart, rejected
 			}
 		}
 		for _, number := range OpenDependencies(check.Issue) {
 			state, ok := check.Blockers[number]
 			if ok && len(state.PullRequests) > 0 && len(OpenPullRequests(state)) == 0 {
-				return ParkedResume, fmt.Sprintf("its blocker #%d no longer has an open pull request", number)
+				return PausedResume, fmt.Sprintf("its blocker #%d no longer has an open pull request", number)
 			}
 		}
-		return ParkedStay, reason + "; its stacked pull request waits for that to merge"
+		return PausedStay, reason + "; its stacked pull request waits for that to merge"
 	}
 }
 

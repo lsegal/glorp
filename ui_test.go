@@ -1198,19 +1198,19 @@ func TestDashboardShowsAWaitingJobsWakeup(t *testing.T) {
 	}
 }
 
-// Parked work is neither active nor completed (issue #732), so the status bar
+// Paused work is neither active nor completed (issue #732), so the status bar
 // counts it on its own and the job card says what it waits on.
-func TestDashboardShowsParkedWorkApartFromActiveAndCompleted(t *testing.T) {
+func TestDashboardShowsPausedWorkApartFromActiveAndCompleted(t *testing.T) {
 	m := newDashboard(nil)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Concurrency: 3, Running: 1, Completed: 2, Parked: 1, Jobs: []JobSnapshot{
-		{Number: 7, Title: "held fix", Status: "parked", WaitReason: "its pull request waits to be merged or closed"},
+	updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Concurrency: 3, Running: 1, Completed: 2, Paused: 1, Jobs: []JobSnapshot{
+		{Number: 7, Title: "held fix", Status: "paused", WaitReason: "its pull request waits to be merged or closed"},
 	}}))
 	view := updated.(dashboard).View()
-	if !strings.Contains(view, "jobs: 2 idle 1 active 1 parked 4 total") {
-		t.Fatalf("parked work was not counted on its own: %s", view)
+	if !strings.Contains(view, "jobs: 2 idle 1 active 1 paused 4 total") {
+		t.Fatalf("paused work was not counted on its own: %s", view)
 	}
-	if !strings.Contains(view, "⧗ #7") || !strings.Contains(view, "parked: its pull request") {
-		t.Fatalf("parked job card did not say what it waits on: %s", view)
+	if !strings.Contains(view, "⧗ #7") || !strings.Contains(view, "paused: its pull request") {
+		t.Fatalf("paused job card did not say what it waits on: %s", view)
 	}
 }

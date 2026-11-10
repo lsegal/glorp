@@ -28,7 +28,7 @@ type JobSnapshot struct {
 	Log               string
 	// WaitReason and WakeAt describe a job whose agent scheduled a wakeup and
 	// is waiting for it, with Status "waiting" (issue #671). WaitReason also
-	// says what a job with Status "parked" waits on (issue #732).
+	// says what a job with Status "paused" waits on (issue #732).
 	WaitReason string
 	WakeAt     time.Time
 }
@@ -48,9 +48,9 @@ type Snapshot struct {
 	Queued      int
 	Completed   int
 	Failed      int
-	// Parked counts work out of the queue waiting on a GitHub merge or close,
+	// Paused counts work out of the queue waiting on a GitHub merge or close,
 	// holding no agent slot (issue #732).
-	Parked      int
+	Paused      int
 	Concurrency int
 	NextPoll    time.Time
 	// LastPoll is when the most recent poll of GitHub finished. The poll loop
