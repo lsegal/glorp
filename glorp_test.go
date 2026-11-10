@@ -4357,6 +4357,103 @@ func TestGlorpCompletesWhenAPullRequestIsHeldReadyForReview(t *testing.T) {
 	}
 }
 
+// runHeldPullRequestToCompletion runs issue #7 until its agent finishes with a
+// ready pull request held for a human, the state a do-not-merge run ends in,
+// and returns the first session it was launched with (issue #729).
+func runHeldPullRequestToCompletion(t *testing.T, src *fakeClosureSource, runner *finishingSessionRunner, statePath string) AgentSession {
+	t.Helper()
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: &syncBuffer{}, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	first := waitForSession(t, runner.sessions)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		state, err := loadWorkState(statePath)
+		if err == nil && state[7].Status == "completed" {
+			return first
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("held pull request was not recorded as completed, state=%v err=%v", state, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestGlorpRestartsCompletedWorkWhenItsPullRequestIsClosedWithoutMerging(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+	src.state = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open"}}}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	first := runHeldPullRequestToCompletion(t, src, runner, statePath)
+
+	src.mu.Lock()
+	src.state = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed"}}}
+	src.mu.Unlock()
+
+	restarted := waitForSession(t, runner.sessions)
+	if !restarted.Resume || restarted.ID != first.ID {
+		t.Fatalf("rejected completed work did not resume its session: first=%+v restarted=%+v", first, restarted)
+	}
+	if !strings.Contains(restarted.Update, "Pull request #8 for issue #7 was closed without merging") || !strings.Contains(restarted.Update, "start a fresh implementation") {
+		t.Fatalf("rejected completed work was not given the rejected-attempt prompt: %q", restarted.Update)
+	}
+}
+
+func TestGlorpNeverRestartsCompletedWorkWhosePullRequestMerged(t *testing.T) {
+	for name, final := range map[string]OriginatingWorkState{
+		"merged":       {IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed", Merged: true}}},
+		"issue closed": {IssueState: "closed", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed"}}},
+		"still held":   {IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.json")
+			src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
+			src.state = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "open"}}}
+			runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+			runHeldPullRequestToCompletion(t, src, runner, statePath)
+
+			src.mu.Lock()
+			src.state = final
+			src.mu.Unlock()
+
+			select {
+			case extra := <-runner.sessions:
+				t.Fatalf("completed work was relaunched: %+v", extra)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestCompletedPullRequestRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		state OriginatingWorkState
+		want  int
+	}{
+		{"closed unmerged", OriginatingWorkState{IssueState: "OPEN", PullRequests: []PullRequestWorkState{{Number: 8, State: "CLOSED"}}}, 8},
+		{"newest closed", OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 9, State: "closed"}, {Number: 8, State: "closed"}}}, 9},
+		{"still open", OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed"}, {Number: 9, State: "open"}}}, 0},
+		{"merged", OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed"}, {Number: 9, State: "closed", Merged: true}}}, 0},
+		{"issue closed", OriginatingWorkState{IssueState: "closed", PullRequests: []PullRequestWorkState{{Number: 8, State: "closed"}}}, 0},
+		{"no pull request", OriginatingWorkState{IssueState: "open"}, 0},
+	}
+	for _, tc := range cases {
+		number, reason := completedPullRequestRejected(tc.state)
+		if number != tc.want || (reason != "") != (tc.want != 0) {
+			t.Errorf("%s: completedPullRequestRejected = (%d, %q), want %d", tc.name, number, reason, tc.want)
+		}
+	}
+}
+
 func TestGlorpKeepsAnAgentAliveWhileItsDraftPullRequestIsStillInProgress(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	src := &fakeClosureSource{fakeSource: &fakeSource{batches: [][]Issue{{{Number: 7}}}}}
