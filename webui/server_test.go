@@ -109,6 +109,50 @@ func TestStateIncludesSnapshotsAndBoundedLogs(t *testing.T) {
 	}
 }
 
+func TestStatePublishesLogsOnlyForTheRequestedPage(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := make([]core.JobSnapshot, 14)
+	for i := range jobs {
+		jobs[i] = core.JobSnapshot{Number: i + 1, Target: "o/r", Log: "output " + strconv.Itoa(i+1)}
+	}
+	ui.Snapshot(core.Snapshot{Jobs: jobs, VisibleJobs: 6})
+
+	cases := []struct {
+		query      string
+		start, end int
+	}{
+		{"", 0, 6},
+		{"?page=0", 0, 6},
+		{"?page=1", 6, 12},
+		{"?page=2", 12, 14},
+		{"?page=3", 0, 6},
+		{"?page=-1", 0, 6},
+		{"?page=x", 0, 6},
+	}
+	for _, tc := range cases {
+		response := httptest.NewRecorder()
+		ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/state"+tc.query, nil))
+		var state State
+		if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if len(state.Snapshot.Jobs) != len(jobs) {
+			t.Fatalf("%q published %d jobs, want all %d", tc.query, len(state.Snapshot.Jobs), len(jobs))
+		}
+		for i, job := range state.Snapshot.Jobs {
+			if onPage := i >= tc.start && i < tc.end; onPage != (job.Log != "") {
+				t.Fatalf("%q: job #%d published Log %q; want Logs only for jobs %d-%d", tc.query, job.Number, job.Log, tc.start+1, tc.end)
+			}
+		}
+	}
+	if jobs[13].Log == "" {
+		t.Fatal("serving a page cleared the Log on the stored snapshot")
+	}
+}
+
 func TestServerRejectsUnsupportedMethods(t *testing.T) {
 	ui, err := New("v1.2.3")
 	if err != nil {

@@ -333,12 +333,36 @@ func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	ui.mu.RLock()
 	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...)}
 	ui.mu.RUnlock()
+	state.Snapshot.Jobs = pageLogs(state.Snapshot.Jobs, state.Snapshot.VisibleJobs, page)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(state)
+}
+
+// pageLogs copies jobs keeping the Log only on the jobs of the zero-based page,
+// perPage jobs at a time. Each Log is an agent's whole transcript, so only the
+// page the dashboard is showing carries them (issues #714 and #739). A page
+// outside the list, or no page at all, means the first page; a perPage of zero
+// publishes every Log.
+func pageLogs(jobs []core.JobSnapshot, perPage, page int) []core.JobSnapshot {
+	if perPage <= 0 || len(jobs) == 0 {
+		return jobs
+	}
+	if page < 0 || page*perPage >= len(jobs) {
+		page = 0
+	}
+	start, end := page*perPage, min((page+1)*perPage, len(jobs))
+	list := append([]core.JobSnapshot(nil), jobs...)
+	for i := range list {
+		if i < start || i >= end {
+			list[i].Log = ""
+		}
+	}
+	return list
 }
 
 // Listen binds the first free port on host at or above startPort and reports

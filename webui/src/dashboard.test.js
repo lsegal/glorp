@@ -12,18 +12,19 @@ import {
 	formatInterval,
 	jobActionAvailability,
 	jobAgentSummary,
+	jobPage,
 	jobWaitLabel,
 	lastPollLabel,
 	modelGroupsFrom,
 	modelOptionsFrom,
 	parseAllowedCommenters,
 	probedModelsByAgent,
+	stateURL,
 	submitJobAction,
 	submitRefresh,
 	submitRestart,
 	submitSettings,
 	toggleActiveModel,
-	visibleJobs,
 } from "./dashboard";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -143,24 +144,47 @@ describe("jobWaitLabel", () => {
 	});
 });
 
-describe("visibleJobs", () => {
-	const jobs = Array.from({ length: 10 }, (_, i) => ({ Number: i + 1 }));
+describe("jobPage", () => {
+	const jobs = Array.from({ length: 14 }, (_, i) => ({ Number: i + 1 }));
+	const numbers = (page) => page.jobs.map((job) => job.Number);
 
-	it("draws only the first VisibleJobs of every published job", () => {
-		expect(
-			visibleJobs({ Jobs: jobs, VisibleJobs: 6 }).map((job) => job.Number),
-		).toEqual([1, 2, 3, 4, 5, 6]);
+	it("pages through every published job VisibleJobs at a time", () => {
+		const snapshot = { Jobs: jobs, VisibleJobs: 6 };
+		expect(numbers(jobPage(snapshot, 0))).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(numbers(jobPage(snapshot, 1))).toEqual([7, 8, 9, 10, 11, 12]);
+		expect(jobPage(snapshot, 2)).toEqual({
+			jobs: [{ Number: 13 }, { Number: 14 }],
+			page: 2,
+			pages: 3,
+		});
 	});
 
-	it("draws every job when there are fewer than VisibleJobs", () => {
-		expect(visibleJobs({ Jobs: jobs.slice(0, 3), VisibleJobs: 6 })).toEqual(
-			jobs.slice(0, 3),
-		);
+	it("clamps a page that no longer exists to the last one", () => {
+		const page = jobPage({ Jobs: jobs.slice(0, 8), VisibleJobs: 6 }, 2);
+		expect(page.page).toBe(1);
+		expect(page.pages).toBe(2);
+		expect(numbers(page)).toEqual([7, 8]);
+		expect(jobPage({ Jobs: jobs, VisibleJobs: 6 }, -1).page).toBe(0);
 	});
 
-	it("draws every job when no limit is published", () => {
-		expect(visibleJobs({ Jobs: jobs })).toEqual(jobs);
-		expect(visibleJobs({})).toEqual([]);
+	it("draws every job on one page when there are fewer than VisibleJobs", () => {
+		expect(jobPage({ Jobs: jobs.slice(0, 3), VisibleJobs: 6 }, 0)).toEqual({
+			jobs: jobs.slice(0, 3),
+			page: 0,
+			pages: 1,
+		});
+	});
+
+	it("draws every job on one page when no limit is published", () => {
+		expect(jobPage({ Jobs: jobs }, 0)).toEqual({ jobs, page: 0, pages: 1 });
+		expect(jobPage({}, 3)).toEqual({ jobs: [], page: 0, pages: 0 });
+	});
+});
+
+describe("stateURL", () => {
+	it("asks for the page of jobs being shown", () => {
+		expect(stateURL(0)).toBe("/api/state");
+		expect(stateURL(2)).toBe("/api/state?page=2");
 	});
 });
 

@@ -69,8 +69,10 @@ type Snapshot struct {
 	TokenLimit int
 	Quota      string
 	Quotas     map[string]string
-	// Jobs holds every in-flight job, but only the first VisibleJobs carry
-	// their Log. The dashboards draw just those first VisibleJobs (issue #714).
+	// Jobs holds every in-flight job. The terminal dashboard draws just the
+	// first VisibleJobs (issue #714); the web dashboard pages through all of
+	// them VisibleJobs at a time, and /api/state publishes the Log only for
+	// the jobs on the requested page (issue #739).
 	Jobs        []JobSnapshot
 	VisibleJobs int
 }

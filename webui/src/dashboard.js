@@ -49,12 +49,28 @@ export function deliveryLabel(snapshot) {
 	return label;
 }
 
-// visibleJobs is the jobs the dashboard draws. The snapshot carries every
-// in-flight job so the API can report them all, but the dashboard still shows
-// only the first VisibleJobs of them, as before (issue #714).
-export function visibleJobs(snapshot) {
+// jobPage is the page of jobs the dashboard draws. The snapshot carries every
+// in-flight job (issue #714), and the dashboard pages through them
+// VisibleJobs at a time so none is out of reach (issue #739). page is clamped
+// to the pages that exist, so a page that emptied as jobs finished falls back
+// to the last one; pages is 0 when there are no jobs.
+export function jobPage(snapshot, page) {
 	const jobs = snapshot.Jobs || [];
-	return snapshot.VisibleJobs > 0 ? jobs.slice(0, snapshot.VisibleJobs) : jobs;
+	const perPage = snapshot.VisibleJobs > 0 ? snapshot.VisibleJobs : jobs.length;
+	if (jobs.length === 0) return { jobs: [], page: 0, pages: 0 };
+	const pages = Math.ceil(jobs.length / perPage);
+	const current = Math.min(Math.max(Math.trunc(page) || 0, 0), pages - 1);
+	return {
+		jobs: jobs.slice(current * perPage, (current + 1) * perPage),
+		page: current,
+		pages,
+	};
+}
+
+// stateURL is the /api/state request for a page of jobs. The server publishes
+// agent output only for the jobs on the requested page (issue #739).
+export function stateURL(page) {
+	return page > 0 ? `/api/state?page=${page}` : "/api/state";
 }
 
 export function jobAgentSummary(job) {

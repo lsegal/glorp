@@ -143,6 +143,33 @@ h1 .version {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 16px;
 }
+.job-pager {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-bottom: -6px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.job-pager button {
+	display: inline-grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	border: 1px solid #52525b;
+	border-radius: 6px;
+	background: #27272a;
+	color: #e4e4e7;
+	cursor: pointer;
+}
+.job-pager button:hover {
+	background: #3f3f46;
+}
+.job-pager svg {
+	width: 16px;
+	height: 16px;
+}
 .card,
 .log-card {
 	min-width: 0;
