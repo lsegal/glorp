@@ -1519,7 +1519,7 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 		}
 	}
 	if repo != "" {
-		output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
+		output, err := g.apiGETPaginated(ctx, public, "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28")
 		if err != nil {
 			return fmt.Errorf("list dependencies for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
 		}
@@ -1530,7 +1530,7 @@ func (g GHCLI) loadDependencies(ctx context.Context, repo string, issue *Issue) 
 		for _, dependency := range related {
 			dependencies[dependency.Number] = dependency
 		}
-		subIssues, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/sub_issues", "--header", "X-GitHub-Api-Version: 2022-11-28")
+		subIssues, err := g.apiGETPaginated(ctx, public, "repos/"+repo+"/issues/"+fmt.Sprint(issue.Number)+"/sub_issues", "--header", "X-GitHub-Api-Version: 2022-11-28")
 		if err != nil {
 			return fmt.Errorf("list sub-issues for issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(subIssues)))
 		}
