@@ -1823,10 +1823,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		running, queued, completed, failed := tasks.snapshot()
 		jobMu.Lock()
-		list := make([]JobSnapshot, 0, len(jobs))
-		for _, job := range jobs {
-			list = append(list, job)
-		}
+		list := publishedJobs(jobs)
 		counts := make(map[string]int, len(issueCounts))
 		for target, count := range issueCounts {
 			counts[target] = count
@@ -1834,10 +1831,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 		polled := lastPoll
 		watched := targets
 		jobMu.Unlock()
-		sortJobSnapshots(list)
-		if len(list) > maxVisibleJobs {
-			list = list[:maxVisibleJobs]
-		}
 		var quotas map[string]string
 		if w.Quota != nil {
 			quotas = w.Quota(ctx)
@@ -1846,7 +1839,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if online && w.WebhookOnline != nil {
 			online = w.WebhookOnline()
 		}
-		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list})
+		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list, VisibleJobs: maxVisibleJobs})
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent
