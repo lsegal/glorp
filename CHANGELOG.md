@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Page through every job in the web dashboard instead of only the first six (issue #739). When more jobs are in flight than fit on the job grid, a pager above it steps through them six at a time, and each page shows its jobs' agent output, retry and stop buttons, and status as the first page does. Before, jobs past the first six could not be reached in the web dashboard at all. Paging leaves the status bar, targets, counts, and logs unchanged, and the terminal dashboard is unchanged. The `/api/state` endpoint accepts a `page` query parameter that selects which jobs carry their agent output; without it, the first six do, as before.
+
 ## v1.5.15 - 2026-11-10
 
 - Make `gh-fix` open its draft pull request before any implementation work (issue #737). As soon as the approach is settled, the skill now creates the branch and its start commit on GitHub and opens the linked draft pull request before cloning, falling back to opening it right after cloning when the remote steps fail. Before, a run could get well into the fix before any pull request appeared, so the issue looked untouched and an interrupted run left nothing for the next run to adopt.

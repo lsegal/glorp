@@ -8,6 +8,8 @@ import {
 import {
 	Activity,
 	Check,
+	ChevronLeft,
+	ChevronRight,
 	Circle,
 	CirclePause,
 	Clock,
@@ -26,15 +28,16 @@ import {
 	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
+	jobPage,
 	jobWaitLabel,
 	modelGroupsFrom,
 	modelOptionsFrom,
+	stateURL,
 	submitJobAction,
 	submitRefresh,
 	submitRestart,
 	submitSettings,
 	toggleActiveModel,
-	visibleJobs,
 } from "./dashboard";
 import "./index.css";
 
@@ -44,14 +47,17 @@ const emptyState = {
 	logs: [],
 };
 
-function useDashboardState() {
+// useDashboardState polls /api/state for the page of jobs being shown, and
+// polls again right away when the page changes so its output fills in without
+// waiting for the next tick (issue #739).
+function useDashboardState(page) {
 	const [state, setState] = useState(emptyState);
 	const [connected, setConnected] = useState(true);
 	useEffect(() => {
 		let stopped = false;
 		const refresh = async () => {
 			try {
-				const response = await fetch("/api/state", { cache: "no-store" });
+				const response = await fetch(stateURL(page), { cache: "no-store" });
 				if (!response.ok) throw new Error(`HTTP ${response.status}`);
 				const next = await response.json();
 				if (!stopped) {
@@ -68,7 +74,7 @@ function useDashboardState() {
 			stopped = true;
 			window.clearInterval(timer);
 		};
-	}, []);
+	}, [page]);
 	return [state, connected];
 }
 
@@ -187,6 +193,33 @@ function JobCard({ job }) {
 				/>
 			</div>
 		</article>
+	);
+}
+
+// JobPager steps through the pages of jobs when they do not all fit on one
+// (issue #739), wrapping around at either end as the terminal dashboard does.
+function JobPager({ page, pages, onPage }) {
+	if (pages < 2) return null;
+	return (
+		<nav className="job-pager" aria-label="Job pages">
+			<button
+				type="button"
+				onClick={() => onPage((page + pages - 1) % pages)}
+				aria-label="Previous page of jobs"
+			>
+				<ChevronLeft />
+			</button>
+			<span>
+				page {page + 1} of {pages}
+			</span>
+			<button
+				type="button"
+				onClick={() => onPage((page + 1) % pages)}
+				aria-label="Next page of jobs"
+			>
+				<ChevronRight />
+			</button>
+		</nav>
 	);
 }
 
@@ -528,7 +561,8 @@ function SettingsModal({ onClose }) {
 }
 
 function App() {
-	const [state, connected] = useDashboardState();
+	const [page, setPage] = useState(0);
+	const [state, connected] = useDashboardState(page);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
 	// restarting is "requested" until the daemon drops off, then "down" until
@@ -539,6 +573,12 @@ function App() {
 		if (restarting === "down" && connected) setRestarting("");
 	}, [restarting, connected]);
 	const snapshot = state.snapshot || emptyState.snapshot;
+	const shown = jobPage(snapshot, page);
+	// Follow the clamp when finished jobs empty the page being shown, so the
+	// next poll asks for the output of the page actually drawn.
+	useEffect(() => {
+		if (shown.page !== page) setPage(shown.page);
+	}, [shown.page, page]);
 	const refresh = async () => {
 		setRefreshing(true);
 		try {
@@ -615,9 +655,10 @@ function App() {
 			</div>
 			{settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 			<StatusBar snapshot={snapshot} connected={connected} />
+			<JobPager page={shown.page} pages={shown.pages} onPage={setPage} />
 			<section className="job-grid" aria-label="Agent jobs">
-				{visibleJobs(snapshot).length ? (
-					visibleJobs(snapshot).map((job) => (
+				{shown.jobs.length ? (
+					shown.jobs.map((job) => (
 						<JobCard key={`${job.Target}#${job.Number}`} job={job} />
 					))
 				) : (

@@ -53,18 +53,16 @@ func sortJobSnapshots(jobs []JobSnapshot) {
 }
 
 // publishedJobs lists every in-flight job for the published snapshot, sorted
-// the way the dashboards draw them. Only the first maxVisibleJobs, the ones the
-// dashboards show, keep their Log: each Log is the agent's whole transcript, so
-// the rest are published without it to keep the payload bounded (issue #714).
+// the way the dashboards draw them. Every job keeps its Log here so the web
+// dashboard can page through all of them (issue #739); its /api/state handler
+// drops the Log from every job outside the requested page to keep the payload
+// bounded (issue #714).
 func publishedJobs(jobs map[string]JobSnapshot) []JobSnapshot {
 	list := make([]JobSnapshot, 0, len(jobs))
 	for _, job := range jobs {
 		list = append(list, job)
 	}
 	sortJobSnapshots(list)
-	for i := maxVisibleJobs; i < len(list); i++ {
-		list[i].Log = ""
-	}
 	return list
 }
 

@@ -769,7 +769,7 @@ func TestDashboardUsesTwoByThreeAgentGrid(t *testing.T) {
 	}
 }
 
-func TestPublishedJobsKeepsEveryJobButOnlyVisibleLogs(t *testing.T) {
+func TestPublishedJobsKeepsEveryJobAndLog(t *testing.T) {
 	now := time.Now()
 	jobs := make(map[string]JobSnapshot)
 	for i := 1; i <= 10; i++ {
@@ -783,12 +783,23 @@ func TestPublishedJobsKeepsEveryJobButOnlyVisibleLogs(t *testing.T) {
 		if want := 10 - i; job.Number != want {
 			t.Fatalf("job %d = #%d, want #%d (newest first)", i, job.Number, want)
 		}
-		if visible := i < maxVisibleJobs; visible != (job.Log != "") {
-			t.Fatalf("job #%d at %d published Log %q; only the first %d should keep it", job.Number, i, len(job.Log), maxVisibleJobs)
+		// The web dashboard pages through every job, so each keeps its Log
+		// until /api/state trims it to the requested page (issue #739).
+		if job.Log == "" {
+			t.Fatalf("job #%d at %d lost its Log", job.Number, i)
 		}
 	}
-	if jobs["o/r#1"].Log == "" {
-		t.Fatal("publishedJobs cleared the Log on the running job itself")
+}
+
+func TestDashboardDrawsOnlyTheFirstVisibleJobs(t *testing.T) {
+	now := time.Now()
+	jobs := make(map[string]JobSnapshot)
+	for i := 1; i <= 10; i++ {
+		jobs[fmt.Sprintf("o/r#%d", i)] = JobSnapshot{Number: i, Target: "o/r", Status: "active", Started: now.Add(time.Duration(i) * time.Minute)}
+	}
+	model, _ := newDashboard(nil).Update(snapshotMsg(GlorpSnapshot{Jobs: publishedJobs(jobs), VisibleJobs: maxVisibleJobs}))
+	if got := len(model.(dashboard).snapshot.Jobs); got != maxVisibleJobs {
+		t.Fatalf("terminal dashboard kept %d jobs, want the first %d", got, maxVisibleJobs)
 	}
 }
 
