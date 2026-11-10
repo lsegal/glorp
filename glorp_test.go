@@ -702,6 +702,99 @@ func TestGlorpDoesNotCancelRunWithoutCompetingClaim(t *testing.T) {
 	}
 }
 
+// slowExitRunner keeps running after its context is cancelled until exit is
+// closed, like an agent that is still pushing or posting when it is stopped.
+type slowExitRunner struct {
+	sessions chan AgentSession
+	exit     chan struct{}
+}
+
+func (r *slowExitRunner) AgentName() string                { return "codex" }
+func (r *slowExitRunner) Run(context.Context, Issue) error { return nil }
+func (r *slowExitRunner) RunSession(ctx context.Context, _ Issue, session AgentSession, update func(AgentSession)) error {
+	r.sessions <- session
+	update(AgentSession{ID: "session-7"})
+	<-ctx.Done()
+	<-r.exit
+	return ctx.Err()
+}
+
+func TestGlorpWebUIStopWaitsForTheAgentToExitAndReservesTheIssue(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{{Number: 7, Title: "Stop me"}}}}
+	runner := &slowExitRunner{sessions: make(chan AgentSession, 2), exit: make(chan struct{})}
+	events := make(chan WebhookEvent, 1)
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
+		Issues: src, Runner: runner, Out: logs, UseWebhooks: true, Events: events,
+		fallbackInterval: time.Hour, Identity: "SELF",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	select {
+	case <-runner.sessions:
+	case <-time.After(2 * time.Second):
+		t.Fatal("issue was not dispatched")
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- w.handleJobAction(ctx, jobAction{Action: "stop", Target: "o/r", Number: 7}) }()
+	select {
+	case err := <-stopped:
+		close(runner.exit)
+		t.Fatalf("stop returned before the agent exited: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// A mention polled while the stopped run is still exiting must neither
+	// start a second run nor be relayed into the dying one.
+	events <- WebhookEvent{Kind: "issue_comment", Action: "created", Repository: "o/r", IssueNumber: 7, CommentBody: "Please revisit this @/glorp:SELF"}
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(logs.String(), "issue #7 not picked up: its stopped run is still exiting") {
+		if time.Now().After(deadline) {
+			close(runner.exit)
+			t.Fatalf("the stopping issue was not reserved:\n%s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-runner.sessions:
+		close(runner.exit)
+		t.Fatal("a second run started while the stopped run was still exiting")
+	default:
+	}
+
+	close(runner.exit)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("stop failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop did not return after the agent exited")
+	}
+	if !strings.Contains(logs.String(), "issue #7 stopped from web UI; its agent has exited") {
+		t.Fatalf("the agent exit was not logged:\n%s", logs.String())
+	}
+	// The mention stayed queued and starts a fresh run once the issue is free.
+	select {
+	case session := <-runner.sessions:
+		if session.Resume {
+			t.Fatal("the queued mention resumed the stopped session instead of starting fresh")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("the queued mention was not dispatched after the stopped run exited:\n%s", logs.String())
+	}
+}
+
 func TestGlorpWebUIRetriesActiveWork(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
