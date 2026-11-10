@@ -49,6 +49,14 @@ export function deliveryLabel(snapshot) {
 	return label;
 }
 
+// visibleJobs is the jobs the dashboard draws. The snapshot carries every
+// in-flight job so the API can report them all, but the dashboard still shows
+// only the first VisibleJobs of them, as before (issue #714).
+export function visibleJobs(snapshot) {
+	const jobs = snapshot.Jobs || [];
+	return snapshot.VisibleJobs > 0 ? jobs.slice(0, snapshot.VisibleJobs) : jobs;
+}
+
 export function jobAgentSummary(job) {
 	if (!job.Agent) return "pending";
 	let summary = job.Agent;

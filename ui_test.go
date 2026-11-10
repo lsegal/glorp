@@ -769,6 +769,29 @@ func TestDashboardUsesTwoByThreeAgentGrid(t *testing.T) {
 	}
 }
 
+func TestPublishedJobsKeepsEveryJobButOnlyVisibleLogs(t *testing.T) {
+	now := time.Now()
+	jobs := make(map[string]JobSnapshot)
+	for i := 1; i <= 10; i++ {
+		jobs[fmt.Sprintf("o/r#%d", i)] = JobSnapshot{Number: i, Target: "o/r", Status: "active", Started: now.Add(time.Duration(i) * time.Minute), Log: strings.Repeat("output\n", 1000)}
+	}
+	list := publishedJobs(jobs)
+	if len(list) != 10 {
+		t.Fatalf("published %d jobs, want all 10", len(list))
+	}
+	for i, job := range list {
+		if want := 10 - i; job.Number != want {
+			t.Fatalf("job %d = #%d, want #%d (newest first)", i, job.Number, want)
+		}
+		if visible := i < maxVisibleJobs; visible != (job.Log != "") {
+			t.Fatalf("job #%d at %d published Log %q; only the first %d should keep it", job.Number, i, len(job.Log), maxVisibleJobs)
+		}
+	}
+	if jobs["o/r#1"].Log == "" {
+		t.Fatal("publishedJobs cleared the Log on the running job itself")
+	}
+}
+
 func TestJobAgentSummary(t *testing.T) {
 	cases := []struct {
 		name string

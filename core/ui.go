@@ -65,7 +65,10 @@ type Snapshot struct {
 	TokenLimit int
 	Quota      string
 	Quotas     map[string]string
-	Jobs       []JobSnapshot
+	// Jobs holds every in-flight job, but only the first VisibleJobs carry
+	// their Log. The dashboards draw just those first VisibleJobs (issue #714).
+	Jobs        []JobSnapshot
+	VisibleJobs int
 }
 
 // UIReporter receives the published state of a run.

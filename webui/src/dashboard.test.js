@@ -23,6 +23,7 @@ import {
 	submitRestart,
 	submitSettings,
 	toggleActiveModel,
+	visibleJobs,
 } from "./dashboard";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -129,6 +130,27 @@ describe("jobWaitLabel", () => {
 
 	it("leaves out what the snapshot does not carry", () => {
 		expect(jobWaitLabel({ WakeAt: "0001-01-01T00:00:00Z" })).toBe("waiting");
+	});
+});
+
+describe("visibleJobs", () => {
+	const jobs = Array.from({ length: 10 }, (_, i) => ({ Number: i + 1 }));
+
+	it("draws only the first VisibleJobs of every published job", () => {
+		expect(
+			visibleJobs({ Jobs: jobs, VisibleJobs: 6 }).map((job) => job.Number),
+		).toEqual([1, 2, 3, 4, 5, 6]);
+	});
+
+	it("draws every job when there are fewer than VisibleJobs", () => {
+		expect(visibleJobs({ Jobs: jobs.slice(0, 3), VisibleJobs: 6 })).toEqual(
+			jobs.slice(0, 3),
+		);
+	});
+
+	it("draws every job when no limit is published", () => {
+		expect(visibleJobs({ Jobs: jobs })).toEqual(jobs);
+		expect(visibleJobs({})).toEqual([]);
 	});
 });
 

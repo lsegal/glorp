@@ -33,6 +33,7 @@ import {
 	submitRestart,
 	submitSettings,
 	toggleActiveModel,
+	visibleJobs,
 } from "./dashboard";
 import "./index.css";
 
@@ -605,8 +606,8 @@ function App() {
 			{settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 			<StatusBar snapshot={snapshot} connected={connected} />
 			<section className="job-grid" aria-label="Agent jobs">
-				{(snapshot.Jobs || []).length ? (
-					snapshot.Jobs.map((job) => (
+				{visibleJobs(snapshot).length ? (
+					visibleJobs(snapshot).map((job) => (
 						<JobCard key={`${job.Target}#${job.Number}`} job={job} />
 					))
 				) : (
