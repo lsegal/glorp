@@ -136,6 +136,33 @@ func TestOriginatingWorkStateReadsPullRequestDraftStatus(t *testing.T) {
 	}
 }
 
+// A same-repo pull request keeps being matched by the plain #N closing form,
+// even when the timeline event names its repository (issue #728).
+func TestOriginatingWorkStateRecognizesSameRepoPlainReference(t *testing.T) {
+	for _, fullName := range []string{"owner/repo", "Owner/Repo"} {
+		t.Run(fullName, func(t *testing.T) {
+			responses := [][]byte{
+				[]byte(`{"state":"OPEN"}`),
+				[]byte(`[{"event":"cross-referenced","source":{"issue":{"number":9,"body":"Fixes #7","repository":{"full_name":"` + fullName + `"},"pull_request":{}}}}]`),
+				[]byte(`{"state":"open","draft":true}`),
+			}
+			var calls [][]string
+			gh := GHCLI{runCommand: func(_ context.Context, args ...string) ([]byte, error) {
+				calls = append(calls, append([]string(nil), args...))
+				return responses[len(calls)-1], nil
+			}}
+			state, err := gh.OriginatingWorkState(context.Background(), "owner/repo", 7)
+			want := PullRequestWorkState{Repository: fullName, Number: 9, State: "open", IsDraft: true}
+			if err != nil || len(state.PullRequests) != 1 || state.PullRequests[0] != want {
+				t.Fatalf("OriginatingWorkState() = (%#v, %v), want pull request %#v", state, err, want)
+			}
+			if len(calls) != 3 || !reflect.DeepEqual(calls[2], []string{"api", "repos/" + fullName + "/pulls/9"}) {
+				t.Fatalf("calls = %#v, want the pull request read from its own repo with no visibility probe", calls)
+			}
+		})
+	}
+}
+
 func TestOriginatingWorkStateRecognizesCrossRepoPullRequest(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -201,6 +228,10 @@ func TestClosesIssue(t *testing.T) {
 		want           bool
 	}{
 		{body: "Closes #7", pullRepo: "owner/repo", want: true},
+		{body: "Fix it.\n\nfixes #7", pullRepo: "owner/repo", want: true},
+		{body: "Resolved #7", pullRepo: "Owner/Repo", want: true},
+		{body: "Closes #70", pullRepo: "owner/repo", want: false},
+		{body: "See #7", pullRepo: "owner/repo", want: false},
 		{body: "fixes: owner/repo#7", pullRepo: "owner/repo", want: true},
 		{body: "Closes #7", pullRepo: "fork/repo", want: false},
 		{body: "Closes owner/repo#7", pullRepo: "fork/repo", want: true},
