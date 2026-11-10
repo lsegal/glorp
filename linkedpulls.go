@@ -92,7 +92,7 @@ func (l *linkedPullRequests) repos() []string {
 
 // linkedPullRequestRecorder is a WorkClosureChecker that records the linked
 // pull requests of every issue state it reads, so every check glorp already
-// makes on active, parked, and completed work keeps the derived watch current.
+// makes on active, paused, and completed work keeps the derived watch current.
 type linkedPullRequestRecorder struct {
 	WorkClosureChecker
 	linked *linkedPullRequests
