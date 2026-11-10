@@ -1920,6 +1920,14 @@ func (w *Glorp) Run(ctx context.Context) error {
 	stopping := make(map[string]bool)
 	directMentions := make(map[string]bool)
 	mentions := newMentionScan(time.Now())
+	// Every issue state read for active, parked, and completed work also
+	// keeps the derived watch on its linked pull requests current (issue
+	// #723).
+	closureChecker = recordLinkedPullRequests(closureChecker, mentions.linked)
+	// webhookRepos are the repositories configured with webhooks when the
+	// watch started. A linked pull request anywhere else delivers nothing, so
+	// push mode scans it on each poll instead.
+	webhookRepos := mentionScanRepos(targets, nil)
 	workFinished := make(chan struct{}, 1)
 	jobs := make(map[string]JobSnapshot)
 	issueCounts := make(map[string]int)
@@ -2009,6 +2017,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 		// (issue #689).
 		if !w.UseWebhooks && w.Mentions != nil {
 			w.scanDirectMentions(ctx, mentions, mentionScanRepos(targets, issues), observed, directMentions)
+		} else if w.Mentions != nil {
+			w.scanLinkedPullRequests(ctx, mentions, webhookRepos, observed, directMentions)
 		}
 		// pauseJob shows paused work on the dashboards, apart from both active
 		// and completed work (issue #732).
@@ -3150,6 +3160,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					}
 				}
 				keys := webhookMentionKeys(event)
+				if event.OnPullRequest {
+					keys = mentions.linkedIssueKeys(event.Repository, event.IssueNumber, keys)
+				}
 				if !authorized && kind == ConversationComment {
 					w.logf("issue #%d ignoring direct mention of instance %s: not the last comment or not from an allowed commenter", event.IssueNumber, w.Identity)
 				} else if !authorized {
@@ -3185,6 +3198,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d ignoring comment mentioning %s: not found on GitHub", event.IssueNumber, w.SelfLogin)
 				} else {
 					keys := webhookMentionKeys(event)
+					if event.OnPullRequest {
+						keys = mentions.linkedIssueKeys(event.Repository, event.IssueNumber, keys)
+					}
 					if slices.ContainsFunc(keys, func(key string) bool { return !observed[key] }) {
 						if err := poll(nil); err != nil && ctx.Err() == nil {
 							reportPollError("comment-recheck", err)
