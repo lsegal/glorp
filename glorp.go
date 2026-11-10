@@ -1918,6 +1918,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 		for target, count := range issueCounts {
 			counts[target] = count
 		}
+		parked := 0
+		for _, job := range jobs {
+			if job.Status == "parked" {
+				parked++
+			}
+		}
 		polled := lastPoll
 		watched := targets
 		jobMu.Unlock()
@@ -1929,7 +1935,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if online && w.WebhookOnline != nil {
 			online = w.WebhookOnline()
 		}
-		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list, VisibleJobs: maxVisibleJobs})
+		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Parked: parked, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list, VisibleJobs: maxVisibleJobs})
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent

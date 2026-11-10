@@ -131,6 +131,16 @@ describe("jobWaitLabel", () => {
 	it("leaves out what the snapshot does not carry", () => {
 		expect(jobWaitLabel({ WakeAt: "0001-01-01T00:00:00Z" })).toBe("waiting");
 	});
+
+	it("says what parked work waits on", () => {
+		expect(
+			jobWaitLabel({
+				Status: "parked",
+				WaitReason: "its pull request waits to be merged or closed",
+				WakeAt: "0001-01-01T00:00:00Z",
+			}),
+		).toBe("parked: its pull request waits to be merged or closed");
+	});
 });
 
 describe("visibleJobs", () => {

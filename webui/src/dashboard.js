@@ -83,7 +83,7 @@ export function jobActionAvailability(status) {
 // as "waiting: CI is running, resumes at 15:04:05". The dashboard is not
 // redrawn while a job waits, so it names the time rather than counting down.
 export function jobWaitLabel(job) {
-	let label = "waiting";
+	let label = job.Status === "parked" ? "parked" : "waiting";
 	if (job.WaitReason) label += `: ${job.WaitReason}`;
 	const resumes = lastPollLabel(job.WakeAt);
 	if (resumes) label += `, resumes at ${resumes}`;
