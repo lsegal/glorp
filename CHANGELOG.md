@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.14 - 2026-11-10
+
 - Restart the work on an issue when its pull request is closed without merging after glorp's run on it already finished, not only while the run is still going (issue #729). A run that withholds its merge, such as with `--no-merge` or a do-not-merge label, ends with a ready pull request and is recorded as completed, and before this a later rejection of that pull request left the issue open and never picked up again. Each poll now checks a completed issue that is still open, and when its pull request was closed without merging, the agent is told the attempt was rejected and starts a fresh one with a new branch and pull request, exactly as for a rejection during the run. Work whose pull request merged or whose issue closed is never restarted, and glorp still does not watch pull requests waiting on human review.
 - Read every page of an issue's blockers and sub-issues before deciding whether it can be dispatched (issue #722). Before, glorp only read the first page GitHub returned, so an open blocker or sub-issue on a later page was missed and glorp could start work on an issue GitHub still considered blocked.
 - Report every in-flight job in the dashboard API's `/api/state` snapshot instead of only the first six (issue #714). Before, the published snapshot was cut to the six jobs the dashboards show, so anything reading the API could not see the rest of the work when `--concurrency` was higher. Every job is now listed with its number, target, status, session, checkout directory, agent, model, start time, and wait reason. Only the six jobs the dashboards show still carry their agent output, so the payload does not grow with the transcripts of the rest. Both dashboards still show at most six jobs.
