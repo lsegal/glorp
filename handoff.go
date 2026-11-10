@@ -399,6 +399,7 @@ func ownershipTargetFor(ctx context.Context, checker WorkClosureChecker, issue I
 		if pullRequest.Merged || strings.EqualFold(pullRequest.State, "closed") {
 			continue
 		}
+		target.Repo = pullRequest.RepoOr(repo)
 		target.Number = pullRequest.Number
 		target.Continue = true
 		return target

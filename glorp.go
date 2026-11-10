@@ -1108,10 +1108,11 @@ func (w *Glorp) pullRequestMentions(ctx context.Context, repo string, issue Issu
 	}
 	var mentioned []int
 	for _, pullRequest := range pullRequests {
-		if pullRequest.Number <= 0 || pullRequest.Number == issue.Number {
+		if pullRequest.Number <= 0 || (pullRequest.Number == issue.Number && pullRequest.InRepo(repo)) {
 			continue
 		}
-		comments, err := w.Comments.ListComments(ctx, repo, pullRequest.Number)
+		pullRepo := pullRequest.RepoOr(repo)
+		comments, err := w.Comments.ListComments(ctx, pullRepo, pullRequest.Number)
 		if err != nil {
 			if ctx.Err() == nil {
 				w.logf("issue #%d pull request #%d comment check failed: %v", issue.Number, pullRequest.Number, err)
@@ -1119,7 +1120,7 @@ func (w *Glorp) pullRequestMentions(ctx context.Context, repo string, issue Issu
 			continue
 		}
 		if lister, ok := w.Comments.(ReviewCommentLister); ok {
-			reviews, err := lister.ListReviewComments(ctx, repo, pullRequest.Number)
+			reviews, err := lister.ListReviewComments(ctx, pullRepo, pullRequest.Number)
 			if err != nil {
 				if ctx.Err() == nil {
 					w.logf("issue #%d pull request #%d review check failed: %v", issue.Number, pullRequest.Number, err)
@@ -1316,12 +1317,19 @@ func rejectedPullRequest(previous, current OriginatingWorkState) (int, string) {
 	if strings.EqualFold(current.IssueState, "closed") {
 		return 0, ""
 	}
-	previousPullRequests := make(map[int]PullRequestWorkState, len(previous.PullRequests))
+	type pullRequestKey struct {
+		repo   string
+		number int
+	}
+	keyOf := func(pullRequest PullRequestWorkState) pullRequestKey {
+		return pullRequestKey{strings.ToLower(pullRequest.Repository), pullRequest.Number}
+	}
+	previousPullRequests := make(map[pullRequestKey]PullRequestWorkState, len(previous.PullRequests))
 	for _, pullRequest := range previous.PullRequests {
-		previousPullRequests[pullRequest.Number] = pullRequest
+		previousPullRequests[keyOf(pullRequest)] = pullRequest
 	}
 	for _, pullRequest := range current.PullRequests {
-		old, existed := previousPullRequests[pullRequest.Number]
+		old, existed := previousPullRequests[keyOf(pullRequest)]
 		if !pullRequest.Merged && strings.EqualFold(pullRequest.State, "closed") && (!existed || !strings.EqualFold(old.State, "closed")) {
 			return pullRequest.Number, fmt.Sprintf("pull request #%d was closed without merging", pullRequest.Number)
 		}
@@ -2492,7 +2500,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					continue
 				}
 				for _, pullRequest := range state.PullRequests {
-					if pullRequest.Number != event.IssueNumber || pullRequest.Merged || strings.EqualFold(pullRequest.State, "closed") {
+					if pullRequest.Number != event.IssueNumber || !pullRequest.InRepo(event.Repository) || pullRequest.Merged || strings.EqualFold(pullRequest.State, "closed") {
 						continue
 					}
 					owned = true
@@ -3608,7 +3616,8 @@ func (w *Glorp) stackableOnDependency(ctx context.Context, checker WorkClosureCh
 		return 0, false
 	}
 	for _, pullRequest := range state.PullRequests {
-		if strings.EqualFold(pullRequest.State, "open") && !pullRequest.Merged {
+		// Only a pull request in this repository can be a stacking base.
+		if pullRequest.InRepo(repo) && strings.EqualFold(pullRequest.State, "open") && !pullRequest.Merged {
 			return pullRequest.Number, true
 		}
 	}
