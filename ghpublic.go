@@ -121,20 +121,22 @@ func (g GHCLI) dependencyIssueView(ctx context.Context, public bool, repo string
 
 // apiGETPaginated mirrors `gh api PATH --paginate`: it follows RFC 5988
 // Link: rel="next" headers and concatenates each page's JSON array into one.
-func (g GHCLI) apiGETPaginated(ctx context.Context, public bool, path string) ([]byte, error) {
+// extraGHArgs are passed only to the `gh api` fallback, as with apiGET.
+func (g GHCLI) apiGETPaginated(ctx context.Context, public bool, path string, extraGHArgs ...string) ([]byte, error) {
+	ghArgs := append([]string{"api", path, "--paginate"}, extraGHArgs...)
 	if !public {
-		return g.run(ctx, "api", path, "--paginate")
+		return g.run(ctx, ghArgs...)
 	}
 	requestURL := "https://api.github.com/" + path
 	var all []json.RawMessage
 	for requestURL != "" {
 		body, header, status, err := g.publicGET(ctx, requestURL)
 		if err != nil || status < 200 || status >= 300 {
-			return g.run(ctx, "api", path, "--paginate")
+			return g.run(ctx, ghArgs...)
 		}
 		var page []json.RawMessage
 		if err := json.Unmarshal(body, &page); err != nil {
-			return g.run(ctx, "api", path, "--paginate")
+			return g.run(ctx, ghArgs...)
 		}
 		all = append(all, page...)
 		requestURL = nextPageURL(header.Get("Link"))
