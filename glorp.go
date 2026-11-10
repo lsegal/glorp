@@ -416,6 +416,19 @@ func (w *Glorp) handleJobAction(ctx context.Context, action jobAction) error {
 	}
 }
 
+// awaitStoppedRun replies to a stop or retry request from the web UI once the
+// run it cancelled has exited, so the request does not report success while
+// the agent is still writing, pushing, or posting (issue #719).
+func (w *Glorp) awaitStoppedRun(ctx context.Context, number int, exited <-chan struct{}, done chan<- error) {
+	select {
+	case <-exited:
+		w.logf("issue #%d stopped from web UI; its agent has exited", number)
+		done <- nil
+	case <-ctx.Done():
+		done <- fmt.Errorf("job is still stopping: %w", ctx.Err())
+	}
+}
+
 func (w *Glorp) periodicPollInterval() time.Duration {
 	if w.UseWebhooks {
 		if w.fallbackInterval > 0 {
@@ -1776,6 +1789,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// (issue #469). The delivery is only a nudge: what actually interrupts the
 	// run is still read back from GitHub.
 	nudges := make(map[string]chan struct{})
+	// runExits is closed once a run's goroutine has finished, after its agent
+	// process has exited and its bookkeeping is saved, so a stop from the web
+	// UI can wait for that instead of replying as soon as it cancels. stopping
+	// reserves an issue between the stop request and that exit, so no poll
+	// dispatches a second run beside the one still unwinding (issue #719).
+	runExits := make(map[string]chan struct{})
+	stopping := make(map[string]bool)
 	directMentions := make(map[string]bool)
 	mentions := newMentionScan(time.Now())
 	workFinished := make(chan struct{}, 1)
@@ -1913,12 +1933,19 @@ func (w *Glorp) Run(ctx context.Context) error {
 				w.logf("issue #%d reset stale local %s state", issue.Number, staleStatus)
 			}
 			_, isActive := active[key]
+			isStopping := stopping[key]
 			wasActive := work[key].Status == "active"
 			wasFailed := work[key].Status == "failed"
 			wasCompleted := work[key].Status == "completed"
 			resumable := work[key].SessionID != "" && work[key].Agent != ""
 			nudge := nudges[key]
 			workMu.Unlock()
+			if isStopping {
+				// A mention stays queued too, and is dispatched by the poll
+				// that follows the stopped run's exit.
+				w.logf("issue #%d not picked up: its stopped run is still exiting", issue.Number)
+				continue
+			}
 			if directMention && isActive {
 				if resumable {
 					// The run's watcher reads the issue and the pull requests it
@@ -2132,9 +2159,21 @@ func (w *Glorp) Run(ctx context.Context) error {
 				}()
 				key := issueKey(i)
 				nudge := make(chan struct{}, 1)
+				exited := make(chan struct{})
 				workMu.Lock()
 				nudges[key] = nudge
+				runExits[key] = exited
 				workMu.Unlock()
+				// Registered after workFinished so the reservation is gone
+				// before the dispatch loop hears the run finished and polls,
+				// which is what reruns a retry.
+				defer func() {
+					workMu.Lock()
+					delete(runExits, key)
+					delete(stopping, key)
+					workMu.Unlock()
+					close(exited)
+				}()
 				defer func() {
 					workMu.Lock()
 					delete(nudges, key)
@@ -2639,7 +2678,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 					continue
 				}
 				workMu.Lock()
-				cancel := cancellations[key]
+				cancel, exited := cancellations[key], runExits[key]
+				if cancel != nil {
+					stopping[key] = true
+				}
 				workMu.Unlock()
 				if cancel == nil {
 					request.done <- fmt.Errorf("job is not running")
@@ -2652,12 +2694,18 @@ func (w *Glorp) Run(ctx context.Context) error {
 				jobMu.Unlock()
 				publish()
 				cancel(errWorkStoppedFromWebUI)
-				request.done <- nil
+				// Cancelling only signals the agent, so the reply waits for
+				// the run to exit, off the dispatch loop so it keeps serving
+				// everything else meanwhile (issue #719).
+				go w.awaitStoppedRun(ctx, action.Number, exited, request.done)
 			case "retry":
 				switch job.Status {
 				case "active", "waiting":
 					workMu.Lock()
-					cancel := cancellations[key]
+					cancel, exited := cancellations[key], runExits[key]
+					if cancel != nil {
+						stopping[key] = true
+					}
 					workMu.Unlock()
 					if cancel == nil {
 						request.done <- fmt.Errorf("job is not running")
@@ -2671,7 +2719,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					jobMu.Unlock()
 					publish()
 					cancel(errWorkStoppedFromWebUI)
-					request.done <- nil
+					go w.awaitStoppedRun(ctx, action.Number, exited, request.done)
 				case "failed", "complete":
 					w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
 					workMu.Lock()
