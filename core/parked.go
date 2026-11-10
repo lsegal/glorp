@@ -1,0 +1,171 @@
+package core
+
+import (
+	"fmt"
+	"strings"
+)
+
+// The kinds of parked work (issue #732). Parked work is out of the dispatch
+// queue and holds no agent slot. It waits on one GitHub terminal event (a
+// merge or a close) and goes back into the queue through the normal claim path
+// when that event happens. Review activity never wakes it.
+const (
+	// ParkedBlocked is an issue waiting for the open issues it depends on to
+	// close.
+	ParkedBlocked = "blocked"
+	// ParkedStacked is a ready pull request stacked on its blocker's branch,
+	// waiting for the blocker's pull request to merge or close (issue #659).
+	ParkedStacked = "stacked"
+	// ParkedPullRequest is a finished run whose ready pull request is held
+	// for a human to merge (a DONOTMERGE directive). It waits for that pull
+	// request to merge, which completes the work, or to close unmerged, which
+	// restarts it fresh (issues #690, #729).
+	ParkedPullRequest = "pull-request"
+)
+
+// ParkedWork is the one record every kind of parked work shares: what kind it
+// is, the issues it waits on, and the pull requests it left behind. The record
+// only saves work; whether it wakes is always read back from GitHub.
+type ParkedWork struct {
+	Kind string `json:"kind"`
+	// WaitingOn lists the open issues the work is blocked by.
+	WaitingOn []int `json:"waitingOn,omitempty"`
+	// PullRequests lists the work's own open pull requests.
+	PullRequests []int `json:"pullRequests,omitempty"`
+}
+
+// ParkedWake is what a parked record's wake check decided.
+type ParkedWake int
+
+const (
+	// ParkedStay leaves the work parked.
+	ParkedStay ParkedWake = iota
+	// ParkedResume puts the work back in the queue to pick it back up.
+	ParkedResume
+	// ParkedRestart puts the work back in the queue to start over, because
+	// its pull request was closed without merging.
+	ParkedRestart
+	// ParkedComplete ends the work: its pull request merged or its issue
+	// closed.
+	ParkedComplete
+)
+
+// ParkedCheck is the GitHub state a wake check reads. Issue is the issue as
+// the poll listed it. Own is the state of the issue's own pull requests, and
+// Blockers holds the state of each issue it waits on. A state that could not
+// be read is left out, and a check never wakes on missing state.
+type ParkedCheck struct {
+	Issue    Issue
+	Own      *OriginatingWorkState
+	Blockers map[int]OriginatingWorkState
+}
+
+// OpenDependencies returns the numbers of the issues issue depends on that
+// are not closed.
+func OpenDependencies(issue Issue) []int {
+	var open []int
+	for _, dependency := range issue.DependsOn {
+		if !strings.EqualFold(dependency.State, "closed") {
+			open = append(open, dependency.Number)
+		}
+	}
+	return open
+}
+
+// OpenPullRequests returns the numbers of the open, unmerged pull requests in
+// state.
+func OpenPullRequests(state OriginatingWorkState) []int {
+	var open []int
+	for _, pullRequest := range state.PullRequests {
+		if strings.EqualFold(pullRequest.State, "open") && !pullRequest.Merged {
+			open = append(open, pullRequest.Number)
+		}
+	}
+	return open
+}
+
+// WakeParked decides whether parked work wakes, and why. It only reads GitHub
+// terminal state: issue and pull request open, closed, and merged. Reviews,
+// review comments, and approvals are not part of the input, so they can never
+// wake parked work. Every instance that reads the same GitHub state decides
+// the same thing.
+func WakeParked(parked ParkedWork, check ParkedCheck) (ParkedWake, string) {
+	if strings.EqualFold(check.Issue.State, "closed") || (check.Own != nil && strings.EqualFold(check.Own.IssueState, "closed")) {
+		return ParkedComplete, fmt.Sprintf("issue #%d was closed", check.Issue.Number)
+	}
+	if check.Own != nil {
+		for _, pullRequest := range check.Own.PullRequests {
+			if pullRequest.Merged {
+				return ParkedComplete, fmt.Sprintf("pull request #%d merged", pullRequest.Number)
+			}
+		}
+	}
+	switch parked.Kind {
+	case ParkedBlocked:
+		if blocked, reason := IssueBlocked(check.Issue); blocked {
+			return ParkedStay, reason
+		}
+		return ParkedResume, "its blockers are closed"
+	case ParkedPullRequest:
+		if check.Own == nil {
+			return ParkedStay, "waiting for its pull request to merge"
+		}
+		if number, reason := RejectedPullRequest(*check.Own); number > 0 {
+			return ParkedRestart, reason
+		}
+		open := OpenPullRequests(*check.Own)
+		if len(open) == 0 {
+			return ParkedStay, "waiting for its pull request to merge"
+		}
+		return ParkedStay, fmt.Sprintf("its pull request %s waits to merge", formatNumbers(open))
+	default:
+		// Stacked, including records written before parked work had a kind.
+		blocked, reason := IssueBlocked(check.Issue)
+		if !blocked {
+			return ParkedResume, "its blocker is no longer open"
+		}
+		if check.Own != nil {
+			if number, rejected := RejectedPullRequest(*check.Own); number > 0 {
+				return ParkedRestart, rejected
+			}
+		}
+		for _, number := range OpenDependencies(check.Issue) {
+			state, ok := check.Blockers[number]
+			if ok && len(state.PullRequests) > 0 && len(OpenPullRequests(state)) == 0 {
+				return ParkedResume, fmt.Sprintf("its blocker #%d no longer has an open pull request", number)
+			}
+		}
+		return ParkedStay, reason + "; its stacked pull request waits for that to merge"
+	}
+}
+
+// RejectedPullRequest reports the pull request closed without merging that
+// rejects the work on an open issue: none of its pull requests is open or
+// merged, and at least one was closed unmerged. A closed issue or a merged
+// pull request means the work is done and is never restarted.
+func RejectedPullRequest(state OriginatingWorkState) (int, string) {
+	if strings.EqualFold(state.IssueState, "closed") {
+		return 0, ""
+	}
+	rejected := 0
+	for _, pullRequest := range state.PullRequests {
+		if pullRequest.Merged || strings.EqualFold(pullRequest.State, "open") {
+			return 0, ""
+		}
+		if strings.EqualFold(pullRequest.State, "closed") && pullRequest.Number > rejected {
+			rejected = pullRequest.Number
+		}
+	}
+	if rejected == 0 {
+		return 0, ""
+	}
+	return rejected, fmt.Sprintf("pull request #%d was closed without merging", rejected)
+}
+
+func formatNumbers(numbers []int) string {
+	refs := make([]string, len(numbers))
+	for i, number := range numbers {
+		refs[i] = fmt.Sprintf("#%d", number)
+	}
+	return strings.Join(refs, ", ")
+}

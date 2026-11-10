@@ -398,15 +398,19 @@ func (m dashboard) View() string {
 		if status == "waiting" {
 			indicator = "⏸"
 		}
+		if status == "parked" {
+			indicator = "⧗"
+		}
 		cardWidth := jobCardWidth(m.width)
 		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
 		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
 		metadataWidth := max(1, cardWidth-2)
 		checkout := muted.Render(truncate("checkout: "+job.CheckoutDirectory, metadataWidth))
 		session := muted.Render(truncate("session: "+job.SessionID, metadataWidth))
-		if status == "waiting" {
-			// A waiting job says what it waits for and when it resumes in
-			// place of its session line, so the card keeps its height.
+		if status == "waiting" || status == "parked" {
+			// A waiting or parked job says what it waits for (and when it
+			// resumes) in place of its session line, so the card keeps its
+			// height.
 			session = muted.Render(truncate(jobWaitLabel(job, time.Now()), metadataWidth))
 		}
 		agent := muted.Render(truncate("agent: "+jobAgentSummary(job), metadataWidth))
@@ -593,16 +597,23 @@ func deliveryText(snapshot GlorpSnapshot) string {
 func renderJobCounts(snapshot GlorpSnapshot) string {
 	idle := max(0, snapshot.Concurrency-snapshot.Running-snapshot.Queued)
 	activeJobs := snapshot.Running + snapshot.Queued
-	total := snapshot.Completed + snapshot.Failed + activeJobs
+	total := snapshot.Completed + snapshot.Failed + snapshot.Parked + activeJobs
+	// Parked work is neither active nor completed (issue #732), so it gets
+	// its own count, shown only while there is some.
+	parked := ""
+	if snapshot.Parked > 0 {
+		parked = idleCountStyle.Render(fmt.Sprint(snapshot.Parked)) + countLabelStyle.Render(" parked ")
+	}
 	// Render every visible character with the cell background. A nested
 	// Lipgloss span resets its parent style when it ends, so relying on an
 	// outer background leaves the labels between colored counts unpainted.
-	return fmt.Sprintf("%s%s%s%s%s%s%s",
+	return fmt.Sprintf("%s%s%s%s%s%s%s%s",
 		countLabelStyle.Render(" jobs: "),
 		idleCountStyle.Render(fmt.Sprint(idle)),
 		countLabelStyle.Render(" idle "),
 		activeCountStyle.Render(fmt.Sprint(activeJobs)),
 		countLabelStyle.Render(" active "),
+		parked,
 		totalCountStyle.Render(fmt.Sprint(total)),
 		countLabelStyle.Render(" total "),
 	)

@@ -9,6 +9,7 @@ import {
 	Activity,
 	Check,
 	Circle,
+	CirclePause,
 	Clock,
 	Cpu,
 	FolderGit2,
@@ -119,6 +120,8 @@ function JobIcon({ status }) {
 		return <Activity className="status-icon active" aria-label="active" />;
 	if (status === "waiting")
 		return <Clock className="status-icon waiting" aria-label="waiting" />;
+	if (status === "parked")
+		return <CirclePause className="status-icon parked" aria-label="parked" />;
 	return <Circle className="status-icon queued" aria-label="queued" />;
 }
 
@@ -154,7 +157,7 @@ function JobCard({ job }) {
 			<div className="meta" title={jobAgentSummary(job)}>
 				<Cpu /> agent: {jobAgentSummary(job)}
 			</div>
-			{job.Status === "waiting" && (
+			{(job.Status === "waiting" || job.Status === "parked") && (
 				<div className="meta" title={jobWaitLabel(job)}>
 					<Clock /> {jobWaitLabel(job)}
 				</div>
@@ -201,7 +204,9 @@ function formatQuotas(snapshot) {
 function StatusBar({ snapshot, connected }) {
 	const active = (snapshot.Running || 0) + (snapshot.Queued || 0);
 	const idle = Math.max(0, (snapshot.Concurrency || 0) - active);
-	const total = (snapshot.Completed || 0) + (snapshot.Failed || 0) + active;
+	const parked = snapshot.Parked || 0;
+	const total =
+		(snapshot.Completed || 0) + (snapshot.Failed || 0) + parked + active;
 	const delivery = deliveryLabel(snapshot);
 	const targets = (snapshot.Targets || [])
 		.map(
@@ -216,6 +221,11 @@ function StatusBar({ snapshot, connected }) {
 			<div className="status-cell jobs">
 				jobs: <span className="idle">{idle}</span> idle{" "}
 				<span className="active-text">{active}</span> active{" "}
+				{parked > 0 && (
+					<>
+						<span className="idle">{parked}</span> parked{" "}
+					</>
+				)}
 				<span className="total">{total}</span> total
 			</div>
 			<div className="status-cell quota">quota: {formatQuotas(snapshot)}</div>

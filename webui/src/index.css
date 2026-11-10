@@ -193,6 +193,9 @@ h1 .version {
 .status-icon.waiting {
 	color: #fbbf24;
 }
+.status-icon.parked {
+	color: #a78bfa;
+}
 .status-icon.queued {
 	color: var(--muted);
 }
