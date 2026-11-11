@@ -373,9 +373,7 @@ func checkpointCheckout(ctx context.Context, git checkpointGit, run checkpointRu
 	}
 	result.Outcome = checkpointPushed
 	if committed {
-		result.Detail = "committed uncommitted changes and pushed " + branch
-	} else {
-		result.Detail = "pushed " + branch
+		result.Detail = "uncommitted changes committed as a shutdown checkpoint"
 	}
 	return result
 }

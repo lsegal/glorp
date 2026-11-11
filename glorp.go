@@ -186,7 +186,12 @@ type Glorp struct {
 	// never polled.
 	Discussions DiscussionSource
 	Runner      AgentRunner
-	Out         io.Writer
+	// Active is the shutdown checkpoint's record of active runs (issue
+	// #741). The runner records runs whose agent is running; the run loop
+	// adds runs waiting out a scheduled wakeup, which have a checkout but no
+	// agent process. Nil records nothing.
+	Active *activeAgents
+	Out    io.Writer
 	// fallbackInterval overrides the push-mode polling fallback in tests.
 	fallbackInterval time.Duration
 	// closureInterval overrides active-work closure polling in tests.
@@ -2557,7 +2562,12 @@ func (w *Glorp) Run(ctx context.Context) error {
 						delay := w.wakeupDelay(*pending)
 						setWaiting("active", "waiting", pending.Reason, time.Now().Add(delay))
 						fmt.Fprintf(jobOutput, "Waiting %s for the scheduled wakeup before resuming the session.\n", formatWakeupDelay(delay))
+						jobMu.Lock()
+						waitingCheckout := jobs[key].CheckoutDirectory
+						jobMu.Unlock()
+						waitingRun := w.Active.add(i, waitingCheckout)
 						due, closed := w.awaitWakeup(runCtx, closureChecker, i, delay)
+						w.Active.remove(waitingRun)
 						setWaiting("waiting", "active", "", time.Time{})
 						if closed {
 							w.logf("issue #%d closed while its agent waited for a scheduled wakeup; cancelling the wakeup", i.Number)

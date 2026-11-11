@@ -344,3 +344,39 @@ func TestRunnerTracksActiveAgentForCheckpoint(t *testing.T) {
 		t.Fatalf("tracked runs after exit = %+v, want none", runs)
 	}
 }
+
+func (a *activeAgents) trackedNumbers() []int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var numbers []int
+	for run := range a.runs {
+		numbers = append(numbers, run.issue.Number)
+	}
+	return numbers
+}
+
+// A run waiting out a scheduled wakeup has no agent process but still has a
+// checkout, so the shutdown checkpoint covers it too.
+func TestGlorpTracksRunWaitingOnWakeupForCheckpoint(t *testing.T) {
+	runner := &wakeupRunner{
+		sessions: make(chan AgentSession, 4),
+		wakeups:  []*scheduledWakeup{{Delay: time.Hour, Prompt: "check CI", Reason: "watching CI run"}},
+	}
+	h := startWakeupHarness(t, runner, time.Hour)
+	waitForSession(t, runner.sessions)
+	waitForJobStatus(t, h.reporter, 7, "waiting")
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.w.Active.trackedNumbers()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := h.w.Active.trackedNumbers(); len(got) != 1 || got[0] != 7 {
+		t.Fatalf("tracked runs while waiting = %v, want issue #7", got)
+	}
+	if err := h.w.handleJobAction(h.ctx, jobAction{Action: "stop", Target: "o/r", Number: 7}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	waitForJobStatus(t, h.reporter, 7, "failed")
+	if got := h.w.Active.trackedNumbers(); len(got) != 0 {
+		t.Fatalf("tracked runs after stop = %v, want none", got)
+	}
+}
