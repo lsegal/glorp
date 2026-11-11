@@ -128,12 +128,26 @@ export async function submitRefresh() {
 
 // submitRestart asks the daemon to shut down and start again with the same
 // command line (issue #665). The dashboard shows "reconnecting" while it is
-// down and picks the new instance up on the same port once it is back.
+// down and picks the new instance up on the same port once it is back. The
+// daemon first pushes every active run's work as a shutdown checkpoint (issue
+// #741) and answers with each run's outcome, which this returns.
 export async function submitRestart() {
 	const response = await fetch("/api/restart", { method: "POST" });
 	if (!response.ok) {
 		throw new Error((await response.text()) || `HTTP ${response.status}`);
 	}
+	const body = await response.json().catch(() => ({}));
+	return Array.isArray(body?.Checkpoints) ? body.Checkpoints : [];
+}
+
+// checkpointLines describes each run's shutdown checkpoint outcome as one line
+// of text, in the order the daemon reported them.
+export function checkpointLines(checkpoints) {
+	return (checkpoints || []).map((checkpoint) => {
+		const branch = checkpoint.Branch ? ` (${checkpoint.Branch})` : "";
+		const detail = checkpoint.Detail ? `: ${checkpoint.Detail}` : "";
+		return `${checkpoint.Target}#${checkpoint.Number}${branch} ${checkpoint.Outcome}${detail}`;
+	});
 }
 
 export function parseAllowedCommenters(text) {

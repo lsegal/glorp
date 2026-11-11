@@ -217,7 +217,14 @@ func runWatch(args []string) (code int) {
 		}
 		code = relaunch(os.Stderr)
 	}()
-	ctx, stop := process.ShutdownContext()
+	// Every active run's work is committed and pushed before glorp stops its
+	// agents (issue #741). The shutdown signals and the restart button share
+	// this one checkpointer, so both take the same checkpoint, once.
+	activeRuns := &activeAgents{}
+	checkpointer := newShutdownCheckpointer(activeRuns, func(format string, args ...interface{}) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	})
+	ctx, stop := process.ShutdownContext(func() { checkpointer.Checkpoint() })
 	defer stop()
 	ctx, requestShutdown := context.WithCancel(ctx)
 	defer requestShutdown()
@@ -334,7 +341,7 @@ func runWatch(args []string) (code int) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	runner := CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, AgentBinaries: agentBinaries.values(), Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, NoMerge: noMerge, NoChangelog: noChangelog, Definitions: registry, agentCursor: agentCursor}
+	runner := CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, AgentBinaries: agentBinaries.values(), Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, NoMerge: noMerge, NoChangelog: noChangelog, Definitions: registry, agentCursor: agentCursor, Active: activeRuns}
 	// Quota commands are run through the same executable the agent itself is
 	// invoked with, so --agent-binary points both at the same install.
 	quota := combinedQuotaReader(namedQuotaReaders(registry, agentSpecs.names(), runner.binary))
@@ -342,7 +349,8 @@ func runWatch(args []string) (code int) {
 	if webUI != nil {
 		webUIURL = webui.URL(bind, webPort)
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, SelfLogin: selfLogin, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Registry: registry, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, SelfLogin: selfLogin, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Active: activeRuns, Registry: registry, Out: wOut}
+	checkpointer.SetLog(w.logf)
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
@@ -356,7 +364,7 @@ func runWatch(args []string) (code int) {
 			w.nudgePoll()
 			return nil
 		}
-		restartHandler := newRestartHandler(&restartRequested, requestShutdown, w.logf)
+		restartHandler := newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
@@ -451,7 +459,7 @@ func runWatch(args []string) (code int) {
 // starts accepting connections: a request that lands in the gap sees the
 // handler as unset and gets a spurious "unavailable" response, which the
 // settings modal has no retry for and so is left stuck (issue #571).
-func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, bind string, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error), refreshHandler func(context.Context) error, restartHandler func(context.Context) error) {
+func startWebUI(webUI *webui.Server, webServer *http.Server, listener net.Listener, bind string, port int, output io.Writer, jobActionHandler func(context.Context, core.JobAction) error, settingsHandler func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error), agentsHandler func(context.Context) ([]core.AgentStatus, error), refreshHandler func(context.Context) error, restartHandler func(context.Context) ([]core.CheckpointResult, error)) {
 	webUI.SetJobActionHandler(jobActionHandler)
 	webUI.SetSettingsHandler(settingsHandler)
 	webUI.SetAgentsHandler(agentsHandler)
@@ -1783,6 +1791,10 @@ type CommandRunner struct {
 	// round robin selection advances consistently regardless of how many
 	// times the struct is copied.
 	agentCursor *atomic.Uint64
+	// Active tracks the agents this runner has started and their checkouts,
+	// for the shutdown checkpoint (issue #741). It is shared by pointer across
+	// copies, and nil tracks nothing.
+	Active *activeAgents
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
@@ -2517,6 +2529,17 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 			cmd.Dir = session.CheckoutDirectory
 		}
 	}
+	// Record the run for the shutdown checkpoint, following the checkout the
+	// agent announces so the checkpoint commits the right directory.
+	active := r.Active.add(issue, session.CheckoutDirectory)
+	defer r.Active.remove(active)
+	if updateSession != nil && active != nil {
+		reportSession := updateSession
+		updateSession = func(update AgentSession) {
+			r.Active.setCheckout(active, update.CheckoutDirectory)
+			reportSession(update)
+		}
+	}
 	agentOutput := io.Writer(io.Discard)
 	if jobOutput != nil {
 		agentOutput = io.MultiWriter(agentOutput, jobOutput)
@@ -2569,7 +2592,11 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 		agentOutput = detector
 	}
 	cmd.Stdout, cmd.Stderr = agentOutput, agentOutput
-	runErr := process.Run(cmd)
+	runErr := process.Start(cmd)
+	if runErr == nil {
+		r.Active.started(active, cmd)
+		runErr = process.Wait(cmd)
+	}
 	if decoder != nil {
 		if err := decoder.Flush(); runErr == nil && err != nil {
 			runErr = err
