@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop `gh-fix` runs from ending "waiting on the owner" for steps they can do themselves (issue #745). Before ending a run blocked on the owner, the skill now checks whether its own GitHub access covers the step, such as cutting a tag or prerelease or dispatching a workflow. If it does, the run does the step and continues. "(owner)" headings in issue text no longer make a step owner-only unless the owner reserved it. A run that is really blocked on a person must name the exact capability or access it lacks, and runs no longer write new "(owner)" steps into follow-ups, sub-issues, or `answer-needed` questions for work an agent could do.
+
 ## v1.5.17 - 2026-11-11
 
 - Mark issues that are waiting on a person with an `answer-needed` label in `gh-fix` (issue #743). When a run cannot go on without a user's answer, or the answer would materially change the fix, the skill now posts the question on the issue if it is not already there, creates the `answer-needed` label on the repository when it is missing, applies it, and reports the issue as blocked awaiting an answer. A later run that finds a user's reply to that question removes the label and carries on with the work, and a run with no reply yet leaves it in place. Questions the agent can answer itself, and clarifying questions asked while the work continues, never add the label, and follow-up issues and sub-issues never inherit it. Before, an issue stalled on a human answer looked like any other queued issue.
