@@ -8,6 +8,7 @@ import {
 	deliveryLabel,
 	fetchAgentStatuses,
 	fetchAgentStatusesWithRetry,
+	fetchRestartProgress,
 	fetchSettings,
 	fetchSettingsWithRetry,
 	formatInterval,
@@ -231,6 +232,31 @@ describe("submitJobAction", () => {
 				number: 302,
 			}),
 		});
+	});
+});
+
+describe("fetchRestartProgress", () => {
+	it("reads each run's checkpoint while the restart waits on it", async () => {
+		const checkpoints = [
+			{ Target: "o/r", Number: 7, Outcome: "pushed" },
+			{ Target: "o/r", Number: 8, Outcome: "pending" },
+		];
+		const fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ Checkpoints: checkpoints }),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(fetchRestartProgress()).resolves.toEqual(checkpoints);
+		expect(fetch).toHaveBeenCalledWith("/api/restart");
+	});
+
+	it("is empty when the daemon reports no runs", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({}),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(fetchRestartProgress()).resolves.toEqual([]);
 	});
 });
 

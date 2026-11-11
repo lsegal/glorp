@@ -32,7 +32,16 @@ const (
 	checkpointNothing  = "nothing to push"
 	checkpointFailed   = "failed"
 	checkpointTimedOut = "timed out"
+	// checkpointPending is a run whose checkpoint is still going, as the
+	// restart reports it while the phase runs (issue #749).
+	checkpointPending = "pending"
 )
+
+// checkpointGitWaitDelay bounds how long a checkpoint git command that was
+// cancelled at its deadline may keep its output pipes open, such as through a
+// credential helper or ssh it started, before Wait gives up on them. Without
+// it a hung push held its run past the run budget (issue #749).
+const checkpointGitWaitDelay = 2 * time.Second
 
 // activeAgents tracks the agent subprocesses this instance is running and the
 // checkout each one works in, so the shutdown checkpoint knows what to pause
@@ -158,6 +167,9 @@ type shutdownCheckpointer struct {
 
 	once    sync.Once
 	results []core.CheckpointResult
+
+	progressMu sync.Mutex
+	progress   []core.CheckpointResult
 }
 
 func newShutdownCheckpointer(agents *activeAgents, logf func(string, ...interface{})) *shutdownCheckpointer {
@@ -180,33 +192,62 @@ func (s *shutdownCheckpointer) log(format string, args ...interface{}) {
 }
 
 // Checkpoint pauses every active agent, then commits and pushes each one's
-// checkout in parallel within the run and phase budgets, logging one outcome
-// per run. It always returns, whatever the remotes do.
+// checkout in parallel within the run and phase budgets, logging each run's
+// outcome as soon as it has one. It always returns, whatever the remotes do,
+// and the caller then stops the paused agents.
 func (s *shutdownCheckpointer) Checkpoint() []core.CheckpointResult {
 	s.once.Do(func() {
 		runs := s.agents.pauseAll()
 		if len(runs) == 0 {
 			return
 		}
-		s.log("shutdown checkpoint: pushing the work of %d active run(s) before stopping (up to %s)", len(runs), s.overall)
-		s.results = checkpointAll(runs, s.git, s.run, s.overall)
-		for _, result := range s.results {
-			if result.Detail != "" {
-				s.log("shutdown checkpoint: %s#%d %s: %s", result.Target, result.Number, result.Outcome, result.Detail)
-			} else {
-				s.log("shutdown checkpoint: %s#%d %s", result.Target, result.Number, result.Outcome)
-			}
+		pending := make([]core.CheckpointResult, len(runs))
+		for i, run := range runs {
+			pending[i] = core.CheckpointResult{Target: run.Target, Number: run.Number, Outcome: checkpointPending}
 		}
+		s.progressMu.Lock()
+		s.progress = pending
+		s.progressMu.Unlock()
+		s.log("shutdown checkpoint: pushing the work of %d active run(s) before stopping (up to %s)", len(runs), s.overall)
+		s.results = checkpointAll(runs, s.git, s.run, s.overall, s.report)
+		s.log("shutdown checkpoint: finished; stopping the agents")
 	})
 	return s.results
 }
 
-// checkpointAll checkpoints every run concurrently. A run still going when
-// the overall budget ends is reported as timed out and left behind; its git
+// report records and logs one run's outcome as it arrives, so a restart
+// that takes a while shows which runs are done and which are still going.
+func (s *shutdownCheckpointer) report(i int, result core.CheckpointResult) {
+	s.progressMu.Lock()
+	if i < len(s.progress) {
+		s.progress[i] = result
+	}
+	s.progressMu.Unlock()
+	if result.Detail != "" {
+		s.log("shutdown checkpoint: %s#%d %s: %s", result.Target, result.Number, result.Outcome, result.Detail)
+	} else {
+		s.log("shutdown checkpoint: %s#%d %s", result.Target, result.Number, result.Outcome)
+	}
+}
+
+// Progress reports each run's checkpoint as it stands, with runs still going
+// reported as pending. It is empty before the checkpoint starts.
+func (s *shutdownCheckpointer) Progress() []core.CheckpointResult {
+	s.progressMu.Lock()
+	defer s.progressMu.Unlock()
+	return append([]core.CheckpointResult(nil), s.progress...)
+}
+
+// checkpointAll checkpoints every run concurrently, handing each outcome to
+// report, when given, as soon as it is known. A run still going when the
+// overall budget ends is reported as timed out and left behind; its git
 // commands are owned subprocesses, so glorp's exit reaps them.
-func checkpointAll(runs []checkpointRun, git checkpointGit, perRun, overall time.Duration) []core.CheckpointResult {
+func checkpointAll(runs []checkpointRun, git checkpointGit, perRun, overall time.Duration, report func(int, core.CheckpointResult)) []core.CheckpointResult {
 	results := make([]core.CheckpointResult, len(runs))
 	done := make([]bool, len(runs))
+	// closed is set once the phase is over, so a run that finishes after the
+	// budget neither overwrites nor reports again the timeout it was given.
+	closed := false
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	phase, cancel := context.WithTimeout(context.Background(), overall)
@@ -219,8 +260,15 @@ func checkpointAll(runs []checkpointRun, git checkpointGit, perRun, overall time
 			defer cancel()
 			result := checkpointCheckout(ctx, git, run)
 			mu.Lock()
+			if closed {
+				mu.Unlock()
+				return
+			}
 			results[i], done[i] = result, true
 			mu.Unlock()
+			if report != nil {
+				report(i, result)
+			}
 		}(i, run)
 	}
 	finished := make(chan struct{})
@@ -233,10 +281,18 @@ func checkpointAll(runs []checkpointRun, git checkpointGit, perRun, overall time
 	case <-phase.Done():
 	}
 	mu.Lock()
-	defer mu.Unlock()
+	closed = true
+	var late []int
 	for i, run := range runs {
 		if !done[i] {
 			results[i] = core.CheckpointResult{Target: run.Target, Number: run.Number, Outcome: checkpointTimedOut, Detail: fmt.Sprintf("still running after the %s shutdown budget", overall)}
+			late = append(late, i)
+		}
+	}
+	mu.Unlock()
+	if report != nil {
+		for _, i := range late {
+			report(i, results[i])
 		}
 	}
 	return results
@@ -250,6 +306,11 @@ func runCheckpointGit(ctx context.Context, dir string, args ...string) (string, 
 	// A checkpoint runs unattended on the way out, so git must fail rather
 	// than wait on a credential prompt nobody will answer.
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	// A deadline ends git and whatever it started, such as a credential
+	// helper or ssh, and stops waiting on their pipes soon after, so the run
+	// budget holds even for a push stuck on the network.
+	cmd.Cancel = func() error { return process.Kill(cmd) }
+	cmd.WaitDelay = checkpointGitWaitDelay
 	output, err := process.CombinedOutput(cmd)
 	text := strings.TrimSpace(string(output))
 	if err != nil {

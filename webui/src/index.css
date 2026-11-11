@@ -407,6 +407,9 @@ h1 .version {
 .checkpoint-pushed {
 	color: var(--green);
 }
+.checkpoint-pending {
+	color: #facc15;
+}
 .checkpoint-failed,
 .checkpoint-timed-out {
 	color: #f87171;

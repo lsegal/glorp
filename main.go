@@ -365,6 +365,7 @@ func runWatch(args []string) (code int) {
 			return nil
 		}
 		restartHandler := newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf)
+		webUI.SetRestartProgressHandler(checkpointer.Progress)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
@@ -441,7 +442,7 @@ func runWatch(args []string) (code int) {
 		w.Webhooks = supervisor.reconcile
 		w.WebhookOnline = supervisor.online
 	}
-	if err := w.Run(ctx); err != nil {
+	if err := runUntilStopped(ctx, w.Run, shutdownDrainBudget, w.logf); err != nil {
 		if ui != nil {
 			ui.program.Quit()
 		}
@@ -452,6 +453,33 @@ func runWatch(args []string) (code int) {
 		ui.program.Quit()
 	}
 	return 0
+}
+
+// shutdownDrainBudget is how long the watch may take to wind down once
+// shutdown starts, after the checkpoint, before glorp stops waiting for it.
+const shutdownDrainBudget = 30 * time.Second
+
+// runUntilStopped runs the watch until it returns, or until it has had budget
+// to finish after ctx is cancelled. A run that is still unwinding then is left
+// for the deferred reaping, so a shutdown or restart always goes ahead
+// instead of waiting forever on one stuck run (issue #749).
+func runUntilStopped(ctx context.Context, run func(context.Context) error, budget time.Duration, logf func(string, ...interface{})) error {
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		logf("shutdown: runs were still stopping after %s; stopping their processes and going ahead", budget)
+		return nil
+	}
 }
 
 // startWebUI wires the dashboard's job-action and settings handlers, then
@@ -2030,8 +2058,19 @@ func (r CommandRunner) RunSessionWithOutput(ctx context.Context, issue Issue, se
 	return r.run(ctx, issue, session, updateSession, output)
 }
 
+// agentCommandWaitDelay is how long a cancelled agent's output pipes may stay
+// open after its process tree is killed before Wait gives up on them.
+const agentCommandWaitDelay = 5 * time.Second
+
 func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, binary, args...)
+	// Cancelling the run ends the agent's whole process tree, not just the
+	// agent, and Wait stops waiting on its output pipes soon after. A tree the
+	// shutdown checkpoint paused cannot exit by itself, so killing only the
+	// agent left its paused children holding the pipes and Wait, and with it
+	// every restart, hung forever (issue #749).
+	cmd.Cancel = func() error { return process.Kill(cmd) }
+	cmd.WaitDelay = agentCommandWaitDelay
 	// Codex treats non-terminal stdin as an optional prompt stream even when
 	// the positional prompt is already provided. Preserve a terminal stdin for
 	// interactive launches so it does not print the additional-input notice;
