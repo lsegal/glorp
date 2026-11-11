@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"strconv"
 	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // isolateProcessTree gives the child its own console process group so console
@@ -33,6 +36,9 @@ func signalProcessTree(cmd *exec.Cmd, signal processSignal) error {
 		}
 		return nil
 	}
+	if signal == pauseSignal || signal == resumeSignal {
+		return suspendProcessTree(uint32(cmd.Process.Pid), signal == pauseSignal)
+	}
 	args := []string{"/T", "/PID", pid}
 	if signal == killSignal {
 		args = append([]string{"/F"}, args...)
@@ -45,4 +51,69 @@ func signalProcessTree(cmd *exec.Cmd, signal processSignal) error {
 		}
 	}
 	return nil
+}
+
+var (
+	ntdll                = windows.NewLazySystemDLL("ntdll.dll")
+	procNtSuspendProcess = ntdll.NewProc("NtSuspendProcess")
+	procNtResumeProcess  = ntdll.NewProc("NtResumeProcess")
+)
+
+// suspendProcessTree suspends or resumes the process and every descendant.
+// Windows has no SIGSTOP, so each process in the tree is suspended through
+// ntdll, the call debuggers use. It reports os.ErrProcessDone when nothing in
+// the tree could be signalled.
+func suspendProcessTree(root uint32, suspend bool) error {
+	proc := procNtResumeProcess
+	if suspend {
+		proc = procNtSuspendProcess
+	}
+	if err := proc.Find(); err != nil {
+		return err
+	}
+	signalled := false
+	for _, id := range processTreeIDs(root) {
+		handle, err := windows.OpenProcess(windows.PROCESS_SUSPEND_RESUME, false, id)
+		if err != nil {
+			continue
+		}
+		status, _, _ := proc.Call(uintptr(handle))
+		_ = windows.CloseHandle(handle)
+		if status == 0 {
+			signalled = true
+		}
+	}
+	if !signalled {
+		return os.ErrProcessDone
+	}
+	return nil
+}
+
+// processTreeIDs lists root and every process descended from it, read from
+// one snapshot of the system process table.
+func processTreeIDs(root uint32) []uint32 {
+	ids := []uint32{root}
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return ids
+	}
+	defer windows.CloseHandle(snapshot)
+	children := map[uint32][]uint32{}
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	for err = windows.Process32First(snapshot, &entry); err == nil; err = windows.Process32Next(snapshot, &entry) {
+		if entry.ProcessID != entry.ParentProcessID {
+			children[entry.ParentProcessID] = append(children[entry.ParentProcessID], entry.ProcessID)
+		}
+	}
+	seen := map[uint32]bool{root: true}
+	for i := 0; i < len(ids); i++ {
+		for _, child := range children[ids[i]] {
+			if !seen[child] {
+				seen[child] = true
+				ids = append(ids, child)
+			}
+		}
+	}
+	return ids
 }

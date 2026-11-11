@@ -166,3 +166,14 @@ type AgentStatus struct {
 	// `glorp agents` prefixes each block with.
 	Status string `json:"status"`
 }
+
+// CheckpointResult is one active run's outcome in the shutdown checkpoint
+// glorp takes before it restarts or exits (issue #741): Outcome is "pushed",
+// "nothing to push", "failed", or "timed out", and Detail says why.
+type CheckpointResult struct {
+	Target  string
+	Number  int
+	Branch  string `json:",omitempty"`
+	Outcome string
+	Detail  string `json:",omitempty"`
+}

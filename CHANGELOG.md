@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Push every active agent's work before glorp restarts or shuts down cleanly (issue #741). The web dashboard's restart button and `SIGINT` (Ctrl+C), `SIGTERM`, and `SIGHUP` now take a shutdown checkpoint first: glorp pauses each running agent, commits its uncommitted changes as a shutdown checkpoint, and pushes its branch to the remote it tracks, for all runs in parallel within a 60-second budget. A run with nothing new gets no commit, the push is never forced and only ever goes to the run's own working branch, and a run whose remote is unreachable or whose branch moved on is logged as failed with its checkout left untouched, without holding up the shutdown. The restart button waits for the checkpoint and shows each run's outcome before glorp restarts. Before, unpushed work stayed only in the local checkout. A `SIGKILL` still cannot be caught, so it takes no checkpoint.
+
 ## v1.5.16 - 2026-11-10
 
 - Page through every job in the web dashboard instead of only the first six (issue #739). When more jobs are in flight than fit on the job grid, a pager above it steps through them six at a time, and each page shows its jobs' agent output, retry and stop buttons, and status as the first page does. Before, jobs past the first six could not be reached in the web dashboard at all. Paging leaves the status bar, targets, counts, and logs unchanged, and the terminal dashboard is unchanged. The `/api/state` endpoint accepts a `page` query parameter that selects which jobs carry their agent output; without it, the first six do, as before.

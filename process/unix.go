@@ -50,6 +50,10 @@ func unixSignal(signal processSignal) syscall.Signal {
 		return syscall.SIGTERM
 	case killSignal:
 		return syscall.SIGKILL
+	case pauseSignal:
+		return syscall.SIGSTOP
+	case resumeSignal:
+		return syscall.SIGCONT
 	default:
 		return syscall.Signal(0)
 	}

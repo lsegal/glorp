@@ -291,18 +291,42 @@ func TestServerHandlesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	ui.SetRestartHandler(func(context.Context) error {
+	ui.SetRestartHandler(func(context.Context) ([]core.CheckpointResult, error) {
 		called = true
-		return nil
+		return []core.CheckpointResult{
+			{Target: "o/r", Number: 7, Branch: "fix/issue-7-x", Outcome: "pushed"},
+			{Target: "o/r", Number: 8, Outcome: "failed", Detail: "remote origin is unreachable"},
+		}, nil
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/restart", nil)
 	response := httptest.NewRecorder()
 	ui.ServeHTTP(response, request)
-	if response.Code != http.StatusNoContent {
+	if response.Code != http.StatusOK {
 		t.Fatalf("POST restart = %d, body = %q", response.Code, response.Body.String())
 	}
 	if !called {
 		t.Fatal("restart handler was not called")
+	}
+	// The restart reports each run's shutdown checkpoint (issue #741).
+	var body struct{ Checkpoints []core.CheckpointResult }
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode restart response %q: %v", response.Body.String(), err)
+	}
+	if len(body.Checkpoints) != 2 || body.Checkpoints[0].Outcome != "pushed" || body.Checkpoints[1].Detail != "remote origin is unreachable" {
+		t.Fatalf("restart checkpoints = %+v", body.Checkpoints)
+	}
+}
+
+func TestServerReportsEmptyRestartCheckpoints(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui.SetRestartHandler(func(context.Context) ([]core.CheckpointResult, error) { return nil, nil })
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/restart", nil))
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"Checkpoints":[]}` {
+		t.Fatalf("POST restart = %d %q", response.Code, response.Body.String())
 	}
 }
 
@@ -324,8 +348,8 @@ func TestServerReportsRestartErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ui.SetRestartHandler(func(context.Context) error {
-		return core.ErrNotReady
+	ui.SetRestartHandler(func(context.Context) ([]core.CheckpointResult, error) {
+		return nil, core.ErrNotReady
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/restart", nil)
 	response := httptest.NewRecorder()
@@ -333,8 +357,8 @@ func TestServerReportsRestartErrors(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("POST restart (not ready) = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
-	ui.SetRestartHandler(func(context.Context) error {
-		return errors.New("already restarting")
+	ui.SetRestartHandler(func(context.Context) ([]core.CheckpointResult, error) {
+		return nil, errors.New("already restarting")
 	})
 	response = httptest.NewRecorder()
 	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/restart", nil))

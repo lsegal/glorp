@@ -228,7 +228,7 @@ func startWakeupHarness(t *testing.T, runner *wakeupRunner, delay time.Duration)
 	h.src.state = OriginatingWorkState{IssueState: "OPEN", IssueBody: "original"}
 	h.w = &Glorp{
 		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: h.statePath,
-		Issues: h.src, Runner: runner, Out: h.out, UI: h.reporter,
+		Issues: h.src, Runner: runner, Active: &activeAgents{}, Out: h.out, UI: h.reporter,
 		closureInterval: time.Millisecond, wakeupDelayOverride: delay,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
