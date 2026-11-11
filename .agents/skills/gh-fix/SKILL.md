@@ -109,17 +109,17 @@ Open the draft pull request as soon as validation has settled the approach, so p
    If any of these calls fails, create the branch right after verifying the clone instead, before anything else: commit the same empty start commit there and push the new branch with upstream tracking. The `[skip ci]` marker keeps CI from running on a tree identical to the base; only this commit and the checkpoint commits described under "Implement the fix" carry it. Never force-push.
 2. Open a draft PR from that branch with `gh pr create --repo <OWNER>/<REPO> --draft --head <BRANCH> --base <BASEBRANCH>` and a concise title describing the intended fix. `--repo` and `--head` let this run before any clone exists.
 3. Write a real Markdown body that summarizes the issue and planned work. Build the exact multiline Markdown in a file or on standard input and pass it with `gh pr create --body-file` (or the equivalent `gh pr edit --body-file`); never put literal `\n` escape sequences in a `--body` argument to represent paragraph breaks. Include `Closes #<ISSUENUMBER>` on its own line so the draft links to and will close the original issue when merged. The pull request always lives in the issue's own repository, so use this plain `#<ISSUENUMBER>` form and never the fully qualified `<OWNER>/<REPO>#<ISSUENUMBER>` form, which is only for a pull request hosted in a different repository than its issue. Then read the created PR body back and verify it contains actual line breaks rather than literal `\n` text.
-4. End the body with a `**Agents:**` footer line naming the current agent CLI and model handling the issue (for example `**Agents:** claude-code (claude-sonnet-5)`), identified from your own runtime context. This is the contributing-agents footer described below.
+4. End the body with a `**Agents:**` footer line naming the current agent CLI and model handling the issue, identified from your own runtime context, plus this run's glorp identity when one was supplied (for example `**Agents:** claude-code (claude-sonnet-5, /glorp:847071C7)`, or `**Agents:** claude-code (claude-sonnet-5)` without an identity). This is the contributing-agents footer described below, and it is already present when the pull request is opened.
 5. Record the PR number and URL, then confirm the head and base branches are correct.
 
 ### Maintaining the contributing-agents footer
 
-Every time you write or replace the PR body (draft creation, checkpoint updates, and marking ready), preserve the `**Agents:**` footer instead of overwriting it:
+Every pull request this run opens, including a fork pull request, carries this footer from the moment it is opened, whether draft or ready. Every time you write or replace the PR body (draft creation, checkpoint updates, and marking ready), preserve the `**Agents:**` footer instead of overwriting it:
 
 1. Read the current PR body first and locate its `**Agents:**` line, if any.
-2. Determine your own current agent CLI and model from your runtime context.
-3. If the footer is missing, add it with just your own entry. If it already lists one or more agent/model entries, keep every distinct existing entry and append your own only if it is not already present, comma-separated in the order encountered (for example `**Agents:** codex (gpt-5), claude-code (claude-sonnet-5)`).
-4. This makes the footer accumulate every agent and model that has touched the issue, which matters when a different agent or model resumes a draft mid-flight.
+2. Determine your own current agent CLI and model from your runtime context. Your entry is `<CLI> (<MODEL>, /glorp:<ID>)` when the invocation supplied `identity:/glorp:<ID>`, using that exact `/glorp:<ID>` identity. Without a supplied identity, your entry is `<CLI> (<MODEL>)`; never invent, guess, or placeholder an ID.
+3. If the footer is missing, add it with just your own entry. If it already lists one or more entries, keep every distinct existing entry unchanged and append your own only if that exact entry is not already present, comma-separated in the order encountered (for example `**Agents:** codex (gpt-5, /glorp:1A2B3C4D), claude-code (claude-sonnet-5, /glorp:847071C7)`). Entries that differ only by ID are distinct, so two runs of the same agent and model both appear.
+4. This makes the footer accumulate every agent, model, and glorp run that has touched the issue, which matters when a different agent, model, or run resumes a draft mid-flight. The ID ties the pull request back to the run's claim and comments on the issue.
 
 ## Create an isolated clone and branch
 

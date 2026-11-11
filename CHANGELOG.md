@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show which glorp run opened or updated a pull request in `gh-fix`'s `**Agents:**` footer (issue #748). When a run was dispatched with a glorp identity, its footer entry now carries that `/glorp:<ID>` next to the agent CLI and model, for example `claude-code (claude-sonnet-5, /glorp:847071C7)`, from the moment the pull request is opened, including fork pull requests. Entries still accumulate, so a pull request touched by two runs lists both IDs. A manual run with no identity keeps the plain CLI and model entry and never gets an invented ID.
 - Stop `gh-fix` runs from ending "waiting on the owner" for steps they can do themselves (issue #745). Before ending a run blocked on the owner, the skill now checks whether its own GitHub access covers the step, such as cutting a tag or prerelease or dispatching a workflow. If it does, the run does the step and continues. "(owner)" headings in issue text no longer make a step owner-only unless the owner reserved it. A run that is really blocked on a person must name the exact capability or access it lacks, and runs no longer write new "(owner)" steps into follow-ups, sub-issues, or `answer-needed` questions for work an agent could do.
 
 ## v1.5.17 - 2026-11-11
