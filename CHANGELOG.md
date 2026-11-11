@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Mark issues that are waiting on a person with an `answer-needed` label in `gh-fix` (issue #743). When a run cannot go on without a user's answer, or the answer would materially change the fix, the skill now posts the question on the issue if it is not already there, creates the `answer-needed` label on the repository when it is missing, applies it, and reports the issue as blocked awaiting an answer. A later run that finds a user's reply to that question removes the label and carries on with the work, and a run with no reply yet leaves it in place. Questions the agent can answer itself, and clarifying questions asked while the work continues, never add the label, and follow-up issues and sub-issues never inherit it. Before, an issue stalled on a human answer looked like any other queued issue.
+
 ## v1.5.16 - 2026-11-10
 
 - Page through every job in the web dashboard instead of only the first six (issue #739). When more jobs are in flight than fit on the job grid, a pager above it steps through them six at a time, and each page shows its jobs' agent output, retry and stop buttons, and status as the first page does. Before, jobs past the first six could not be reached in the web dashboard at all. Paging leaves the status bar, targets, counts, and logs unchanged, and the terminal dashboard is unchanged. The `/api/state` endpoint accepts a `page` query parameter that selects which jobs carry their agent output; without it, the first six do, as before.
