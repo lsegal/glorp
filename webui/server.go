@@ -49,6 +49,9 @@ type Server struct {
 	agents   func(context.Context) ([]core.AgentStatus, error)
 	refresh  func(context.Context) error
 	restart  func(context.Context) ([]core.CheckpointResult, error)
+	// restartProgress reports the shutdown checkpoint while a restart is
+	// taking it (issue #749).
+	restartProgress func() []core.CheckpointResult
 	// agentStatuses is the most recent completed probe. Probing starts as soon
 	// as the handler is wired, rather than making the first settings modal wait
 	// for every installed CLI to answer (issue #595).
@@ -93,6 +96,16 @@ func (ui *Server) SetRefreshHandler(handler func(context.Context) error) {
 func (ui *Server) SetRestartHandler(handler func(context.Context) ([]core.CheckpointResult, error)) {
 	ui.mu.Lock()
 	ui.restart = handler
+	ui.mu.Unlock()
+}
+
+// SetRestartProgressHandler wires GET /api/restart to a function that reports
+// each run's shutdown checkpoint as it stands, so the dashboard can show which
+// runs are done and which are still pending while a restart waits on them
+// (issue #749).
+func (ui *Server) SetRestartProgressHandler(handler func() []core.CheckpointResult) {
+	ui.mu.Lock()
+	ui.restartProgress = handler
 	ui.mu.Unlock()
 }
 
@@ -240,6 +253,10 @@ func (ui *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 // active run's outcome; the shutdown itself happens after this response is
 // written, so the browser learns the outcome before the server goes away.
 func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		ui.serveRestartProgress(w)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -260,6 +277,23 @@ func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	writeCheckpoints(w, checkpoints)
+}
+
+// serveRestartProgress reports the shutdown checkpoint a restart is taking,
+// with runs still going marked pending, or no runs before one starts.
+func (ui *Server) serveRestartProgress(w http.ResponseWriter) {
+	ui.mu.RLock()
+	progress := ui.restartProgress
+	ui.mu.RUnlock()
+	var checkpoints []core.CheckpointResult
+	if progress != nil {
+		checkpoints = progress()
+	}
+	writeCheckpoints(w, checkpoints)
+}
+
+func writeCheckpoints(w http.ResponseWriter, checkpoints []core.CheckpointResult) {
 	if checkpoints == nil {
 		checkpoints = []core.CheckpointResult{}
 	}

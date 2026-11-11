@@ -231,6 +231,13 @@ func Pause(cmd *exec.Cmd) error { return signalProcessTree(cmd, pauseSignal) }
 // Resume lets a tree suspended by Pause run again.
 func Resume(cmd *exec.Cmd) error { return signalProcessTree(cmd, resumeSignal) }
 
+// Kill ends a tracked child and everything it spawned at once, paused or not.
+// It only signals and never waits, so it is safe as an exec.Cmd Cancel
+// function while another goroutine is in Wait. Killing just the child would
+// leave its descendants holding its output pipes, and a paused descendant
+// never lets go of them, so Wait would never return (issue #749).
+func Kill(cmd *exec.Cmd) error { return signalProcessTree(cmd, killSignal) }
+
 // stopError discards the failure a child reports when it dies from the signal
 // glorp just sent it, which is the expected outcome of stopping it.
 func stopError(err error) error {

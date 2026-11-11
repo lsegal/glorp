@@ -247,7 +247,7 @@ func TestCheckpointAllBoundsTheWholePhase(t *testing.T) {
 	}
 	runs := []checkpointRun{{Target: "o/r", Number: 1, Checkout: dir}, {Target: "o/r", Number: 2}}
 	start := time.Now()
-	results := checkpointAll(runs, hang, time.Hour, 200*time.Millisecond)
+	results := checkpointAll(runs, hang, time.Hour, 200*time.Millisecond, nil)
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("phase took %s, want it bounded by its budget", elapsed)
 	}
@@ -265,7 +265,7 @@ func TestCheckpointRunBudgetReportsTimeout(t *testing.T) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
-	results := checkpointAll([]checkpointRun{{Target: "o/r", Number: 1, Checkout: dir}}, slow, 50*time.Millisecond, time.Minute)
+	results := checkpointAll([]checkpointRun{{Target: "o/r", Number: 1, Checkout: dir}}, slow, 50*time.Millisecond, time.Minute, nil)
 	if results[0].Outcome != checkpointTimedOut {
 		t.Fatalf("slow run = %+v, want timed out", results[0])
 	}
@@ -286,8 +286,8 @@ func TestShutdownCheckpointerRunsOnce(t *testing.T) {
 	if len(second) != 1 || second[0] != first[0] {
 		t.Fatalf("second checkpoint = %+v, want the first results", second)
 	}
-	if len(logged) != 2 {
-		t.Fatalf("logged %d lines, want a header and one outcome: %q", len(logged), logged)
+	if len(logged) != 3 {
+		t.Fatalf("logged %d lines, want a header, one outcome, and the handoff: %q", len(logged), logged)
 	}
 }
 

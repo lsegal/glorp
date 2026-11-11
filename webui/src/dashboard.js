@@ -140,6 +140,18 @@ export async function submitRestart() {
 	return Array.isArray(body?.Checkpoints) ? body.Checkpoints : [];
 }
 
+// fetchRestartProgress reads the shutdown checkpoint a restart is taking
+// (issue #749): each run's outcome so far, with runs still going reported as
+// "pending". It is empty before the checkpoint starts.
+export async function fetchRestartProgress() {
+	const response = await fetch("/api/restart");
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+	const body = await response.json().catch(() => ({}));
+	return Array.isArray(body?.Checkpoints) ? body.Checkpoints : [];
+}
+
 // checkpointLines describes each run's shutdown checkpoint outcome as one line
 // of text, in the order the daemon reported them.
 export function checkpointLines(checkpoints) {

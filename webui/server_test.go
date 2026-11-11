@@ -330,6 +330,35 @@ func TestServerReportsEmptyRestartCheckpoints(t *testing.T) {
 	}
 }
 
+// While a restart waits on the shutdown checkpoint, GET reports each run as
+// it stands, so a run still going shows as pending (issue #749).
+func TestServerReportsRestartProgress(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/restart", nil))
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"Checkpoints":[]}` {
+		t.Fatalf("GET restart before a restart = %d %q", response.Code, response.Body.String())
+	}
+	ui.SetRestartProgressHandler(func() []core.CheckpointResult {
+		return []core.CheckpointResult{
+			{Target: "o/r", Number: 7, Outcome: "pushed"},
+			{Target: "o/r", Number: 8, Outcome: "pending"},
+		}
+	})
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/restart", nil))
+	var body struct{ Checkpoints []core.CheckpointResult }
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode restart progress %q: %v", response.Body.String(), err)
+	}
+	if response.Code != http.StatusOK || len(body.Checkpoints) != 2 || body.Checkpoints[1].Outcome != "pending" {
+		t.Fatalf("GET restart = %d %+v", response.Code, body.Checkpoints)
+	}
+}
+
 func TestServerRejectsUnavailableRestart(t *testing.T) {
 	ui, err := New("v1.2.3")
 	if err != nil {
@@ -372,11 +401,11 @@ func TestServerRejectsUnsupportedRestartMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/restart", nil)
+	request := httptest.NewRequest(http.MethodDelete, "/api/restart", nil)
 	response := httptest.NewRecorder()
 	ui.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("GET restart = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+		t.Fatalf("DELETE restart = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 	}
 }
 

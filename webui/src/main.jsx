@@ -26,6 +26,7 @@ import {
 	checkpointLines,
 	deliveryLabel,
 	fetchAgentStatusesWithRetry,
+	fetchRestartProgress,
 	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
@@ -563,7 +564,7 @@ function SettingsModal({ onClose }) {
 
 // CheckpointReport lists what the shutdown checkpoint did for each active run
 // before the restart (issue #741): pushed, nothing to push, failed, or timed
-// out, with the reason.
+// out, with the reason, and pending while the restart still waits on it.
 function CheckpointReport({ checkpoints, onClose }) {
 	const lines = checkpointLines(checkpoints);
 	return (
@@ -639,13 +640,29 @@ function App() {
 		}
 		setRestarting("requested");
 		setCheckpoints(null);
+		// Show each run's checkpoint as it lands while the restart waits on
+		// them, so a slow run is visible as pending (issue #749).
+		let waiting = true;
+		const progress = setInterval(async () => {
+			try {
+				const runs = await fetchRestartProgress();
+				if (waiting && runs.length) setCheckpoints(runs);
+			} catch {
+				// The final answer or the dropped connection says what happened.
+			}
+		}, 1000);
 		try {
-			setCheckpoints(await submitRestart());
+			const results = await submitRestart();
+			waiting = false;
+			setCheckpoints(results);
 		} catch (error) {
+			waiting = false;
 			// A dropped connection means the daemon is already going down.
 			if (error instanceof TypeError) return;
 			setRestarting("");
 			window.alert(`Could not restart glorp: ${error.message}`);
+		} finally {
+			clearInterval(progress);
 		}
 	};
 	return (
