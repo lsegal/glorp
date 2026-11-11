@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Mark issues that a glorp agent run creates with the run that created them (issue #747). When `gh-create` files an issue for a run dispatched with a glorp identity, the body now ends with a `**Created by Glorp:** /glorp:<ID>, <agent CLI> (<model>)` line naming that run's identity, agent CLI, and model, in the same form as the `**Agents:**` footer on `gh-fix` pull requests. `gh-fix` adds the same line to the follow-up issues and sub-issues it files. Issues filed without a glorp identity, such as by a person, get no marker. Before, agent-filed issues looked the same as issues the owner filed by hand.
 - Stop `gh-fix` runs from ending "waiting on the owner" for steps they can do themselves (issue #745). Before ending a run blocked on the owner, the skill now checks whether its own GitHub access covers the step, such as cutting a tag or prerelease or dispatching a workflow. If it does, the run does the step and continues. "(owner)" headings in issue text no longer make a step owner-only unless the owner reserved it. A run that is really blocked on a person must name the exact capability or access it lacks, and runs no longer write new "(owner)" steps into follow-ups, sub-issues, or `answer-needed` questions for work an agent could do.
 
 ## v1.5.17 - 2026-11-11
