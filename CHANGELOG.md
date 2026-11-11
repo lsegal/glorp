@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix restart, and a clean shutdown with `SIGINT`, `SIGTERM`, or `SIGHUP`, hanging forever after the shutdown checkpoint pushed its work (issue #749). The checkpoint pauses each agent with everything it started, and stopping the run then ended only the agent itself, so its paused child processes kept its output open and glorp waited on them forever, never restarting. Stopping a run now ends the agent's whole process tree, waiting for its output is bounded, a push stuck on the network or a hook is cut off at the run's checkpoint budget and reported as timed out, and once shutdown starts glorp waits at most 30 seconds for runs to wind down before it goes ahead. While a restart waits on the checkpoint, the web dashboard lists each run as it finishes, with runs still going shown as pending, and glorp logs each outcome as soon as it is known.
 - Stop `gh-fix` runs from ending "waiting on the owner" for steps they can do themselves (issue #745). Before ending a run blocked on the owner, the skill now checks whether its own GitHub access covers the step, such as cutting a tag or prerelease or dispatching a workflow. If it does, the run does the step and continues. "(owner)" headings in issue text no longer make a step owner-only unless the owner reserved it. A run that is really blocked on a person must name the exact capability or access it lacks, and runs no longer write new "(owner)" steps into follow-ups, sub-issues, or `answer-needed` questions for work an agent could do.
 
 ## v1.5.17 - 2026-11-11

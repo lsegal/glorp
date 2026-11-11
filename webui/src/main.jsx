@@ -24,9 +24,9 @@ import { createRoot } from "react-dom/client";
 import {
 	buildSettingsUpdate,
 	checkpointLines,
-	fetchRestartProgress,
 	deliveryLabel,
 	fetchAgentStatusesWithRetry,
+	fetchRestartProgress,
 	fetchSettingsWithRetry,
 	jobActionAvailability,
 	jobAgentSummary,
