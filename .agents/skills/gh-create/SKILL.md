@@ -5,7 +5,7 @@ description: "File a well-formed GitHub issue from a short user request: expand 
 
 # File a GitHub Issue
 
-Treat `/gh-create [OWNER/REPO] <request>` as authorization to file one GitHub issue that describes the request. Every agent that uses this skill files issues the same way: the same structure, the same labels, the same assignee, properly attached media, explanatory visuals where they help, and no leaked private data. This skill only creates and edits the one issue it files. It never changes code, branches, pull requests, or other issues.
+Treat `/gh-create [OWNER/REPO] <request>` as authorization to file one GitHub issue that describes the request. Every agent that uses this skill files issues the same way: the same structure, the same labels, the same assignee, properly attached media, explanatory visuals where they help, and no leaked private data. This skill only creates and edits the one issue it files. It never changes code, branches, pull requests, or other issues. The invocation may append `identity:/glorp:<ID>` when a glorp agent run uses this skill; "Mark issues created by a glorp agent" describes what that changes.
 
 ## Identify the target repository
 
@@ -38,7 +38,7 @@ Expand the request into a clear, structured issue that another person or agent c
    - `## Screenshots` or inline media where the user referenced any.
    - `## Wireframes` and `## Diagrams` when "Create explanatory visuals" calls for them.
    - `## Notes` for research findings, related issues, and pointers to relevant files written as repository-relative paths.
-3. End every issue with the user's original prompt, quoted verbatim, so the issue is reproducible, replayable, and auditable. Put it last, in a collapsed block, with every line of the prompt prefixed by `> `:
+3. End every issue with the user's original prompt, quoted verbatim, so the issue is reproducible, replayable, and auditable. Put it last, in a collapsed block, followed only by the created-by-Glorp marker when "Mark issues created by a glorp agent" requires one, with every line of the prompt prefixed by `> `:
    ```markdown
    ---
 
@@ -52,6 +52,20 @@ Expand the request into a clear, structured issue that another person or agent c
    ```
    Quote the prompt exactly, typos and all. The only allowed change is redacting private data under the rules below, and each redaction is marked `[redacted]` so readers can see that something was removed.
 4. Write the body to a file and pass it with `--body-file`. Never pass a multiline body with literal `\n` escapes in `--body`.
+
+## Mark issues created by a glorp agent
+
+An issue a glorp agent run creates ends with a marker line naming that run, so agent-filed issues can be told apart from issues a person files. This covers every issue a run files as part of its work: follow-up issues, sub-issues, the parts of a split issue, and any other issue.
+
+1. Establish the creating context from the run's glorp identity. Use the `identity:/glorp:<ID>` argument of this invocation when present. Otherwise, when a glorp agent run that was dispatched with an `identity:/glorp:<ID>` uses this skill, such as a `gh-fix` run filing a follow-up, use that run's identity. Never guess, invent, or reuse an identity from an issue comment, a claim comment, or another run.
+2. When no glorp identity exists, the issue is not a glorp creation. A person filing directly, or an agent working for a person outside a glorp run, adds no marker.
+3. When an identity exists, end the body with exactly this line, after the original prompt block and a blank line:
+   ```markdown
+   **Created by Glorp:** /glorp:<ID>, <AGENT CLI> (<MODEL>)
+   ```
+   `<ID>` is the run's identity without the `identity:/glorp:` prefix. `<AGENT CLI> (<MODEL>)` names the agent CLI and model creating the issue, identified from your own runtime context, in the same form as the `**Agents:**` footer `gh-fix` writes on pull requests. For example: `**Created by Glorp:** /glorp:39D783FD, claude-code (claude-sonnet-5)`.
+4. Write the marker as one line, the very last line of the body, and add it only once. Use the same form for every issue, whatever kind of issue it is.
+5. The marker is part of the expected body. It is never private data to scrub and never a stray local or relative path to remove, even though `/glorp:<ID>` starts with a slash.
 
 ## Scrub private data
 
@@ -155,6 +169,7 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
    gh issue view NUMBER --repo OWNER/REPO --json url,title,body,labels,assignees
    ```
    - The body has real line breaks, the structured sections, and the quoted original prompt at the bottom.
+   - When "Mark issues created by a glorp agent" required a marker, the last line of the body is that marker, exactly as written, with the run's identity, agent CLI, and model. When it did not, the body has no marker. Apart from uploaded media URLs replacing local paths, the body matches the body file you wrote, marker included.
    - Every referenced file and generated visual appears as a `https://github.com/user-attachments/...` URL or another uploaded GitHub URL, and no local path, `file://` URL, home directory, or placeholder remains. An uploaded URL existing somewhere in the body does not pass this check on its own.
    - Every image reference (`![...](...)` and `<img src="...">`) points at an `https://` URL. A filing that retains a local or relative image path has failed, even when the same image also renders elsewhere in the body.
    - Each attached file appears exactly once, in the place written for it. A filing that shows an image twice has failed, including a broken local reference paired with a copy appended at the bottom.
@@ -166,4 +181,4 @@ Generated wireframes and diagrams, and screenshots, videos, and other files the 
 
 ## Report the result
 
-Give the issue URL, its title, the labels applied, the assignee, the media that was attached, and the wireframes and diagrams that were generated. Name any requested label, assignee, media file, or visual that could not be applied, and why. When you linked an existing issue instead of filing a duplicate, say so and give its URL.
+Give the issue URL, its title, the labels applied, the assignee, the media that was attached, the wireframes and diagrams that were generated, and the created-by-Glorp marker when one was added. Name any requested label, assignee, media file, or visual that could not be applied, and why. When you linked an existing issue instead of filing a duplicate, say so and give its URL.
