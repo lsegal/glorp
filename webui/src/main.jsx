@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
 	buildSettingsUpdate,
+	checkpointLines,
 	deliveryLabel,
 	fetchAgentStatusesWithRetry,
 	fetchSettingsWithRetry,
@@ -560,6 +561,42 @@ function SettingsModal({ onClose }) {
 	);
 }
 
+// CheckpointReport lists what the shutdown checkpoint did for each active run
+// before the restart (issue #741): pushed, nothing to push, failed, or timed
+// out, with the reason.
+function CheckpointReport({ checkpoints, onClose }) {
+	const lines = checkpointLines(checkpoints);
+	return (
+		<section className="checkpoint-report" aria-label="Shutdown checkpoint">
+			<div className="checkpoint-title">
+				<FolderGit2 /> Shutdown checkpoint
+				<button
+					type="button"
+					className="icon-button"
+					onClick={onClose}
+					aria-label="Dismiss shutdown checkpoint"
+				>
+					<XMarkIcon />
+				</button>
+			</div>
+			{lines.length ? (
+				<ul>
+					{checkpoints.map((checkpoint, index) => (
+						<li
+							key={`${checkpoint.Target}#${checkpoint.Number}`}
+							className={`checkpoint-${checkpoint.Outcome.replaceAll(" ", "-")}`}
+						>
+							{lines[index]}
+						</li>
+					))}
+				</ul>
+			) : (
+				<p>No active agents had work to push.</p>
+			)}
+		</section>
+	);
+}
+
 function App() {
 	const [page, setPage] = useState(0);
 	const [state, connected] = useDashboardState(page);
@@ -568,6 +605,9 @@ function App() {
 	// restarting is "requested" until the daemon drops off, then "down" until
 	// it answers again, so the button stays busy through the whole restart.
 	const [restarting, setRestarting] = useState("");
+	// checkpoints holds the shutdown checkpoint outcomes the last restart
+	// reported (issue #741), shown until dismissed.
+	const [checkpoints, setCheckpoints] = useState(null);
 	useEffect(() => {
 		if (restarting === "requested" && !connected) setRestarting("down");
 		if (restarting === "down" && connected) setRestarting("");
@@ -592,14 +632,15 @@ function App() {
 	const restart = async () => {
 		if (
 			!window.confirm(
-				"Restart glorp? Running agents are stopped and resumed once it starts again.",
+				"Restart glorp? Running agents are paused and their work is pushed to their branches, then they are stopped and resumed once it starts again.",
 			)
 		) {
 			return;
 		}
 		setRestarting("requested");
+		setCheckpoints(null);
 		try {
-			await submitRestart();
+			setCheckpoints(await submitRestart());
 		} catch (error) {
 			// A dropped connection means the daemon is already going down.
 			if (error instanceof TypeError) return;
@@ -655,6 +696,12 @@ function App() {
 			</div>
 			{settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 			<StatusBar snapshot={snapshot} connected={connected} />
+			{checkpoints && (
+				<CheckpointReport
+					checkpoints={checkpoints}
+					onClose={() => setCheckpoints(null)}
+				/>
+			)}
 			<JobPager page={shown.page} pages={shown.pages} onPage={setPage} />
 			<section className="job-grid" aria-label="Agent jobs">
 				{shown.jobs.length ? (

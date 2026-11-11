@@ -4,6 +4,7 @@ import {
 	agentStatusFor,
 	agentSummaries,
 	buildSettingsUpdate,
+	checkpointLines,
 	deliveryLabel,
 	fetchAgentStatuses,
 	fetchAgentStatusesWithRetry,
@@ -235,10 +236,25 @@ describe("submitJobAction", () => {
 
 describe("submitRestart", () => {
 	it("posts to /api/restart", async () => {
-		const fetch = vi.fn().mockResolvedValue({ ok: true });
+		const fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ Checkpoints: [] }),
+		});
 		vi.stubGlobal("fetch", fetch);
 		await submitRestart();
 		expect(fetch).toHaveBeenCalledWith("/api/restart", { method: "POST" });
+	});
+
+	it("returns each run's shutdown checkpoint outcome", async () => {
+		const checkpoints = [
+			{ Target: "o/r", Number: 7, Branch: "fix/issue-7-x", Outcome: "pushed" },
+		];
+		const fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ Checkpoints: checkpoints }),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitRestart()).resolves.toEqual(checkpoints);
 	});
 
 	it("throws with the response body when the request fails", async () => {
@@ -760,5 +776,33 @@ describe("toggleActiveModel", () => {
 
 	it("does not duplicate a value already checked", () => {
 		expect(toggleActiveModel(["codex"], "codex", true)).toEqual(["codex"]);
+	});
+});
+
+describe("checkpointLines", () => {
+	it("describes each run's outcome with its branch and reason", () => {
+		expect(
+			checkpointLines([
+				{
+					Target: "o/r",
+					Number: 7,
+					Branch: "fix/issue-7-x",
+					Outcome: "pushed",
+				},
+				{
+					Target: "o/r",
+					Number: 8,
+					Outcome: "failed",
+					Detail: "remote origin is unreachable",
+				},
+			]),
+		).toEqual([
+			"o/r#7 (fix/issue-7-x) pushed",
+			"o/r#8 failed: remote origin is unreachable",
+		]);
+	});
+
+	it("is empty without checkpoints", () => {
+		expect(checkpointLines(undefined)).toEqual([]);
 	});
 });
