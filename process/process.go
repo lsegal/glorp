@@ -30,6 +30,10 @@ const (
 	terminateSignal
 	// killSignal ends the process tree unconditionally.
 	killSignal
+	// pauseSignal suspends every process in the tree so it stops writing.
+	pauseSignal
+	// resumeSignal lets a paused tree run again.
+	resumeSignal
 )
 
 const (
@@ -219,6 +223,14 @@ func Stop(cmd *exec.Cmd) error {
 	return stopError(<-exited)
 }
 
+// Pause suspends a tracked child and everything it spawned, so nothing in the
+// tree runs until Resume or a kill. The shutdown checkpoint (issue #741) uses
+// it to commit an agent's checkout without catching a half-written file.
+func Pause(cmd *exec.Cmd) error { return signalProcessTree(cmd, pauseSignal) }
+
+// Resume lets a tree suspended by Pause run again.
+func Resume(cmd *exec.Cmd) error { return signalProcessTree(cmd, resumeSignal) }
+
 // stopError discards the failure a child reports when it dies from the signal
 // glorp just sent it, which is the expected outcome of stopping it.
 func stopError(err error) error {
@@ -246,20 +258,35 @@ func ExitAfterReaping(code int) {
 var shutdownSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 
 // ShutdownContext returns a context that is canceled by the first shutdown
-// signal, giving glorp a chance to stop its subprocesses in order. A second
-// signal means "now": every owned subprocess is killed and glorp exits
-// immediately, so an impatient second Ctrl-C cannot leave an orphan behind.
-func ShutdownContext() (context.Context, func()) {
+// signal, giving glorp a chance to stop its subprocesses in order. The first
+// signal runs prepare, when given, before the context is canceled, so work
+// that must happen while subprocesses are still alive (the shutdown
+// checkpoint, issue #741) finishes first. A second signal means "now": every
+// owned subprocess is killed and glorp exits immediately, even mid-prepare,
+// so an impatient second Ctrl-C cannot leave an orphan behind.
+func ShutdownContext(prepare func()) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	signals := make(chan os.Signal, len(shutdownSignals))
 	signal.Notify(signals, shutdownSignals...)
 	go func() {
 		select {
 		case <-signals:
-			cancel()
 		case <-ctx.Done():
 			return
 		}
+		if prepare != nil {
+			prepared := make(chan struct{})
+			go func() {
+				defer close(prepared)
+				prepare()
+			}()
+			select {
+			case <-prepared:
+			case <-signals:
+				ExitAfterReaping(1)
+			}
+		}
+		cancel()
 		<-signals
 		ExitAfterReaping(1)
 	}()

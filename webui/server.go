@@ -48,7 +48,7 @@ type Server struct {
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 	agents   func(context.Context) ([]core.AgentStatus, error)
 	refresh  func(context.Context) error
-	restart  func(context.Context) error
+	restart  func(context.Context) ([]core.CheckpointResult, error)
 	// agentStatuses is the most recent completed probe. Probing starts as soon
 	// as the handler is wired, rather than making the first settings modal wait
 	// for every installed CLI to answer (issue #595).
@@ -90,7 +90,7 @@ func (ui *Server) SetRefreshHandler(handler func(context.Context) error) {
 // SetRestartHandler wires the dashboard's restart button (issue #665) to a
 // function that shuts the running instance down and starts it again with the
 // same command line.
-func (ui *Server) SetRestartHandler(handler func(context.Context) error) {
+func (ui *Server) SetRestartHandler(handler func(context.Context) ([]core.CheckpointResult, error)) {
 	ui.mu.Lock()
 	ui.restart = handler
 	ui.mu.Unlock()
@@ -235,9 +235,10 @@ func (ui *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveRestart backs the dashboard's restart button (issue #665). Like
-// refresh it carries no request body. The handler only asks the instance to
-// restart; the shutdown itself happens after this response is written, so the
-// browser learns the request was accepted before the server goes away.
+// refresh it carries no request body. The handler takes the shutdown
+// checkpoint (issue #741) before answering, so the response reports each
+// active run's outcome; the shutdown itself happens after this response is
+// written, so the browser learns the outcome before the server goes away.
 func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -250,7 +251,8 @@ func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "restart unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if err := handler(r.Context()); err != nil {
+	checkpoints, err := handler(r.Context())
+	if err != nil {
 		if errors.Is(err, core.ErrNotReady) {
 			http.Error(w, "restart unavailable", http.StatusServiceUnavailable)
 			return
@@ -258,7 +260,13 @@ func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	if checkpoints == nil {
+		checkpoints = []core.CheckpointResult{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Checkpoints []core.CheckpointResult
+	}{checkpoints})
 }
 
 // serveSettings backs the settings modal (issue #341). GET reports the
