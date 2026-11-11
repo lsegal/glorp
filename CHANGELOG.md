@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.17 - 2026-11-11
+
 - Mark issues that are waiting on a person with an `answer-needed` label in `gh-fix` (issue #743). When a run cannot go on without a user's answer, or the answer would materially change the fix, the skill now posts the question on the issue if it is not already there, creates the `answer-needed` label on the repository when it is missing, applies it, and reports the issue as blocked awaiting an answer. A later run that finds a user's reply to that question removes the label and carries on with the work, and a run with no reply yet leaves it in place. Questions the agent can answer itself, and clarifying questions asked while the work continues, never add the label, and follow-up issues and sub-issues never inherit it. Before, an issue stalled on a human answer looked like any other queued issue.
 - Push every active agent's work before glorp restarts or shuts down cleanly (issue #741). The web dashboard's restart button and `SIGINT` (Ctrl+C), `SIGTERM`, and `SIGHUP` now take a shutdown checkpoint first: glorp pauses each running agent, commits its uncommitted changes as a shutdown checkpoint, and pushes its branch to the remote it tracks, for all runs in parallel within a 60-second budget. A run with nothing new gets no commit, the push is never forced and only ever goes to the run's own working branch, and a run whose remote is unreachable or whose branch moved on is logged as failed with its checkout left untouched, without holding up the shutdown. The restart button waits for the checkpoint and shows each run's outcome before glorp restarts. Before, unpushed work stayed only in the local checkout. A `SIGKILL` still cannot be caught, so it takes no checkpoint.
 
