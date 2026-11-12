@@ -332,3 +332,62 @@ func TestGlorpPausedWatchFinishesAManualPauseWhoseIssueClosed(t *testing.T) {
 	default:
 	}
 }
+
+// Stop clears a manually paused job whose open issue the poll no longer lists,
+// which Retry cannot requeue: its record and card are dropped and its claim
+// is released, so the issue is dispatched afresh once it is listed again
+// (issue #777).
+func TestGlorpWebUIStopClearsAnUnlistedManualPause(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := manuallyPausedUnlisted(t, statePath)
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	comments := newFakeCommentClient()
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src.fakePausingSource, Runner: runner, Comments: comments, Out: logs, closureInterval: time.Hour,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	pollTwice(t, w, src.fakeSource, logs)
+	waitForPaused(t, statePath, 7, core.PausedManual)
+
+	if err := w.handleJobAction(ctx, jobAction{Action: "stop", Target: "o/r", Number: 7}); err != nil {
+		t.Fatalf("stop error = %v, want the paused job cleared", err)
+	}
+	state, err := loadWorkState(statePath)
+	if _, ok := state[7]; err != nil || ok {
+		t.Fatalf("state after stop = %v (err %v), want issue #7 dropped", state, err)
+	}
+	if err := w.handleJobAction(ctx, jobAction{Action: "stop", Target: "o/r", Number: 7}); err == nil || !strings.Contains(err.Error(), "job not found") {
+		t.Fatalf("second stop error = %v, want the job card gone", err)
+	}
+	posted, _ := comments.ListComments(ctx, "o/r", 7)
+	if len(posted) == 0 || !strings.Contains(posted[len(posted)-1].Body, releaseClaimBody) {
+		t.Fatalf("comments on #7 = %+v, want the claim released", posted)
+	}
+	pollTwice(t, w, src.fakeSource, logs)
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("the cleared job ran while its issue was unlisted: %+v", extra)
+	default:
+	}
+
+	src.fakeSource.mu.Lock()
+	src.fakeSource.batches = [][]Issue{{{Number: 7, Repository: "o/r"}}}
+	src.fakeSource.mu.Unlock()
+	w.nudgePoll()
+	select {
+	case session := <-runner.sessions:
+		if session.Resume {
+			t.Fatalf("the relisted issue resumed its cleared session: %+v", session)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the relisted issue was not dispatched:\n%s", logs)
+	}
+}
