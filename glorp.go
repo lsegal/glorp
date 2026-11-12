@@ -3153,6 +3153,44 @@ func (w *Glorp) Run(ctx context.Context) error {
 				request.done <- fmt.Errorf("job cannot be stopped while %s", job.Status)
 				return
 			}
+			if job.Status == "paused" {
+				// A paused job has no run to stop, so Stop clears it instead:
+				// its record and card are dropped and its claim on the issue
+				// is released. A manual pause whose open issue the poll no
+				// longer lists can only be ended this way, since Retry has
+				// nothing to requeue (issue #777).
+				w.logf("issue #%d stop requested from web UI; clearing its pause and releasing the issue", action.Number)
+				workMu.Lock()
+				if cancellations[key] != nil {
+					workMu.Unlock()
+					request.done <- fmt.Errorf("job is still running")
+					return
+				}
+				delete(work, key)
+				delete(active, key)
+				err := saveScopedWorkState(w.StatePath, work, targets)
+				workMu.Unlock()
+				// Without a record the issue reads as untouched work, so it is
+				// dispatched normally if a later poll lists it again.
+				delete(seen, key)
+				delete(restored, key)
+				jobMu.Lock()
+				delete(jobs, key)
+				jobMu.Unlock()
+				publish()
+				issue := Issue{Number: job.Number, Target: job.Target, Repository: job.Repository, Title: job.Title}
+				if w.Status != nil {
+					if statusErr := w.Status.SetIssueStatus(ctx, issue.Target, issue, projectReadyState(w.ReadyState, "")); statusErr != nil {
+						w.logf("issue #%d failed to reset project status: %v", issue.Number, statusErr)
+					}
+				}
+				w.releaseOwnership(ctx, ownershipTargetFor(ctx, closureChecker, issue), "its paused job was cleared from web UI")
+				if err != nil {
+					err = fmt.Errorf("saving state: %w", err)
+				}
+				request.done <- err
+				return
+			}
 			workMu.Lock()
 			cancel, exited := cancellations[key], runExits[key]
 			if cancel != nil {
