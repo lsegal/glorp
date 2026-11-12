@@ -2178,9 +2178,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 			var keys []string
 			workMu.Lock()
 			for key, state := range work {
-				// GitHub never wakes a manual pause, so there is nothing
-				// to read back for one (issue #771).
-				if _, running := active[key]; state.Status == "paused" && !running && !listed[key] && pausedRecord(state).Kind != core.PausedManual {
+				// A manual pause is read back too: nothing on GitHub wakes
+				// it, but its issue closing finishes it (issue #775).
+				if _, running := active[key]; state.Status == "paused" && !running && !listed[key] {
 					keys = append(keys, key)
 				}
 			}
@@ -2441,26 +2441,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 		// Paused work whose issue the poll no longer lists cannot be woken by
 		// it, so its own pull requests are read back once per poll to finish
 		// it when its issue closed or its pull request merged (issue #732).
-		// A job the owner paused whose issue the poll no longer lists still
-		// shows on the dashboards until the owner retries it (issue #771).
-		workMu.Lock()
-		var manual []string
-		for key, state := range work {
-			if _, running := active[key]; state.Status == "paused" && !running && !observedWork[key] && pausedRecord(state).Kind == core.PausedManual {
-				manual = append(manual, key)
-			}
-		}
-		workMu.Unlock()
-		for _, key := range manual {
-			if target, number, ok := parseIssueWorkKey(key); ok && slices.Contains(targets, target) {
-				pauseJob(Issue{Number: number, Target: target, Repository: issueRepository(target, Issue{})}, key, core.ManualPauseReason, nil)
-			}
-		}
 		if closureChecker != nil {
 			workMu.Lock()
 			unlisted := make(map[string]core.PausedWork)
 			for key, state := range work {
-				if _, running := active[key]; state.Status == "paused" && !running && !observedWork[key] && pausedRecord(state).Kind != core.PausedManual {
+				if _, running := active[key]; state.Status == "paused" && !running && !observedWork[key] {
 					unlisted[key] = pausedRecord(state)
 				}
 			}
@@ -2478,6 +2463,22 @@ func (w *Glorp) Run(ctx context.Context) error {
 				if wake, reason := core.WakePaused(paused, core.PausedCheck{Issue: issue, Own: &state}); wake == core.PausedComplete {
 					finishPaused(issue, key, paused, reason)
 				}
+			}
+		}
+		// A job the owner paused whose issue the poll no longer lists still
+		// shows on the dashboards until the owner retries it (issue #771) or
+		// its issue closes (issue #775).
+		workMu.Lock()
+		var manual []string
+		for key, state := range work {
+			if _, running := active[key]; state.Status == "paused" && !running && !observedWork[key] && pausedRecord(state).Kind == core.PausedManual {
+				manual = append(manual, key)
+			}
+		}
+		workMu.Unlock()
+		for _, key := range manual {
+			if target, number, ok := parseIssueWorkKey(key); ok && slices.Contains(targets, target) {
+				pauseJob(Issue{Number: number, Target: target, Repository: issueRepository(target, Issue{})}, key, core.ManualPauseReason, nil)
 			}
 		}
 		// A mention whose issue the poll did not list can never be dispatched,

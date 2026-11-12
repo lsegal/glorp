@@ -237,3 +237,98 @@ func TestGlorpWebUIRefusesPauseOfPausedWork(t *testing.T) {
 	}
 	waitForPaused(t, statePath, 7, core.PausedBlocked)
 }
+
+// manuallyPausedUnlisted saves issue #7 as paused by its owner, with a session
+// to resume, while the poll lists no issues at all (issue #775).
+func manuallyPausedUnlisted(t *testing.T, statePath string) *hydratingPausingSource {
+	t.Helper()
+	saved := `{"o/r#7": {"status": "paused", "sessionId": "session-7", "agent": "claude", "paused": {"kind": "manual"}}}`
+	if err := os.WriteFile(statePath, []byte(saved), 0600); err != nil {
+		t.Fatal(err)
+	}
+	src := &hydratingPausingSource{fakePausingSource: pausingSource([]Issue{}), issues: map[int]Issue{}, hydrateCh: make(chan struct{}, 1)}
+	src.states[7] = OriginatingWorkState{IssueState: "open"}
+	src.setIssue(Issue{Number: 7, State: "open"})
+	return src
+}
+
+// A manually paused job whose issue the poll no longer lists is finished once
+// its issue closes, instead of staying paused with nothing Retry could requeue.
+// The closed issue finishes the job; it never runs it again (issue #775).
+func TestGlorpFinishesAManualPauseWhoseIssueClosed(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := manuallyPausedUnlisted(t, statePath)
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src.fakePausingSource, Runner: runner, Out: logs, closureInterval: time.Hour,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	// A merged pull request on an open issue still leaves it paused.
+	src.mu.Lock()
+	src.states[7] = OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "closed", Merged: true}}}
+	src.mu.Unlock()
+	pollTwice(t, w, src.fakeSource, logs)
+	waitForPaused(t, statePath, 7, core.PausedManual)
+
+	src.mu.Lock()
+	src.states[7] = OriginatingWorkState{IssueState: "closed"}
+	src.mu.Unlock()
+	w.nudgePoll()
+	waitForWorkStatus(t, statePath, 7, "completed")
+	waitForLog(t, logs, "issue #7 unpaused: issue #7 was closed; its paused work is finished")
+	pollTwice(t, w, src.fakeSource, logs)
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("the closed issue resumed the manual pause: %+v", extra)
+	default:
+	}
+}
+
+// The paused watch reads a manual pause's issue back like any other paused
+// work, so a closed issue finishes it even without its own state being read
+// (issues #769, #775).
+func TestGlorpPausedWatchFinishesAManualPauseWhoseIssueClosed(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := manuallyPausedUnlisted(t, statePath)
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Hour, pausedInterval: 20 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case <-src.hydrateCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the manual pause's issue was never read back")
+	}
+	waitForLog(t, logs, "issue #7 paused: paused by owner")
+	waitForPaused(t, statePath, 7, core.PausedManual)
+
+	// Only the issue read back says it closed; its own state still reads
+	// open, so the watch is what finishes it.
+	src.setIssue(Issue{Number: 7, State: "closed"})
+	waitForWorkStatus(t, statePath, 7, "completed")
+	waitForLog(t, logs, "issue #7 unpaused: issue #7 was closed; its paused work is finished")
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("the closed issue resumed the manual pause: %+v", extra)
+	default:
+	}
+}
