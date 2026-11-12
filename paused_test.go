@@ -161,3 +161,35 @@ func TestLoadWorkStateReadsParkedWorkAsPaused(t *testing.T) {
 		t.Fatalf("saved state still says parked:\n%s", saved)
 	}
 }
+
+// The nupp#5 shape (issue #762): a pull-request record saved while some pull
+// request was held, for an issue that now has no pull request, no sub-issues,
+// and only closed dependencies. Nothing is left for it to wait on, so the
+// first poll dispatches it instead of leaving it paused forever.
+func TestGlorpDispatchesPausedPullRequestWorkWithNothingToWaitOn(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	saved := `{"o/r#7": {"status": "paused", "paused": {"kind": "pull-request", "pullRequests": [15]}}}`
+	if err := os.WriteFile(statePath, []byte(saved), 0600); err != nil {
+		t.Fatal(err)
+	}
+	src := pausingSource(blockedOn12("closed"))
+	src.states[7] = OriginatingWorkState{IssueState: "open"}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitForSession(t, runner.sessions)
+	if !strings.Contains(logs.String(), "issue #7 unpaused: it has no open pull request and nothing blocks it; dispatching it") {
+		t.Fatalf("waking was not logged:\n%s", logs)
+	}
+}

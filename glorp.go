@@ -2256,7 +2256,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d discarded persisted agent %q; it is no longer configured", issue.Number, session.Agent)
 					session.ID, session.Agent, session.Resume = "", "", false
 				}
-				if wake == core.PausedResume && paused.Kind == core.PausedBlocked {
+				if wake == core.PausedResume && paused.Kind != core.PausedStacked {
 					w.logf("issue #%d unpaused: %s; dispatching it", issue.Number, wakeReason)
 				} else if wake == core.PausedResume {
 					w.logf("issue #%d unpaused: %s; resuming its stacked pull request", issue.Number, wakeReason)

@@ -110,7 +110,16 @@ type hydratedIssue struct {
 	CreatedAt    time.Time
 	DependsOn    []core.IssueDependency
 	HasSubIssues bool
+	// Fetched is when the hydration was read, so a blocked issue knows when
+	// its dependency state is due to be read again.
+	Fetched time.Time
 }
+
+// blockedRefreshInterval is how long a blocked issue's memoized dependency
+// state is trusted. Closing a blocker does not change anything a rendered page
+// shows for the dependent issue, so without a fresh read a paused issue never
+// sees its last blocker close (issue #762).
+const blockedRefreshInterval = time.Minute
 
 // Hydration is the candidate selection and memoization both browser
 // page readers hydrate through: the repository issues page (issue #381) and
@@ -134,6 +143,8 @@ type Hydration struct {
 	// makes an issue that leaves and re-enters the candidate set hydrate
 	// again.
 	hydrated map[string]map[string]hydratedIssue
+	// now reads the clock; nil uses time.Now. Tests override it.
+	now func() time.Time
 }
 
 // NewHydration builds the shared hydration helper for a run.
@@ -288,6 +299,10 @@ func (s *IssueSource) ListIssues(ctx context.Context, target string) ([]core.Iss
 // steady-state tick whose extraction is unchanged therefore makes zero
 // requests, and the requests it does make are plain REST GETs -- never a
 // GraphQL query.
+//
+// The one exception is a blocked issue: its dependency state is read again
+// once blockedRefreshInterval has passed, because a blocker closing is the
+// only thing that can wake it and the page never shows it (issue #762).
 func (s *Hydration) hydrateIssues(ctx context.Context, target string, issues []core.Issue) error {
 	if s == nil || s.hydrate == nil {
 		return nil
@@ -304,7 +319,7 @@ func (s *Hydration) hydrateIssues(ctx context.Context, target string, issues []c
 		repo := core.IssueRepository(target, *issue)
 		key := repo + "#" + strconv.Itoa(issue.Number)
 		candidates[key] = true
-		if cached, ok := s.cachedHydration(target, key); ok {
+		if cached, ok := s.cachedHydration(target, key); ok && !s.dueForRefresh(cached) {
 			applyHydration(issue, cached)
 			continue
 		}
@@ -321,10 +336,28 @@ func (s *Hydration) hydrateIssues(ctx context.Context, target string, issues []c
 			CreatedAt:    issue.CreatedAt,
 			DependsOn:    issue.DependsOn,
 			HasSubIssues: issue.HasSubIssues,
+			Fetched:      s.clock(),
 		})
 	}
 	s.pruneHydration(target, candidates)
 	return nil
+}
+
+// dueForRefresh reports whether a memoized hydration must be read again: only
+// a blocked issue's, and only once blockedRefreshInterval has passed, which
+// keeps an unblocked steady-state tick free of requests.
+func (s *Hydration) dueForRefresh(cached hydratedIssue) bool {
+	if blocked, _ := core.IssueBlocked(core.Issue{DependsOn: cached.DependsOn, HasSubIssues: cached.HasSubIssues}); !blocked {
+		return false
+	}
+	return s.clock().Sub(cached.Fetched) >= blockedRefreshInterval
+}
+
+func (s *Hydration) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // cachedHydration returns a target's memoized hydration for an issue, if it
