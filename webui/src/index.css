@@ -202,6 +202,15 @@ h1 .version {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+.job-link {
+	color: inherit;
+	text-decoration: underline;
+	text-decoration-color: var(--muted);
+	text-underline-offset: 2px;
+}
+.job-link:hover {
+	text-decoration-color: currentColor;
+}
 .job-progress {
 	margin-left: auto;
 	flex: 0 0 auto;

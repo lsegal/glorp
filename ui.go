@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,16 +57,54 @@ func sortJobSnapshots(jobs []JobSnapshot) {
 // jobTitlePrefix is what a job card's title starts with: its status indicator
 // and issue number, followed by its pull request when it has one, such as
 // "✓ #747 · PR #750 " (issue #753), and then its progress bar when its pull
-// request carries a plan checklist (issue #755).
-func jobTitlePrefix(indicator string, job JobSnapshot) string {
-	prefix := fmt.Sprintf("%s #%d", indicator, job.Number)
+// request carries a plan checklist (issue #755). With hyperlinks, the issue
+// number and pull request label link to their GitHub pages (issue #767).
+func jobTitlePrefix(indicator string, job JobSnapshot, hyperlinks bool) string {
+	prefix := indicator + " " + terminalLink(fmt.Sprintf("#%d", job.Number), job.IssueURL(), hyperlinks)
 	if label := job.PullRequestLabel(); label != "" {
-		prefix += " · " + label
+		prefix += " · " + terminalLink(label, job.PullRequestURL(), hyperlinks)
 	}
 	if bar := jobProgressBar(job); bar != "" {
 		prefix += " " + bar
 	}
 	return prefix + " "
+}
+
+// terminalLink wraps text in an OSC 8 hyperlink to url, or returns it as plain
+// text when the terminal cannot show hyperlinks or there is no url.
+func terminalLink(text, url string, hyperlinks bool) string {
+	if !hyperlinks || url == "" {
+		return text
+	}
+	return ansi.SetHyperlink(url) + text + ansi.ResetHyperlink()
+}
+
+// terminalSupportsHyperlinks reports whether the terminal described by the
+// environment shows OSC 8 hyperlinks, so terminals that do not never print
+// raw escape sequences (issue #767). FORCE_HYPERLINK overrides the guess.
+func terminalSupportsHyperlinks(getenv func(string) string) bool {
+	if force := getenv("FORCE_HYPERLINK"); force != "" {
+		return force != "0"
+	}
+	if getenv("TERM") == "dumb" {
+		return false
+	}
+	if getenv("WT_SESSION") != "" || getenv("KITTY_WINDOW_ID") != "" || getenv("WEZTERM_PANE") != "" ||
+		getenv("KONSOLE_VERSION") != "" || getenv("GHOSTTY_RESOURCES_DIR") != "" {
+		return true
+	}
+	switch getenv("TERM_PROGRAM") {
+	case "iTerm.app", "WezTerm", "vscode", "ghostty", "Hyper", "Tabby", "rio":
+		return true
+	}
+	switch getenv("TERM") {
+	case "xterm-kitty", "xterm-ghostty", "alacritty", "foot", "foot-extra", "wezterm":
+		return true
+	}
+	if vte, err := strconv.Atoi(getenv("VTE_VERSION")); err == nil && vte >= 5000 {
+		return true
+	}
+	return false
 }
 
 // jobProgressBarCells is how many cells wide the terminal progress bar is.
@@ -129,6 +169,9 @@ type dashboard struct {
 	dragging *viewportTarget
 	ui       *TerminalUI
 	showHelp bool
+	// hyperlinks is whether job cards link their issue and pull request
+	// numbers with OSC 8 (issue #767).
+	hyperlinks bool
 }
 
 var (
@@ -159,7 +202,7 @@ func newDashboard(ui *TerminalUI) dashboard {
 	s := spinner.New()
 	s.Spinner = spinner.Line
 	s.Style = active
-	return dashboard{snapshot: GlorpSnapshot{}, jobs: make(map[int]viewport.Model), spinner: s, ui: ui}
+	return dashboard{snapshot: GlorpSnapshot{}, jobs: make(map[int]viewport.Model), spinner: s, ui: ui, hyperlinks: terminalSupportsHyperlinks(os.Getenv)}
 }
 
 func (m dashboard) Init() tea.Cmd { return spinner.Tick }
@@ -428,7 +471,7 @@ func (m dashboard) View() string {
 			indicator = "⧗"
 		}
 		cardWidth := jobCardWidth(m.width)
-		prefix := jobTitlePrefix(indicator, job)
+		prefix := jobTitlePrefix(indicator, job, m.hyperlinks)
 		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
 		metadataWidth := max(1, cardWidth-2)
 		checkout := muted.Render(truncate("checkout: "+job.CheckoutDirectory, metadataWidth))

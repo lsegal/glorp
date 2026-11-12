@@ -1225,3 +1225,62 @@ func TestDashboardShowsPausedWorkApartFromActiveAndCompleted(t *testing.T) {
 		t.Fatalf("paused job card did not say what it waits on: %s", view)
 	}
 }
+
+func TestJobTitlePrefixLinksIssueAndPullRequest(t *testing.T) {
+	job := JobSnapshot{Number: 24, Target: "lsegal/nupp", PullRequest: 190, PullRequestRepository: "fork/nupp"}
+	prefix := jobTitlePrefix("✓", job, true)
+	issueLink := ansi.SetHyperlink("https://github.com/lsegal/nupp/issues/24") + "#24" + ansi.ResetHyperlink()
+	pullLink := ansi.SetHyperlink("https://github.com/fork/nupp/pull/190") + "PR fork/nupp#190" + ansi.ResetHyperlink()
+	if !strings.Contains(prefix, issueLink) || !strings.Contains(prefix, pullLink) {
+		t.Fatalf("prefix %q does not link the issue and pull request", prefix)
+	}
+	if got, want := lipgloss.Width(prefix), lipgloss.Width(jobTitlePrefix("✓", job, false)); got != want {
+		t.Fatalf("linked prefix width = %d, want %d", got, want)
+	}
+}
+
+func TestJobTitlePrefixPlainWithoutHyperlinkSupport(t *testing.T) {
+	job := JobSnapshot{Number: 24, Target: "lsegal/nupp", PullRequest: 190}
+	if got, want := jobTitlePrefix("✓", job, false), "✓ #24 · PR #190 "; got != want {
+		t.Fatalf("plain prefix = %q, want %q", got, want)
+	}
+}
+
+func TestDashboardLinksOnlyWhereHyperlinksAreSupported(t *testing.T) {
+	for _, hyperlinks := range []bool{false, true} {
+		m := newDashboard(nil)
+		m.hyperlinks = hyperlinks
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+		updated, _ = updated.(dashboard).Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{{
+			Number: 24, Target: "lsegal/nupp", Title: "Linked", Status: "active", PullRequest: 190,
+		}}}))
+		view := updated.(dashboard).View()
+		if got := strings.Contains(view, "\x1b]8;"); got != hyperlinks {
+			t.Fatalf("hyperlinks %v: view contains OSC 8 = %v: %q", hyperlinks, got, view)
+		}
+		if !strings.Contains(ansi.Strip(view), "#24 · PR #190 Linked") {
+			t.Fatalf("hyperlinks %v: view lost the title: %s", hyperlinks, ansi.Strip(view))
+		}
+	}
+}
+
+func TestTerminalSupportsHyperlinks(t *testing.T) {
+	for _, test := range []struct {
+		env  map[string]string
+		want bool
+	}{
+		{env: map[string]string{}, want: false},
+		{env: map[string]string{"TERM": "xterm-256color"}, want: false},
+		{env: map[string]string{"TERM": "dumb", "WT_SESSION": "x"}, want: false},
+		{env: map[string]string{"WT_SESSION": "x"}, want: true},
+		{env: map[string]string{"TERM_PROGRAM": "iTerm.app"}, want: true},
+		{env: map[string]string{"VTE_VERSION": "4800"}, want: false},
+		{env: map[string]string{"VTE_VERSION": "6003"}, want: true},
+		{env: map[string]string{"FORCE_HYPERLINK": "0", "WT_SESSION": "x"}, want: false},
+		{env: map[string]string{"FORCE_HYPERLINK": "1"}, want: true},
+	} {
+		if got := terminalSupportsHyperlinks(func(key string) string { return test.env[key] }); got != test.want {
+			t.Errorf("terminalSupportsHyperlinks(%v) = %v, want %v", test.env, got, test.want)
+		}
+	}
+}

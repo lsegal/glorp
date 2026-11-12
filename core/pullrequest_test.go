@@ -49,3 +49,28 @@ func TestJobSnapshotPullRequestLabel(t *testing.T) {
 		t.Fatalf("label after the pull request went away = %q, want empty", label)
 	}
 }
+
+func TestJobSnapshotURLs(t *testing.T) {
+	job := JobSnapshot{Number: 24, Target: "lsegal/nupp", PullRequest: 190}
+	if got, want := job.IssueURL(), "https://github.com/lsegal/nupp/issues/24"; got != want {
+		t.Fatalf("IssueURL() = %q, want %q", got, want)
+	}
+	if got, want := job.PullRequestURL(), "https://github.com/lsegal/nupp/pull/190"; got != want {
+		t.Fatalf("PullRequestURL() = %q, want %q", got, want)
+	}
+	job.PullRequestRepository = "fork/nupp"
+	if got, want := job.PullRequestURL(), "https://github.com/fork/nupp/pull/190"; got != want {
+		t.Fatalf("cross-repository PullRequestURL() = %q, want %q", got, want)
+	}
+	project := JobSnapshot{Number: 5, Target: "https://github.com/users/o/projects/1", Repository: "o/r"}
+	if got, want := project.IssueURL(), "https://github.com/o/r/issues/5"; got != want {
+		t.Fatalf("project IssueURL() = %q, want %q", got, want)
+	}
+	if got := project.PullRequestURL(); got != "" {
+		t.Fatalf("PullRequestURL() without a pull request = %q, want empty", got)
+	}
+	unknown := JobSnapshot{Number: 5, Target: "https://github.com/users/o/projects/1", PullRequest: 6}
+	if unknown.IssueURL() != "" || unknown.PullRequestURL() != "" {
+		t.Fatalf("job with an unknown repository linked to %q and %q", unknown.IssueURL(), unknown.PullRequestURL())
+	}
+}

@@ -32,7 +32,6 @@ import {
 	jobAgentSummary,
 	jobPage,
 	jobProgress,
-	jobPullRequestLabel,
 	jobWaitLabel,
 	modelGroupsFrom,
 	modelOptionsFrom,
@@ -43,6 +42,7 @@ import {
 	submitSettings,
 	toggleActiveModel,
 } from "./dashboard";
+import { JobTitle } from "./jobtitle";
 import "./index.css";
 
 const emptyState = {
@@ -152,7 +152,6 @@ function JobCard({ job }) {
 	const [pendingAction, setPendingAction] = useState("");
 	const [actionError, setActionError] = useState("");
 	const available = jobActionAvailability(job.Status);
-	const pullRequest = jobPullRequestLabel(job);
 	const progress = jobProgress(job);
 	const runAction = async (action) => {
 		setPendingAction(action);
@@ -169,10 +168,7 @@ function JobCard({ job }) {
 		<article className="card">
 			<header className="card-header">
 				<JobIcon status={job.Status} />
-				<h2>
-					#{job.Number}
-					{pullRequest && ` · ${pullRequest}`} {job.Title}
-				</h2>
+				<JobTitle job={job} />
 				{progress && <JobProgress progress={progress} />}
 			</header>
 			<div className="meta" title={job.CheckoutDirectory}>

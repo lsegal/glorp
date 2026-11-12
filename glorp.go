@@ -2047,7 +2047,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			jobMu.Lock()
 			job, ok := jobs[key]
 			if !ok {
-				job = JobSnapshot{Number: issue.Number, Target: issue.Target, Title: issue.Title}
+				job = JobSnapshot{Number: issue.Number, Target: issue.Target, Repository: issueRepository(issue.Target, issue), Title: issue.Title}
 			}
 			if job.Title == "" {
 				job.Title = issue.Title
@@ -2419,7 +2419,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			mentions.agentStarted(issue.Repository + "#" + strconv.Itoa(issue.Number))
 			spec, _ := parseAgentSpec(session.Agent)
 			jobMu.Lock()
-			jobs[key] = JobSnapshot{Number: issue.Number, Target: issue.Target, Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Agent: spec.Name, Model: spec.Model, Effort: spec.Level, Started: time.Now()}
+			jobs[key] = JobSnapshot{Number: issue.Number, Target: issue.Target, Repository: issueRepository(issue.Target, issue), Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Agent: spec.Name, Model: spec.Model, Effort: spec.Level, Started: time.Now()}
 			jobMu.Unlock()
 			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory, Owner: string(w.Identity)}
 			err = saveScopedWorkState(w.StatePath, work, targets)
