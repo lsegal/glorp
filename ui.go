@@ -322,6 +322,11 @@ func (m dashboard) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.scrollToMouse(*m.dragging, event.Y)
 		return m, nil
 	}
+	if event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft {
+		if job, action, ok := m.jobActionAt(event.X, event.Y); ok && m.ui != nil {
+			return m, m.ui.runJobAction(job, action)
+		}
+	}
 	region, ok := m.viewportAt(event.X, event.Y)
 	if !ok {
 		return m, nil
@@ -433,7 +438,94 @@ var helpLines = []string{
 	"q, ctrl+c   quit",
 	"r           refresh now (repoll GitHub)",
 	"h/l, ←/→    switch job page",
+	"click       a job card's [retry] [stop] [pause]",
 	"?           toggle this help",
+}
+
+// jobActionButtons are the job actions a terminal job card offers on its
+// bottom line, below its output, in the order they are drawn (issue #771). Which are
+// enabled comes from core.JobActionAvailability, as on the web dashboard.
+var jobActionButtons = []struct{ action, label string }{
+	{"retry", "[retry]"},
+	{"stop", "[stop]"},
+	{"pause", "[pause]"},
+}
+
+// jobActionsWidth is how many cells the job action buttons take.
+var jobActionsWidth = func() int {
+	width := len(jobActionButtons) - 1
+	for _, button := range jobActionButtons {
+		width += lipgloss.Width(button.label)
+	}
+	return width
+}()
+
+// jobActionEnabled reports whether the run accepts action for a job in
+// status.
+func jobActionEnabled(status, action string) bool {
+	available := core.JobActionAvailability(status)
+	switch action {
+	case "retry":
+		return available.Retry
+	case "stop":
+		return available.Stop
+	case "pause":
+		return available.Pause
+	}
+	return false
+}
+
+// renderJobActions draws a job's action buttons, with the ones the run would
+// refuse dimmed.
+func renderJobActions(status string) string {
+	labels := make([]string, len(jobActionButtons))
+	for i, button := range jobActionButtons {
+		style := muted
+		if jobActionEnabled(status, button.action) {
+			style = active
+		}
+		labels[i] = style.Render(button.label)
+	}
+	return strings.Join(labels, " ")
+}
+
+// showsJobActions reports whether a card of cardWidth has room for its action
+// buttons.
+func showsJobActions(cardWidth int) bool {
+	return cardWidth-2 >= jobActionsWidth
+}
+
+// jobActionsRow is the card line the action buttons are drawn on: the one
+// below the title, checkout, session, and agent lines and the output.
+const jobActionsRow = 4 + jobCardHeight - 5
+
+// jobActionAt returns the visible job and the enabled action whose button is
+// at x, y, if any.
+func (m dashboard) jobActionAt(x, y int) (JobSnapshot, string, bool) {
+	cardWidth := jobCardWidth(m.width)
+	if !showsJobActions(cardWidth) {
+		return JobSnapshot{}, "", false
+	}
+	visible, _, _ := m.visibleJobs()
+	cardRenderWidth := lipgloss.Width(panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(""))
+	for i, job := range visible {
+		cardX := (i%jobGridColumns)*(cardRenderWidth+dashboardGap) + 1
+		if y != (i/jobGridColumns)*(jobCardHeight+dashboardGap)+jobActionsRow {
+			continue
+		}
+		buttonX := cardX
+		for _, button := range jobActionButtons {
+			width := lipgloss.Width(button.label)
+			if x >= buttonX && x < buttonX+width {
+				if !jobActionEnabled(job.Status, button.action) {
+					return JobSnapshot{}, "", false
+				}
+				return job, button.action, true
+			}
+			buttonX += width + 1
+		}
+	}
+	return JobSnapshot{}, "", false
 }
 
 func (m dashboard) helpView() string {
@@ -483,8 +575,11 @@ func (m dashboard) View() string {
 			session = muted.Render(truncate(jobWaitLabel(job, time.Now()), metadataWidth))
 		}
 		agent := muted.Render(truncate("agent: "+jobAgentSummary(job), metadataWidth))
-		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(
-			fmt.Sprintf("%s\n%s\n%s\n%s\n%s", title, checkout, session, agent, progress)))
+		card := fmt.Sprintf("%s\n%s\n%s\n%s\n%s", title, checkout, session, agent, progress)
+		if showsJobActions(cardWidth) {
+			card += "\n" + renderJobActions(status)
+		}
+		jobs = append(jobs, panel.Copy().Padding(0, 1).Width(cardWidth).Height(jobCardHeight).Render(card))
 	}
 	rows := make([]string, 0, (len(jobs)+jobGridColumns-1)/jobGridColumns)
 	for i := 0; i < len(jobs); i += jobGridColumns {
@@ -853,6 +948,7 @@ type TerminalUI struct {
 	program *tea.Program
 	mu      sync.Mutex
 	refresh func()
+	action  func(context.Context, core.JobAction) error
 }
 
 func NewTerminalUI() *TerminalUI {
@@ -880,6 +976,34 @@ func (ui *TerminalUI) requestRefresh() {
 		handler()
 	}
 }
+
+// SetJobActionHandler wires the job cards' retry, stop, and pause buttons
+// (issue #771) to the run's job-action handler, the same one the web
+// dashboard's buttons use.
+func (ui *TerminalUI) SetJobActionHandler(handler func(context.Context, core.JobAction) error) {
+	ui.mu.Lock()
+	ui.action = handler
+	ui.mu.Unlock()
+}
+
+// runJobAction performs action on job off the dashboard's goroutine, since a
+// stop or pause only answers once the run has exited, and logs the outcome.
+func (ui *TerminalUI) runJobAction(job JobSnapshot, action string) tea.Cmd {
+	ui.mu.Lock()
+	handler := ui.action
+	ui.mu.Unlock()
+	if handler == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		err := handler(context.Background(), core.JobAction{Action: action, Target: job.Target, Number: job.Number})
+		if err != nil {
+			return logMsg(fmt.Sprintf("issue #%d %s failed: %v", job.Number, action, err))
+		}
+		return logMsg(fmt.Sprintf("issue #%d %s done", job.Number, action))
+	}
+}
+
 func (ui *TerminalUI) Run(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {

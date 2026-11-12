@@ -208,6 +208,8 @@ func TestGlorpWebUIRetriesPausedWork(t *testing.T) {
 		{"blocked", `{"kind": "blocked", "waitingOn": [12]}`, blockedOn12("open"), OriginatingWorkState{IssueState: "open"}},
 		{"stacked", `{"kind": "stacked", "waitingOn": [12], "pullRequests": [15]}`, blockedOn12("open"), OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", Stacked: true}}}},
 		{"pull request", `{"kind": "pull-request", "pullRequests": [15]}`, []Issue{{Number: 7, Repository: "o/r"}}, OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open"}}}},
+		// A manual pause ends only when the owner retries it (issue #771).
+		{"manual", `{"kind": "manual"}`, []Issue{{Number: 7, Repository: "o/r"}}, OriginatingWorkState{IssueState: "open"}},
 		{"legacy", ``, blockedOn12("open"), OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", Stacked: true}}}},
 	}
 	for _, tc := range cases {

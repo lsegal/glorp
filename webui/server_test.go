@@ -186,6 +186,36 @@ func TestServerHandlesJobActions(t *testing.T) {
 	}
 }
 
+// TestServerAcceptsPauseJobAction checks that the dashboard's Pause button
+// reaches the run's job-action handler like Retry and Stop (issue #771), and
+// that an action the run does not know is still rejected.
+func TestServerAcceptsPauseJobAction(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got core.JobAction
+	ui.SetJobActionHandler(func(_ context.Context, action core.JobAction) error {
+		got = action
+		return nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/jobs/action", bytes.NewBufferString(`{"action":"pause","target":"o/r","number":7}`))
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("POST pause = %d, body = %q", response.Code, response.Body.String())
+	}
+	if got != (core.JobAction{Action: "pause", Target: "o/r", Number: 7}) {
+		t.Fatalf("action = %#v", got)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/jobs/action", bytes.NewBufferString(`{"action":"resume","target":"o/r","number":7}`))
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("POST resume = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
 func TestServerRejectsUnavailableJobActions(t *testing.T) {
 	ui, err := New("v1.2.3")
 	if err != nil {

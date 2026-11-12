@@ -21,7 +21,14 @@ const (
 	// request to merge, which completes the work, or to close unmerged, which
 	// restarts it fresh (issues #690, #729).
 	PausedPullRequest = "pull-request"
+	// PausedManual is work the owner paused from a dashboard (issue #771). No
+	// GitHub event wakes it; it waits until the owner retries it.
+	PausedManual = "manual"
 )
+
+// ManualPauseReason is what the dashboards say a job the owner paused waits
+// on.
+const ManualPauseReason = "paused by owner"
 
 // PausedWork is the one record every kind of paused work shares: what kind it
 // is, the issues it waits on, and the pull requests it left behind. The record
@@ -90,6 +97,11 @@ func OpenPullRequests(state OriginatingWorkState) []int {
 // wake paused work. Every instance that reads the same GitHub state decides
 // the same thing.
 func WakePaused(paused PausedWork, check PausedCheck) (PausedWake, string) {
+	// Only the owner ends a manual pause, by retrying the job, so nothing
+	// read from GitHub wakes or finishes it (issue #771).
+	if paused.Kind == PausedManual {
+		return PausedStay, ManualPauseReason
+	}
 	if strings.EqualFold(check.Issue.State, "closed") || (check.Own != nil && strings.EqualFold(check.Own.IssueState, "closed")) {
 		return PausedComplete, fmt.Sprintf("issue #%d was closed", check.Issue.Number)
 	}

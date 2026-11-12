@@ -1,6 +1,7 @@
 import {
 	ArrowPathIcon,
 	Cog6ToothIcon,
+	PauseIcon,
 	PowerIcon,
 	StopIcon,
 	XMarkIcon,
@@ -202,6 +203,14 @@ function JobCard({ job }) {
 						title={actionError || "Stop gh-fix"}
 					>
 						<StopIcon /> Stop
+					</button>
+					<button
+						type="button"
+						disabled={!available.pause || pendingAction !== ""}
+						onClick={() => runAction("pause")}
+						title={actionError || "Pause until retried"}
+					>
+						<PauseIcon /> Pause
 					</button>
 				</div>
 				<ScrollViewport
