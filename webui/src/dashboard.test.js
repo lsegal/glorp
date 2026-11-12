@@ -91,7 +91,7 @@ describe("lastPollLabel", () => {
 });
 
 describe("jobActionAvailability", () => {
-	it("enables retry for every dashboard job state", () => {
+	it("enables retry for every state the run can retry", () => {
 		expect(jobActionAvailability("active")).toEqual({
 			retry: true,
 			stop: true,
@@ -104,12 +104,21 @@ describe("jobActionAvailability", () => {
 			retry: true,
 			stop: false,
 		});
-		expect(jobActionAvailability("queued")).toEqual({
+		expect(jobActionAvailability("paused")).toEqual({
 			retry: true,
 			stop: false,
 		});
+	});
+
+	it("disables retry with a reason for states the run refuses", () => {
+		expect(jobActionAvailability("queued")).toEqual({
+			retry: false,
+			retryReason: "Already queued for a gh-fix run",
+			stop: false,
+		});
 		expect(jobActionAvailability("stopping")).toEqual({
-			retry: true,
+			retry: false,
+			retryReason: "Waiting for the stopped run to exit",
 			stop: false,
 		});
 	});

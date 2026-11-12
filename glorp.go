@@ -1988,6 +1988,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// remaining refreshes have nothing left to catch. Only the run loop's own
 	// goroutine reads or writes it.
 	var observed map[string]bool
+	// retriedPaused holds the paused job a web UI retry just unpaused while
+	// the poll that requeues it runs, so a blocker that is still open does not
+	// pause it again: the retry overrides what it waited on (issue #763).
+	// Only the run loop's own goroutine reads or writes it.
+	retriedPaused := make(map[string]bool)
 	pollOnce := func(sweep map[string]bool) error {
 		pollNumber++
 		n := pollNumber
@@ -2136,7 +2141,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					finishPaused(issue, key, paused, wakeReason)
 					continue
 				}
-			} else if blocked, reason := issueBlocked(issue); blocked {
+			} else if blocked, reason := issueBlocked(issue); blocked && !retriedPaused[key] {
 				if pullRequest, ok := w.stackableOnDependency(ctx, closureChecker, issue); ok {
 					w.logChanged("stack-"+key, strconv.Itoa(pullRequest), "issue #%d %s; stacking it on pull request #%d", issue.Number, reason, pullRequest)
 				} else if issue.HasSubIssues || running || pausedState.Status == "completed" {
@@ -3071,6 +3076,49 @@ func (w *Glorp) Run(ctx context.Context) error {
 					jobs[key] = job
 					jobMu.Unlock()
 					request.done <- poll(nil)
+				case "paused":
+					// Retrying overrides whatever the paused job waits on: its
+					// pause is dropped, its session is kept as a failed run's
+					// is, and it is requeued. A held pull request is left as it
+					// is on GitHub; the rerun picks it up (issue #763).
+					w.logf("issue #%d retry requested from web UI; clearing its pause and rerunning gh-fix", action.Number)
+					workMu.Lock()
+					paused := work[key]
+					state := paused
+					state.Status, state.Paused = "failed", nil
+					work[key] = state
+					workMu.Unlock()
+					pausedJob := job
+					jobMu.Lock()
+					job.Status, job.WaitReason = "failed", ""
+					jobs[key] = job
+					jobMu.Unlock()
+					retriedPaused[key] = true
+					err := poll(nil)
+					delete(retriedPaused, key)
+					workMu.Lock()
+					_, requeued := active[key]
+					if !requeued {
+						// Nothing was requeued, so the pause is put back rather
+						// than reporting a retry that changed nothing.
+						work[key] = paused
+						if saveErr := saveScopedWorkState(w.StatePath, work, targets); saveErr != nil && err == nil {
+							err = fmt.Errorf("saving state: %w", saveErr)
+						}
+					}
+					workMu.Unlock()
+					if !requeued {
+						jobMu.Lock()
+						if current, ok := jobs[key]; ok && current.Status == "failed" {
+							jobs[key] = pausedJob
+						}
+						jobMu.Unlock()
+						publish()
+						if err == nil {
+							err = fmt.Errorf("job was not requeued, so it stays paused")
+						}
+					}
+					request.done <- err
 				default:
 					request.done <- fmt.Errorf("job cannot be retried while %s", job.Status)
 				}

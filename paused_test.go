@@ -193,3 +193,119 @@ func TestGlorpDispatchesPausedPullRequestWorkWithNothingToWaitOn(t *testing.T) {
 		t.Fatalf("waking was not logged:\n%s", logs)
 	}
 }
+
+// Retrying a paused job from the web UI clears its pause and reruns gh-fix,
+// whatever kind of work it was waiting on, leaving its session as a failed
+// run's is (issue #763).
+func TestGlorpWebUIRetriesPausedWork(t *testing.T) {
+	cases := []struct {
+		name   string
+		paused string
+		issues []Issue
+		own    OriginatingWorkState
+	}{
+		{"blocked", `{"kind": "blocked", "waitingOn": [12]}`, blockedOn12("open"), OriginatingWorkState{IssueState: "open"}},
+		{"stacked", `{"kind": "stacked", "waitingOn": [12], "pullRequests": [15]}`, blockedOn12("open"), OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", Stacked: true}}}},
+		{"pull request", `{"kind": "pull-request", "pullRequests": [15]}`, []Issue{{Number: 7, Repository: "o/r"}}, OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open"}}}},
+		{"legacy", ``, blockedOn12("open"), OriginatingWorkState{IssueState: "open", PullRequests: []PullRequestWorkState{{Number: 15, State: "open", Stacked: true}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.json")
+			record := `"status": "paused", "sessionId": "session-7", "agent": "claude"`
+			if tc.paused != "" {
+				record += `, "paused": ` + tc.paused
+			}
+			if err := os.WriteFile(statePath, []byte(`{"o/r#7": {`+record+`}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			src := pausingSource(tc.issues)
+			src.states[7] = tc.own
+			// The blocker has no pull request to stack on, so only the retry
+			// can move the job.
+			src.states[12] = OriginatingWorkState{IssueState: "open"}
+			// The rerun keeps running, so its active state can be read back.
+			runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4)}
+			logs := &syncBuffer{}
+			w := &Glorp{
+				Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+				Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- w.Run(ctx) }()
+			defer func() {
+				cancel()
+				<-done
+			}()
+
+			deadline := time.Now().Add(5 * time.Second)
+			for !strings.Contains(logs.String(), "issue #7 paused: ") {
+				if time.Now().After(deadline) {
+					t.Fatalf("the restored work was not left paused:\n%s", logs)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			select {
+			case extra := <-runner.sessions:
+				t.Fatalf("paused work ran before it was retried: %+v", extra)
+			default:
+			}
+
+			if err := w.handleJobAction(ctx, jobAction{Action: "retry", Target: "o/r", Number: 7}); err != nil {
+				t.Fatalf("retrying paused work failed: %v\n%s", err, logs)
+			}
+			session := waitForSession(t, runner.sessions)
+			if !session.Resume || session.ID != "session-7" {
+				t.Fatalf("session = %+v, want the paused work's session resumed", session)
+			}
+			waitForWorkStatus(t, statePath, 7, "active")
+			if !strings.Contains(logs.String(), "issue #7 retry requested from web UI; clearing its pause and rerunning gh-fix") {
+				t.Fatalf("the retry was not logged:\n%s", logs)
+			}
+		})
+	}
+}
+
+// A retry that cannot requeue the paused job keeps it paused and says so,
+// rather than reporting success for a retry that changed nothing (issue #763).
+func TestGlorpWebUIRetryKeepsPauseWhenNothingIsRequeued(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(statePath, []byte(`{"o/r#7": {"status": "paused", "sessionId": "session-7", "agent": "claude", "paused": {"kind": "blocked", "waitingOn": [12]}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	src := pausingSource(blockedOn12("open"), []Issue{})
+	src.states[12] = OriginatingWorkState{IssueState: "open"}
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "issue #7 paused: ") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the restored work was not left paused:\n%s", logs)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// The retry's poll no longer lists the issue, so nothing can rerun it.
+	err := w.handleJobAction(ctx, jobAction{Action: "retry", Target: "o/r", Number: 7})
+	if err == nil || !strings.Contains(err.Error(), "stays paused") {
+		t.Fatalf("retry error = %v, want it to report the job stays paused", err)
+	}
+	waitForPaused(t, statePath, 7, core.PausedBlocked)
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("a retry that was refused still ran: %+v", extra)
+	default:
+	}
+}
