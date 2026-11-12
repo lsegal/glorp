@@ -92,6 +92,30 @@ export function jobPullRequestLabel(job) {
 	return `PR ${job.PullRequestRepository || ""}#${job.PullRequest}`;
 }
 
+// jobIssueRepository is the OWNER/REPO hosting a job's issue: its Repository,
+// or its Target when that is a bare repository rather than a project.
+function jobIssueRepository(job) {
+	if (job.Repository) return job.Repository;
+	return /^[^/\s]+\/[^/\s]+$/.test(job.Target || "") ? job.Target : "";
+}
+
+// jobIssueURL is the GitHub page a job card's issue number links to, or ""
+// when the issue's repository is unknown (issue #767).
+export function jobIssueURL(job) {
+	const repository = jobIssueRepository(job);
+	if (!repository || !(job.Number > 0)) return "";
+	return `https://github.com/${repository}/issues/${job.Number}`;
+}
+
+// jobPullRequestURL is the GitHub page a job card's pull request label links
+// to, in the pull request's own repository when that differs from the
+// issue's, such as a fork (issue #767).
+export function jobPullRequestURL(job) {
+	const repository = job.PullRequestRepository || jobIssueRepository(job);
+	if (!repository || !(job.PullRequest > 0)) return "";
+	return `https://github.com/${repository}/pull/${job.PullRequest}`;
+}
+
 // jobProgress is what a job card's progress bar draws: the percentage of its
 // pull request's plan checklist that is done, as computed by glorp, and a
 // tooltip counting the tasks. A job without a pull request or without a

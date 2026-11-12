@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Link each job's issue and pull request numbers to their GitHub pages in the web and terminal dashboards (issue #767). On a web job card, clicking `#24` opens the issue and clicking `PR #190` opens the pull request, each in a new tab; a pull request in another repository, such as a fork, opens in that repository, and a job watched through a project links to its issue's own repository. The terminal dashboard shows the same numbers as OSC 8 hyperlinks in terminals that support them, such as Windows Terminal, iTerm2, WezTerm, kitty, Ghostty, VS Code, and VTE-based terminals, and as plain text everywhere else; set `FORCE_HYPERLINK=1` or `FORCE_HYPERLINK=0` to override the guess.
 - Fix pull requests going unseen on issues with more than 30 timeline events (issue #759). glorp read only the first page of an issue's timeline, so on a long-lived issue a pull request cross-referenced after the 30th event was missing: the dashboards showed no PR number or progress bar for its job, and paused-work, completed-work, and linked pull request tracking missed it too. glorp now reads every page of the timeline. It also now reads every page of a repository's open pull requests when scanning reviews for mentions, and of its webhooks when configuring push mode, so a repository with more than one page of webhooks no longer gets a duplicate glorp webhook.
 
 ## v1.5.19 - 2026-11-12
