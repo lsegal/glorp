@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Let Retry on a paused job clear its pause and rerun the work (issue #763). Pressing Retry in the web dashboard on a paused job, such as one waiting on a blocker that has already closed, failed with `job cannot be retried while paused`. Retry now drops the pause, whatever the job was waiting on, and requeues it so gh-fix reruns with its saved session; a pull request it was holding is left as it is on GitHub. If the job cannot be requeued, such as when its issue is no longer listed, the retry reports that and the job stays paused. The Retry button is now disabled for queued and stopping jobs, with the reason as its tooltip, instead of offering a retry that always failed.
 - Fix pull requests going unseen on issues with more than 30 timeline events (issue #759). glorp read only the first page of an issue's timeline, so on a long-lived issue a pull request cross-referenced after the 30th event was missing: the dashboards showed no PR number or progress bar for its job, and paused-work, completed-work, and linked pull request tracking missed it too. glorp now reads every page of the timeline. It also now reads every page of a repository's open pull requests when scanning reviews for mentions, and of its webhooks when configuring push mode, so a repository with more than one page of webhooks no longer gets a duplicate glorp webhook.
 
 ## v1.5.19 - 2026-11-12
