@@ -151,13 +151,13 @@ func TestApiGETPassesExtraGHArgsOnFallback(t *testing.T) {
 	gh := GHCLI{
 		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
 			ghArgs = args
-			return []byte(`[]`), nil
+			return []byte(`{"state":"open"}`), nil
 		},
 	}
-	if _, err := gh.apiGETObject(context.Background(), false, "repos/owner/repo/issues/7/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28"); err != nil {
+	if _, err := gh.apiGETObject(context.Background(), false, "repos/owner/repo/issues/7", "--header", "X-GitHub-Api-Version: 2022-11-28"); err != nil {
 		t.Fatalf("apiGETObject() error = %v", err)
 	}
-	want := []string{"api", "repos/owner/repo/issues/7/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28"}
+	want := []string{"api", "repos/owner/repo/issues/7", "--header", "X-GitHub-Api-Version: 2022-11-28"}
 	if !reflect.DeepEqual(ghArgs, want) {
 		t.Fatalf("gh args = %#v, want %#v", ghArgs, want)
 	}

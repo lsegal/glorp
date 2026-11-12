@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix pull requests going unseen on issues with more than 30 timeline events (issue #759). glorp read only the first page of an issue's timeline, so on a long-lived issue a pull request cross-referenced after the 30th event was missing: the dashboards showed no PR number or progress bar for its job, and paused-work, completed-work, and linked pull request tracking missed it too. glorp now reads every page of the timeline. It also now reads every page of a repository's open pull requests when scanning reviews for mentions, and of its webhooks when configuring push mode, so a repository with more than one page of webhooks no longer gets a duplicate glorp webhook.
+
 ## v1.5.19 - 2026-11-12
 
 - Show each job's pull request next to its issue number in the web and terminal dashboards (issue #753). A job whose run has opened a pull request now reads `#747 · PR #750` in its card title, so with several jobs in flight you can tell which pull request belongs to which issue. The number follows the job's current pull request: the newest open one, or the merged one once it lands, so a superseded pull request is replaced and one closed without merging is not shown. A pull request in another repository, such as a fork, is named `PR OWNER/REPO#12`. A job with no pull request yet looks the same as before.
