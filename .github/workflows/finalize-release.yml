@@ -1,7 +1,10 @@
 name: Finalize release
+# Only ever dispatched from the default branch, with the release tag as an
+# input; release.yml does this after it creates the tag. A run on a tag ref
+# would save its caches where no later release can read them, because a run
+# restores caches only from its own ref and the default branch, and every
+# release has a new tag.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -14,7 +17,20 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Check the run ref and release tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]] || { echo "run finalize from $DEFAULT_BRANCH with the tag as an input, not from $GITHUB_REF" >&2; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag: $TAG" >&2; exit 1; }
+      # The run ref is the default branch, but the release is built from the
+      # tag's own content.
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.4
@@ -27,9 +43,10 @@ jobs:
           # under a key that falls back, so it is turned off here rather than
           # having both save the same paths.
           cache: false
-      # Its own prefix, because the archive build below cross-compiles for six
-      # GOOS/GOARCH pairs and shares almost no compiled object with a native
-      # CI run.
+      # Its own build cache prefix, because the archive build below
+      # cross-compiles for six GOOS/GOARCH pairs and shares almost no compiled
+      # object with a native CI run. Modules come from the cache all jobs
+      # share, so the ones the Release job already downloaded are reused here.
       - uses: ./.github/actions/go-cache
         with:
           key-prefix: release-cross-compile
@@ -45,24 +62,10 @@ jobs:
         working-directory: webui
       - run: go test ./...
       - run: go vet ./...
-      - name: Select release tag
-        id: release
-        shell: bash
-        env:
-          INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="$INPUT_TAG"
-          else
-            tag="$GITHUB_REF_NAME"
-          fi
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag: $tag" >&2; exit 1; }
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Build archives and installer
         shell: bash
         env:
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -83,7 +86,7 @@ jobs:
       - name: Extract release notes
         shell: bash
         env:
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           extract_section() {
@@ -99,6 +102,7 @@ jobs:
           fi
           [[ -s release-notes.md ]] || { echo "no changelog entry found for $TAG" >&2; exit 1; }
       - name: Create GitHub release
-        run: gh release create "${{ steps.release.outputs.tag }}" dist/*.tar.gz dist/*.zip dist/install.sh dist/install.ps1 --notes-file release-notes.md
+        run: gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/install.sh dist/install.ps1 --notes-file release-notes.md
         env:
+          TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}

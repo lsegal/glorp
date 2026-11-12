@@ -38,7 +38,7 @@ jobs:
           # under a key that falls back, so it is turned off here rather than
           # having both save the same paths.
           cache: false
-      # Shares CI's Linux cache on purpose: this job compiles the same
+      # Shares CI's Linux build cache on purpose: this job compiles the same
       # packages the same way, so a rare release run starts from a cache the
       # frequent CI runs keep warm.
       - uses: ./.github/actions/go-cache
@@ -120,7 +120,11 @@ jobs:
             git tag "$TAG"
             git push origin "$TAG"
           fi
+      # Dispatched on the default branch rather than the tag, so the caches
+      # finalize saves stay visible to the next release; the tag goes in as an
+      # input and finalize checks out its content. Dispatching needs the
+      # actions: write permission granted above.
       - name: Finalize release
-        run: gh workflow run finalize-release.yml --repo "$GITHUB_REPOSITORY" --ref "${{ steps.release.outputs.tag }}" -f tag="${{ steps.release.outputs.tag }}"
+        run: gh workflow run finalize-release.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.event.repository.default_branch }}" -f tag="${{ steps.release.outputs.tag }}"
         env:
           GH_TOKEN: ${{ github.token }}
