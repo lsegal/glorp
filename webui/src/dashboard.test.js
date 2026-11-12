@@ -15,6 +15,7 @@ import {
 	jobActionAvailability,
 	jobAgentSummary,
 	jobPage,
+	jobProgress,
 	jobPullRequestLabel,
 	jobWaitLabel,
 	lastPollLabel,
@@ -141,6 +142,45 @@ describe("jobPullRequestLabel", () => {
 	it("is empty for a job without a pull request", () => {
 		expect(jobPullRequestLabel({ Number: 743 })).toBe("");
 		expect(jobPullRequestLabel({ Number: 743, PullRequest: 0 })).toBe("");
+	});
+});
+
+describe("jobProgress", () => {
+	it("draws the percentage glorp computed from the plan checklist", () => {
+		expect(
+			jobProgress({
+				Number: 7,
+				PullRequest: 187,
+				TasksDone: 2,
+				TasksTotal: 5,
+				Progress: 40,
+			}),
+		).toEqual({
+			percent: 40,
+			label: "40%",
+			title: "2 of 5 planned tasks done",
+		});
+	});
+
+	it("shows an empty bar for a checklist with nothing checked", () => {
+		expect(jobProgress({ TasksTotal: 3, Progress: 0 })).toEqual({
+			percent: 0,
+			label: "0%",
+			title: "0 of 3 planned tasks done",
+		});
+	});
+
+	it("follows the plan when it grows", () => {
+		expect(
+			jobProgress({ TasksDone: 2, TasksTotal: 8, Progress: 25 }).label,
+		).toBe("25%");
+	});
+
+	it("shows no bar without a pull request or a checklist", () => {
+		expect(jobProgress({ Number: 743 })).toBeNull();
+		expect(
+			jobProgress({ Number: 743, PullRequest: 750, TasksTotal: 0 }),
+		).toBeNull();
 	});
 });
 

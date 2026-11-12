@@ -54,13 +54,30 @@ func sortJobSnapshots(jobs []JobSnapshot) {
 
 // jobTitlePrefix is what a job card's title starts with: its status indicator
 // and issue number, followed by its pull request when it has one, such as
-// "✓ #747 · PR #750 " (issue #753).
+// "✓ #747 · PR #750 " (issue #753), and then its progress bar when its pull
+// request carries a plan checklist (issue #755).
 func jobTitlePrefix(indicator string, job JobSnapshot) string {
 	prefix := fmt.Sprintf("%s #%d", indicator, job.Number)
 	if label := job.PullRequestLabel(); label != "" {
 		prefix += " · " + label
 	}
+	if bar := jobProgressBar(job); bar != "" {
+		prefix += " " + bar
+	}
 	return prefix + " "
+}
+
+// jobProgressBarCells is how many cells wide the terminal progress bar is.
+const jobProgressBarCells = 10
+
+// jobProgressBar draws a job's plan progress as "[████░░░░░░] 40%", or ""
+// when the job has no checklist to measure (issue #755).
+func jobProgressBar(job JobSnapshot) string {
+	if !job.HasProgress() {
+		return ""
+	}
+	filled := job.Progress * jobProgressBarCells / 100
+	return fmt.Sprintf("[%s%s] %d%%", strings.Repeat("█", filled), strings.Repeat("░", jobProgressBarCells-filled), job.Progress)
 }
 
 // publishedJobs lists every in-flight job for the published snapshot, sorted
