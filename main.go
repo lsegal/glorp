@@ -1495,8 +1495,8 @@ func projectItemListError(output []byte, err error) error {
 // and its dependency/sub-issue state. It is deliberately the smallest fetch
 // that answers those questions -- one REST `GET /repos/:repo/issues/:number`
 // plus the dependency lookup loadDependencies already performs -- and it goes
-// through apiGETObject, so a public repository is read on the unauthenticated API
-// and spends none of the token's rate limit. No GraphQL query is issued.
+// through apiGETObject, so a public repository is read on the unauthenticated
+// API and spends none of the token's rate limit. No GraphQL query is issued.
 //
 // Callers are responsible for the request budget: the browser package.s issue source calls
 // this once per newly seen dispatch candidate, never per tick and never for
