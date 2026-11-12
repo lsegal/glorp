@@ -31,6 +31,7 @@ import {
 	jobActionAvailability,
 	jobAgentSummary,
 	jobPage,
+	jobProgress,
 	jobPullRequestLabel,
 	jobWaitLabel,
 	modelGroupsFrom,
@@ -134,11 +135,25 @@ function JobIcon({ status }) {
 	return <Circle className="status-icon queued" aria-label="queued" />;
 }
 
+// JobProgress draws a job's plan checklist progress as a thin bar with its
+// percentage (issue #755).
+function JobProgress({ progress }) {
+	return (
+		<div className="job-progress" title={progress.title}>
+			<progress max={100} value={progress.percent} aria-label="Plan progress">
+				{progress.label}
+			</progress>
+			<span>{progress.label}</span>
+		</div>
+	);
+}
+
 function JobCard({ job }) {
 	const [pendingAction, setPendingAction] = useState("");
 	const [actionError, setActionError] = useState("");
 	const available = jobActionAvailability(job.Status);
 	const pullRequest = jobPullRequestLabel(job);
+	const progress = jobProgress(job);
 	const runAction = async (action) => {
 		setPendingAction(action);
 		setActionError("");
@@ -158,6 +173,7 @@ function JobCard({ job }) {
 					#{job.Number}
 					{pullRequest && ` · ${pullRequest}`} {job.Title}
 				</h2>
+				{progress && <JobProgress progress={progress} />}
 			</header>
 			<div className="meta" title={job.CheckoutDirectory}>
 				<FolderGit2 /> checkout: {job.CheckoutDirectory || "pending"}

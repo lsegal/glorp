@@ -202,6 +202,38 @@ h1 .version {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+.job-progress {
+	margin-left: auto;
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted);
+	font:
+		11px / 16px ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+}
+.job-progress progress {
+	appearance: none;
+	width: 72px;
+	height: 4px;
+	border: 0;
+	border-radius: 999px;
+	background: var(--border);
+	overflow: hidden;
+}
+.job-progress progress::-webkit-progress-bar {
+	background: var(--border);
+}
+.job-progress progress::-webkit-progress-value {
+	background: var(--green);
+}
+.job-progress progress::-moz-progress-bar {
+	background: var(--green);
+}
 .status-icon {
 	width: 16px;
 	height: 16px;

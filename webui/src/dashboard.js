@@ -92,6 +92,20 @@ export function jobPullRequestLabel(job) {
 	return `PR ${job.PullRequestRepository || ""}#${job.PullRequest}`;
 }
 
+// jobProgress is what a job card's progress bar draws: the percentage of its
+// pull request's plan checklist that is done, as computed by glorp, and a
+// tooltip counting the tasks. A job without a pull request or without a
+// checklist has no progress and shows no bar (issue #755).
+export function jobProgress(job) {
+	if (!(job.TasksTotal > 0)) return null;
+	const percent = Number(job.Progress) || 0;
+	return {
+		percent,
+		label: `${percent}%`,
+		title: `${job.TasksDone || 0} of ${job.TasksTotal} planned tasks done`,
+	};
+}
+
 export function jobActionAvailability(status) {
 	return {
 		// A queued job is already on its way to a fresh gh-fix run, so retry is

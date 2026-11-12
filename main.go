@@ -777,6 +777,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 		}
 		var currentPullRequest struct {
 			State    string     `json:"state"`
+			Body     string     `json:"body"`
 			MergedAt *time.Time `json:"merged_at"`
 			Draft    bool       `json:"draft"`
 			Base     struct {
@@ -791,7 +792,8 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 		}
 		base := currentPullRequest.Base
 		stacked := base.Ref != "" && base.Repo.DefaultBranch != "" && base.Ref != base.Repo.DefaultBranch
-		state.PullRequests = append(state.PullRequests, PullRequestWorkState{Repository: pullRepo, Number: pullRequest.Number, State: currentPullRequest.State, Merged: currentPullRequest.MergedAt != nil, IsDraft: currentPullRequest.Draft, Stacked: stacked})
+		tasksDone, tasksTotal := core.ChecklistProgress(currentPullRequest.Body)
+		state.PullRequests = append(state.PullRequests, PullRequestWorkState{Repository: pullRepo, Number: pullRequest.Number, State: currentPullRequest.State, Merged: currentPullRequest.MergedAt != nil, IsDraft: currentPullRequest.Draft, Stacked: stacked, TasksDone: tasksDone, TasksTotal: tasksTotal})
 	}
 	return state, nil
 }

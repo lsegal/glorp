@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Show each job's pull request next to its issue number in the web and terminal dashboards (issue #753). A job whose run has opened a pull request now reads `#747 · PR #750` in its card title, so with several jobs in flight you can tell which pull request belongs to which issue. The number follows the job's current pull request: the newest open one, or the merged one once it lands, so a superseded pull request is replaced and one closed without merging is not shown. A pull request in another repository, such as a fork, is named `PR OWNER/REPO#12`. A job with no pull request yet looks the same as before.
+- Show a progress bar for each job in the web and terminal dashboards, measured against the plan checklist in its pull request (issue #755). The bar reads the share of checked task-list items (`- [x]`) among all of them in the pull request's description, so a run with `2 of 5` steps checked shows `[████░░░░░░] 40%` in the terminal and a matching bar on its web card. It updates as the run checks steps off at each checkpoint, drops when the run adds steps to its plan, and reads 100% once the pull request merges or the job completes. A job with no pull request, or whose pull request has no checklist, shows no bar. The bundled `gh-fix` skill now keeps a `## Plan` checklist in its pull request current at every checkpoint.
 
 ## v1.5.18 - 2026-11-11
 

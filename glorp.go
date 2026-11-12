@@ -2076,6 +2076,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			jobMu.Lock()
 			if job, ok := jobs[key]; ok && ran {
 				job.Status, job.WaitReason = "complete", ""
+				job.Finish()
 				jobs[key] = job
 			} else {
 				delete(jobs, key)
@@ -2782,6 +2783,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 					if paused != nil {
 						job.Status = "paused"
 						job.WaitReason = pausedJobReason(*paused)
+					} else {
+						job.Finish()
 					}
 					jobs[key] = job
 					jobMu.Unlock()

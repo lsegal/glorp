@@ -38,6 +38,43 @@ type JobSnapshot struct {
 	// request opened from a fork (issue #753).
 	PullRequest           int
 	PullRequestRepository string
+	// TasksDone and TasksTotal count the checked and all items in the plan
+	// checklist of the job's current pull request, and Progress is the
+	// percentage done the dashboards draw as a progress bar (issue #755). A
+	// job whose pull request has no checklist, or that has no pull request,
+	// has a TasksTotal of zero and shows no bar. Progress is computed here
+	// only, so the two dashboards can never disagree about it.
+	TasksDone  int
+	TasksTotal int
+	Progress   int
+}
+
+// HasProgress reports whether the job has a plan checklist to measure its
+// progress against (issue #755).
+func (j JobSnapshot) HasProgress() bool {
+	return j.TasksTotal > 0
+}
+
+// setProgress records a plan checklist's counts and the percentage they make.
+// A finished job reads 100% whatever its checklist still says.
+func (j *JobSnapshot) setProgress(done, total int, finished bool) bool {
+	percent, ok := ProgressPercent(done, total)
+	if !ok {
+		done, total = 0, 0
+	} else if finished {
+		percent = 100
+	}
+	if j.TasksDone == done && j.TasksTotal == total && j.Progress == percent {
+		return false
+	}
+	j.TasksDone, j.TasksTotal, j.Progress = done, total, percent
+	return true
+}
+
+// Finish marks the job's plan done, so a completed job reads 100% (issue
+// #755). A job with no checklist still shows no bar.
+func (j *JobSnapshot) Finish() {
+	j.setProgress(j.TasksDone, j.TasksTotal, true)
 }
 
 // PullRequestLabel is how the dashboards name a job's pull request next to its
@@ -51,17 +88,21 @@ func (j JobSnapshot) PullRequestLabel() string {
 }
 
 // SetPullRequest records the current pull request in state as the job's, and
-// reports whether that changed what the dashboards show (issue #753).
+// reports whether that changed what the dashboards show (issue #753), along
+// with the progress its plan checklist makes (issue #755).
 func (j *JobSnapshot) SetPullRequest(state OriginatingWorkState, issueRepository string) bool {
 	number, repository := 0, ""
-	if pullRequest, ok := CurrentPullRequest(state); ok {
+	pullRequest, ok := CurrentPullRequest(state)
+	if ok {
 		number = pullRequest.Number
 		if !pullRequest.InRepo(issueRepository) {
 			repository = pullRequest.Repository
 		}
 	}
+	// A merged pull request reads 100% (issue #755).
+	changed := j.setProgress(pullRequest.TasksDone, pullRequest.TasksTotal, pullRequest.Merged)
 	if j.PullRequest == number && j.PullRequestRepository == repository {
-		return false
+		return changed
 	}
 	j.PullRequest, j.PullRequestRepository = number, repository
 	return true
