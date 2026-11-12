@@ -685,12 +685,11 @@ func (g GHCLI) timedOut(ctx, runCtx context.Context, args []string, err error) e
 // enabled. The Stacks API answers 404 Not Found for a repository without
 // them, which is a definite "no" rather than an error (issue #657).
 func (g GHCLI) StacksEnabled(ctx context.Context, repo string) (bool, error) {
-	output, err := g.apiGET(ctx, g.isPublicRepo(ctx, repo), "repos/"+repo+"/stacks?per_page=1")
-	if err != nil {
-		if detail := string(output); strings.Contains(detail, "HTTP 404") || strings.Contains(detail, "Not Found") {
+	if err := g.apiReachable(ctx, g.isPublicRepo(ctx, repo), "repos/"+repo+"/stacks?per_page=1"); err != nil {
+		if detail := err.Error(); strings.Contains(detail, "HTTP 404") || strings.Contains(detail, "Not Found") {
 			return false, nil
 		}
-		return false, fmt.Errorf("list stacks for %s: %w: %s", repo, err, strings.TrimSpace(string(output)))
+		return false, fmt.Errorf("list stacks for %s: %w", repo, err)
 	}
 	return true, nil
 }
@@ -720,7 +719,7 @@ func (g GHCLI) ForkFor(ctx context.Context, repo string) (string, error) {
 
 func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int) (OriginatingWorkState, error) {
 	public := g.isPublicRepo(ctx, repo)
-	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number))
+	output, err := g.apiGETObject(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number))
 	if err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("read issue #%d state: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -731,7 +730,9 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 	if err := json.Unmarshal(output, &issue); err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("decode issue #%d state: %w", number, err)
 	}
-	output, err = g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline")
+	// The timeline is read in full: a long-lived issue's current pull request
+	// is often cross-referenced well past the first page (issue #759).
+	output, err = g.apiGETPaginated(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline?per_page=100")
 	if err != nil {
 		return OriginatingWorkState{}, fmt.Errorf("read issue #%d timeline: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -771,7 +772,7 @@ func (g GHCLI) OriginatingWorkState(ctx context.Context, repo string, number int
 		if !strings.EqualFold(pullRepo, repo) {
 			pullPublic = g.isPublicRepo(ctx, pullRepo)
 		}
-		output, err := g.apiGET(ctx, pullPublic, "repos/"+pullRepo+"/pulls/"+strconv.Itoa(pullRequest.Number))
+		output, err := g.apiGETObject(ctx, pullPublic, "repos/"+pullRepo+"/pulls/"+strconv.Itoa(pullRequest.Number))
 		if err != nil {
 			return OriginatingWorkState{}, fmt.Errorf("read pull request %s#%d state for issue #%d: %w: %s", pullRepo, pullRequest.Number, number, err, strings.TrimSpace(string(output)))
 		}
@@ -1494,7 +1495,7 @@ func projectItemListError(output []byte, err error) error {
 // and its dependency/sub-issue state. It is deliberately the smallest fetch
 // that answers those questions -- one REST `GET /repos/:repo/issues/:number`
 // plus the dependency lookup loadDependencies already performs -- and it goes
-// through apiGET, so a public repository is read on the unauthenticated API
+// through apiGETObject, so a public repository is read on the unauthenticated API
 // and spends none of the token's rate limit. No GraphQL query is issued.
 //
 // Callers are responsible for the request budget: the browser package.s issue source calls
@@ -1505,7 +1506,7 @@ func (g GHCLI) HydrateIssue(ctx context.Context, repo string, issue *Issue) erro
 		return nil
 	}
 	public := g.isPublicRepo(ctx, repo)
-	output, err := g.apiGET(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(issue.Number))
+	output, err := g.apiGETObject(ctx, public, "repos/"+repo+"/issues/"+strconv.Itoa(issue.Number))
 	if err != nil {
 		return fmt.Errorf("read issue #%d: %w: %s", issue.Number, err, strings.TrimSpace(string(output)))
 	}

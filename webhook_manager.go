@@ -72,7 +72,7 @@ func (g GHCLI) ConfigureWebhook(ctx context.Context, value, endpoint, secret str
 // configureWebhookSpec creates the spec's webhook when the endpoint is not
 // already registered, reporting whether it created one.
 func (g GHCLI) configureWebhookSpec(ctx context.Context, spec webhookSpec, endpoint, secret string) (bool, error) {
-	output, err := g.api(ctx, spec.apiPath, "")
+	output, err := g.apiList(ctx, spec.apiPath)
 	if err != nil {
 		return false, webhookAccessError("list", spec, err)
 	}
@@ -364,6 +364,9 @@ func webhookAccessError(action string, spec webhookSpec, err error) error {
 	return wrapped
 }
 
+// api calls a single-object REST endpoint. A GET reads one page only, so it
+// refuses a list response with errListReadOnePage; list endpoints go through
+// apiList (issue #759).
 func (g GHCLI) api(ctx context.Context, path, method string, body ...string) ([]byte, error) {
 	args := []string{"api", path}
 	if method != "" {
@@ -372,6 +375,21 @@ func (g GHCLI) api(ctx context.Context, path, method string, body ...string) ([]
 	if len(body) > 0 {
 		args = append(args, "--input", "-")
 	}
+	output, err := g.runAPI(ctx, args, body...)
+	if err == nil && method == "" {
+		err = rejectListBody(path, output)
+	}
+	return output, err
+}
+
+// apiList reads every page of a list endpoint, so a repository or
+// organization with more than one page of webhooks still has glorp's own
+// webhook found instead of a duplicate created (issue #759).
+func (g GHCLI) apiList(ctx context.Context, path string) ([]byte, error) {
+	return g.runAPI(ctx, []string{"api", path, "--paginate"})
+}
+
+func (g GHCLI) runAPI(ctx context.Context, args []string, body ...string) ([]byte, error) {
 	// Bounded like every other `gh` call: webhook reconciliation runs on the
 	// poll loop, so a call stuck on a connection that died while the machine
 	// slept would otherwise stop the watch for good (issue #683).

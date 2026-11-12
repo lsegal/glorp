@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,20 +90,60 @@ func (g GHCLI) probePublicRepo(ctx context.Context, repo string) bool {
 	return !data.Private
 }
 
-// apiGET fetches a GitHub REST API path (relative, e.g.
+// errListReadOnePage reports a list endpoint read through a single-page
+// helper. GitHub returns only the first page (30 items by default) of a list,
+// so such a read silently drops everything after it; a list endpoint has to go
+// through apiGETPaginated instead (issues #722 and #759).
+var errListReadOnePage = errors.New("list endpoint read through a single-page helper; use apiGETPaginated")
+
+// rejectListBody returns errListReadOnePage when body is a JSON array.
+func rejectListBody(path string, body []byte) error {
+	if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '[' {
+		return fmt.Errorf("%s: %w", path, errListReadOnePage)
+	}
+	return nil
+}
+
+// apiGETObject fetches a single-object GitHub REST API path (relative, e.g.
 // "repos/owner/repo/issues/1"), preferring the unauthenticated public API
 // when public is true so polling a public repository doesn't spend the
 // authenticated token's rate limit. It falls back to `gh api` whenever the
 // public request itself fails, so a transient network blip or the public
 // API's own (much lower) rate limit never breaks polling outright.
-func (g GHCLI) apiGET(ctx context.Context, public bool, path string, extraGHArgs ...string) ([]byte, error) {
+//
+// It reads one page only, so it refuses a list (JSON array) response with
+// errListReadOnePage rather than return a truncated one: list endpoints go
+// through apiGETPaginated (issue #759).
+func (g GHCLI) apiGETObject(ctx context.Context, public bool, path string, extraGHArgs ...string) ([]byte, error) {
 	if public {
 		body, _, status, err := g.publicGET(ctx, "https://api.github.com/"+path)
 		if err == nil && status >= 200 && status < 300 {
-			return body, nil
+			return body, rejectListBody(path, body)
 		}
 	}
-	return g.run(ctx, append([]string{"api", path}, extraGHArgs...)...)
+	output, err := g.run(ctx, append([]string{"api", path}, extraGHArgs...)...)
+	if err != nil {
+		return output, err
+	}
+	return output, rejectListBody(path, output)
+}
+
+// apiReachable reports whether a GET of path succeeds, without returning its
+// body. Probes such as "are stacks enabled" only need the status, so they may
+// name a list endpoint without paginating it. A failure's error carries the
+// response text, such as "HTTP 404".
+func (g GHCLI) apiReachable(ctx context.Context, public bool, path string) error {
+	if public {
+		_, _, status, err := g.publicGET(ctx, "https://api.github.com/"+path)
+		if err == nil && status >= 200 && status < 300 {
+			return nil
+		}
+	}
+	output, err := g.run(ctx, "api", path)
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // dependencyIssueView returns the `{"state": ...}` JSON for a dependency
@@ -121,7 +162,7 @@ func (g GHCLI) dependencyIssueView(ctx context.Context, public bool, repo string
 
 // apiGETPaginated mirrors `gh api PATH --paginate`: it follows RFC 5988
 // Link: rel="next" headers and concatenates each page's JSON array into one.
-// extraGHArgs are passed only to the `gh api` fallback, as with apiGET.
+// extraGHArgs are passed only to the `gh api` fallback, as with apiGETObject.
 func (g GHCLI) apiGETPaginated(ctx context.Context, public bool, path string, extraGHArgs ...string) ([]byte, error) {
 	ghArgs := append([]string{"api", path, "--paginate"}, extraGHArgs...)
 	if !public {
