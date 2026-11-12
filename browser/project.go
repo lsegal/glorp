@@ -793,9 +793,7 @@ func (s WatchIssues) StacksEnabled(ctx context.Context, repo string) (bool, erro
 // browser mode wakes paused work the page readers no longer list the same way
 // poll mode does (issue #769).
 func (s WatchIssues) HydrateIssue(ctx context.Context, repo string, issue *core.Issue) error {
-	hydrator, ok := s.Work.(interface {
-		HydrateIssue(context.Context, string, *core.Issue) error
-	})
+	hydrator, ok := s.Work.(IssueHydrator)
 	if !ok {
 		return fmt.Errorf("read issue #%d: no issue source configured", issue.Number)
 	}
