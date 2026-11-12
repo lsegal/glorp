@@ -96,6 +96,34 @@ func (p PullRequestWorkState) InRepo(repo string) bool {
 	return p.Repository == "" || strings.EqualFold(p.Repository, repo)
 }
 
+// CurrentPullRequest returns the pull request an issue's work is on now: the
+// newest open one, or else the newest merged one. A pull request closed
+// without merging was rejected or superseded, so it is never current, and a
+// newer pull request replaces an older one (issue #753).
+func CurrentPullRequest(state OriginatingWorkState) (PullRequestWorkState, bool) {
+	var current PullRequestWorkState
+	found := false
+	rank := func(pullRequest PullRequestWorkState) int {
+		switch {
+		case strings.EqualFold(pullRequest.State, "open") && !pullRequest.Merged:
+			return 2
+		case pullRequest.Merged:
+			return 1
+		}
+		return 0
+	}
+	for _, pullRequest := range state.PullRequests {
+		r := rank(pullRequest)
+		if r == 0 || pullRequest.Number <= 0 {
+			continue
+		}
+		if !found || r > rank(current) || (r == rank(current) && pullRequest.Number > current.Number) {
+			current, found = pullRequest, true
+		}
+	}
+	return current, found
+}
+
 // OriginatingWorkState is what a run reads back about the issue an agent is
 // working, so a closure or an edit made while it runs can be relayed into the
 // session.
