@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show each job's pull request next to its issue number in the web and terminal dashboards (issue #753). A job whose run has opened a pull request now reads `#747 · PR #750` in its card title, so with several jobs in flight you can tell which pull request belongs to which issue. The number follows the job's current pull request: the newest open one, or the merged one once it lands, so a superseded pull request is replaced and one closed without merging is not shown. A pull request in another repository, such as a fork, is named `PR OWNER/REPO#12`. A job with no pull request yet looks the same as before.
+
 ## v1.5.18 - 2026-11-11
 
 - Fix restart, and a clean shutdown with `SIGINT`, `SIGTERM`, or `SIGHUP`, hanging forever after the shutdown checkpoint pushed its work (issue #749). The checkpoint pauses each agent with everything it started, and stopping the run then ended only the agent itself, so its paused child processes kept its output open and glorp waited on them forever, never restarting. Stopping a run now ends the agent's whole process tree, waiting for its output is bounded, a push stuck on the network or a hook is cut off at the run's checkpoint budget and reported as timed out, and once shutdown starts glorp waits at most 30 seconds for runs to wind down before it goes ahead. While a restart waits on the checkpoint, the web dashboard lists each run as it finishes, with runs still going shown as pending, and glorp logs each outcome as soon as it is known.
