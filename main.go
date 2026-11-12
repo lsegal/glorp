@@ -370,6 +370,7 @@ func runWatch(args []string) (code int) {
 	}
 	if ui != nil {
 		ui.SetRefreshHandler(w.nudgePoll)
+		ui.SetJobActionHandler(w.handleJobAction)
 	}
 	var server *http.Server
 	if !poll {

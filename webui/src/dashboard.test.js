@@ -95,18 +95,22 @@ describe("jobActionAvailability", () => {
 		expect(jobActionAvailability("active")).toEqual({
 			retry: true,
 			stop: true,
+			pause: true,
 		});
 		expect(jobActionAvailability("failed")).toEqual({
 			retry: true,
 			stop: false,
+			pause: false,
 		});
 		expect(jobActionAvailability("complete")).toEqual({
 			retry: true,
 			stop: false,
+			pause: false,
 		});
 		expect(jobActionAvailability("paused")).toEqual({
 			retry: true,
 			stop: false,
+			pause: false,
 		});
 	});
 
@@ -115,19 +119,35 @@ describe("jobActionAvailability", () => {
 			retry: false,
 			retryReason: "Already queued for a gh-fix run",
 			stop: false,
+			pause: true,
 		});
 		expect(jobActionAvailability("stopping")).toEqual({
 			retry: false,
 			retryReason: "Waiting for the stopped run to exit",
 			stop: false,
+			pause: false,
 		});
 	});
 
-	it("lets a job waiting on a scheduled wakeup be stopped", () => {
+	it("lets a job waiting on a scheduled wakeup be stopped or paused", () => {
 		expect(jobActionAvailability("waiting")).toEqual({
 			retry: true,
 			stop: true,
+			pause: true,
 		});
+	});
+
+	it("offers pause only for active, waiting, and queued jobs", () => {
+		const pausable = [
+			"active",
+			"waiting",
+			"queued",
+			"stopping",
+			"paused",
+			"failed",
+			"complete",
+		].filter((status) => jobActionAvailability(status).pause);
+		expect(pausable).toEqual(["active", "waiting", "queued"]);
 	});
 });
 

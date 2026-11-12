@@ -65,7 +65,7 @@ func New(version string) (*Server, error) {
 	return &Server{version: version, assets: newAssets()}, nil
 }
 
-// SetJobActionHandler wires the dashboard's retry and stop buttons to a
+// SetJobActionHandler wires the dashboard's retry, stop, and pause buttons to a
 // function that performs them.
 func (ui *Server) SetJobActionHandler(handler func(context.Context, core.JobAction) error) {
 	ui.mu.Lock()
@@ -199,7 +199,7 @@ func (ui *Server) serveJobAction(w http.ResponseWriter, r *http.Request) {
 	var action core.JobAction
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&action); err != nil || action.Number <= 0 || action.Target == "" || (action.Action != "retry" && action.Action != "stop") {
+	if err := decoder.Decode(&action); err != nil || action.Number <= 0 || action.Target == "" || (action.Action != "retry" && action.Action != "stop" && action.Action != "pause") {
 		http.Error(w, "invalid job action", http.StatusBadRequest)
 		return
 	}

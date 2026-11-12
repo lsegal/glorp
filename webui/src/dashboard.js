@@ -137,14 +137,20 @@ const retryUnavailable = {
 	stopping: "Waiting for the stopped run to exit",
 };
 
+// jobActionAvailability mirrors core.JobActionAvailability, which the run's
+// job-action handler and the terminal dashboard use.
 export function jobActionAvailability(status) {
 	const retryReason = retryUnavailable[status];
+	// A job waiting on a scheduled wakeup still holds its agent session,
+	// so it can be stopped just like a running one (issue #671).
+	const stop = status === "active" || status === "waiting";
 	return {
 		retry: !retryReason,
 		...(retryReason && { retryReason }),
-		// A job waiting on a scheduled wakeup still holds its agent session,
-		// so it can be stopped just like a running one (issue #671).
-		stop: status === "active" || status === "waiting",
+		stop,
+		// A queued job has nothing to stop yet, but it can be held back
+		// (issue #771).
+		pause: stop || status === "queued",
 	};
 }
 
