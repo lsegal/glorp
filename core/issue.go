@@ -79,6 +79,10 @@ type PullRequestWorkState struct {
 	// an open blocker's branch looks until that blocker merges. A ready one
 	// is paused waiting on its base rather than held for a human (issue #659).
 	Stacked bool
+	// TasksDone and TasksTotal count the checked and all task-list items in
+	// the pull request's body, the run's plan checklist (issue #755).
+	TasksDone  int
+	TasksTotal int
 }
 
 // RepoOr returns the repository hosting the pull request, or fallback (the
