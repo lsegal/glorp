@@ -108,16 +108,20 @@ func WakePaused(paused PausedWork, check PausedCheck) (PausedWake, string) {
 		return PausedResume, "its blockers are closed"
 	case PausedPullRequest:
 		if check.Own == nil {
-			return PausedStay, "waiting for its pull request to merge"
+			return PausedStay, "its pull request state could not be read"
 		}
 		if number, reason := RejectedPullRequest(*check.Own); number > 0 {
 			return PausedRestart, reason
 		}
-		open := OpenPullRequests(*check.Own)
-		if len(open) == 0 {
-			return PausedStay, "waiting for its pull request to merge"
+		if open := OpenPullRequests(*check.Own); len(open) > 0 {
+			return PausedStay, fmt.Sprintf("its pull request %s waits to merge", formatNumbers(open))
 		}
-		return PausedStay, fmt.Sprintf("its pull request %s waits to merge", formatNumbers(open))
+		// No pull request is left to merge, so waiting on one would never
+		// end. The work falls back to its blockers instead (issue #762).
+		if blocked, reason := IssueBlocked(check.Issue); blocked {
+			return PausedStay, reason + "; it has no open pull request"
+		}
+		return PausedResume, "it has no open pull request and nothing blocks it"
 	default:
 		// Stacked, including records written before paused work had a kind.
 		blocked, reason := IssueBlocked(check.Issue)
