@@ -16,8 +16,12 @@ var ErrNotReady = errors.New("run is still starting")
 
 // JobSnapshot is one agent run as the dashboards draw it.
 type JobSnapshot struct {
-	Number            int
-	Target            string
+	Number int
+	Target string
+	// Repository is the OWNER/REPO hosting the job's issue, which differs
+	// from Target when Target is a project, so the dashboards can link the
+	// issue number to its page (issue #767).
+	Repository        string
 	Title             string
 	Status            string
 	CheckoutDirectory string
@@ -85,6 +89,42 @@ func (j JobSnapshot) PullRequestLabel() string {
 		return ""
 	}
 	return fmt.Sprintf("PR %s#%d", j.PullRequestRepository, j.PullRequest)
+}
+
+// issueRepository is the OWNER/REPO hosting the job's issue: its Repository,
+// or its Target when that is a bare repository.
+func (j JobSnapshot) issueRepository() string {
+	if j.Repository != "" {
+		return j.Repository
+	}
+	if ValidRepo(j.Target) {
+		return j.Target
+	}
+	return ""
+}
+
+// IssueURL is the GitHub page of the job's issue, or "" when its repository
+// is unknown (issue #767).
+func (j JobSnapshot) IssueURL() string {
+	repository := j.issueRepository()
+	if repository == "" || j.Number <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/issues/%d", repository, j.Number)
+}
+
+// PullRequestURL is the GitHub page of the job's pull request, in its own
+// repository when that differs from the issue's, or "" when the job has no
+// pull request (issue #767).
+func (j JobSnapshot) PullRequestURL() string {
+	repository := j.PullRequestRepository
+	if repository == "" {
+		repository = j.issueRepository()
+	}
+	if repository == "" || j.PullRequest <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/pull/%d", repository, j.PullRequest)
 }
 
 // SetPullRequest records the current pull request in state as the job's, and
