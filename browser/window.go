@@ -22,12 +22,15 @@ const windowClosedPolls = 3
 // These are variables so tests need not spend real seconds on them or stand up
 // a DevTools WebSocket: windowPollInterval is how often the open pages are read,
 // windowReadTimeout bounds one read, windowStopTimeout bounds a clean shutdown
-// before the process is killed, and closeBrowser asks the browser to shut down.
+// before the process is killed, windowCloseFailedGrace is the shorter wait when
+// the shutdown request itself failed, and closeBrowser asks the browser to shut
+// down.
 var (
-	windowPollInterval = 500 * time.Millisecond
-	windowReadTimeout  = 5 * time.Second
-	windowStopTimeout  = 10 * time.Second
-	closeBrowser       = closeOverDevTools
+	windowPollInterval     = 500 * time.Millisecond
+	windowReadTimeout      = 5 * time.Second
+	windowStopTimeout      = 10 * time.Second
+	windowCloseFailedGrace = 2 * time.Second
+	closeBrowser           = closeOverDevTools
 )
 
 // OpenWindow launches a visible browser on the profile itself and blocks until
@@ -62,28 +65,24 @@ func OpenWindow(ctx context.Context, config Config) error {
 		return err
 	}
 	// Not exec.CommandContext: it kills the browser on cancellation, which loses
-	// the configuration changes the browser has not written to disk yet.
+	// the configuration changes the browser has not written to disk yet. The
+	// supervisor still puts it under the orphan guard, which only acts when
+	// glorp exits without closing the window first.
 	cmd := exec.Command(binary, launchArgs(profile, port, true)...)
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	if err := cmd.Start(); err != nil {
+	started, err := startChild(config.supervisor(), cmd)
+	if err != nil {
 		return fmt.Errorf("start browser (%s): %w", binary, err)
 	}
-	window := &openWindow{cmd: cmd, baseURL: debugURL(port), exited: make(chan struct{})}
-	go func() {
-		window.waitErr = cmd.Wait()
-		close(window.exited)
-	}()
+	window := &openWindow{child: started, baseURL: debugURL(port)}
 	return window.run(ctx, profile)
 }
 
 // openWindow is a running browser the user is working in.
 type openWindow struct {
-	cmd     *exec.Cmd
+	*child
 	baseURL string
 	wsURL   string
-	// exited is closed once the process is gone, and waitErr is valid after it.
-	exited  chan struct{}
-	waitErr error
 }
 
 // run waits for the browser to come up and then for the user to finish with it.
@@ -156,24 +155,9 @@ func (w *openWindow) watch(ctx context.Context) error {
 	}
 }
 
-// stop asks the browser to shut down and waits for it to do so, because only a
-// clean shutdown writes out the preferences it is still holding in memory. The
-// request is allowed to fail: a Ctrl+C in the terminal reaches the browser too,
-// so it may already be on its way out. The process is killed only if it is still
-// there when the wait runs out.
-func (w *openWindow) stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), windowStopTimeout)
-	defer cancel()
-	if w.wsURL != "" {
-		_ = closeBrowser(ctx, w.wsURL)
-	}
-	select {
-	case <-w.exited:
-	case <-ctx.Done():
-		_ = w.cmd.Process.Kill()
-		<-w.exited
-	}
-}
+// stop shuts the window's browser down cleanly, so the preferences it is still
+// holding in memory are written out, and kills it only if it will not go.
+func (w *openWindow) stop() { w.child.stop(w.wsURL) }
 
 // closeOverDevTools sends the browser its own clean-shutdown command. It writes
 // the message to the browser's WebSocket by hand because a window with no pages

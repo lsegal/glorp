@@ -17,6 +17,10 @@ import (
 const fakeBrowserEnv = "GLORP_TEST_FAKE_BROWSER"
 
 func TestMain(m *testing.M) {
+	if mode := os.Getenv(lifecycleEnv); mode != "" {
+		runLifecycleGlorp(mode)
+		return
+	}
 	if os.Getenv(fakeBrowserEnv) == "1" {
 		runFakeBrowser(os.Args[1:])
 		return

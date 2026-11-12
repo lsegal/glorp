@@ -27,9 +27,9 @@ type Config struct {
 	// how `glorp auth` puts a login form in front of the user, on the same
 	// profile the headless watch loop reads GitHub with.
 	Headed bool
-	// Supervisor hands the browser process to glorp's own child-process
-	// tracking, so it cannot outlive the run that started it. A nil supervisor
-	// starts and stops the process directly.
+	// Supervisor starts, waits on, and kills the browser process. A nil
+	// supervisor hands it to glorp's own child-process tracking, so it cannot
+	// outlive the run that started it.
 	Supervisor Supervisor
 }
 
@@ -170,7 +170,7 @@ func debugURL(port int) string {
 
 // process is a running browser and the DevTools endpoint it answers on.
 type process struct {
-	cmd   *exec.Cmd
+	cmd   *child
 	port  int
 	wsURL string
 	// profile is the profile the browser was launched for, so a page that
@@ -184,16 +184,22 @@ type process struct {
 	// lock is this instance's claim on profile, nil when it runs in a private
 	// directory instead.
 	lock *profileLock
-	// supervisor is the one the process was started with, so Close stops it
-	// the same way.
-	supervisor Supervisor
 }
 
 // launch starts a browser against glorp's own profile and waits
 // for its DevTools endpoint to answer. The browser is started as a tracked
-// child process, so glorp's existing orphan guards take it down on every exit
-// path, including one that runs no cleanup of its own.
+// child process, so glorp's orphan guards take it down on every exit path,
+// including one that runs no cleanup of its own.
+//
+// ctx bounds the launch only. Canceling it later does not kill the browser:
+// the run that owns it closes it, cleanly, on its way out, and a kill would
+// skip the shutdown that writes the profile to disk (issue #773).
 func launch(ctx context.Context, config Config) (*process, error) {
+	// A run that is already shutting down must not start a browser, such as
+	// the one a sign-in window hands the profile back to.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	binary, err := findBinary(config.Binary)
 	if err != nil {
 		return nil, err
@@ -215,16 +221,16 @@ func launch(ctx context.Context, config Config) (*process, error) {
 		proc.release()
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, binary, launchArgs(dataDir, port, config.Headed)...)
+	cmd := exec.Command(binary, launchArgs(dataDir, port, config.Headed)...)
 	// The browser writes a steady stream of diagnostics to standard error that
 	// would otherwise be painted over glorp's terminal UI.
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	supervisor := config.supervisor()
-	if err := supervisor.Start(cmd); err != nil {
+	started, err := startChild(config.supervisor(), cmd)
+	if err != nil {
 		proc.release()
 		return nil, fmt.Errorf("start browser (%s): %w", binary, err)
 	}
-	proc.cmd, proc.port, proc.supervisor = cmd, port, supervisor
+	proc.cmd, proc.port = started, port
 	wsURL, err := waitForReady(ctx, debugURL(port), readyTimeout)
 	if err != nil {
 		_ = proc.stop()
@@ -234,14 +240,12 @@ func launch(ctx context.Context, config Config) (*process, error) {
 	return proc, nil
 }
 
-// stop terminates the browser and then gives up whatever it was run in.
+// stop shuts the browser down, cleanly when it will go, and then gives up
+// whatever it was run in.
 func (p *process) stop() error {
-	var err error
-	if p.cmd != nil {
-		err = p.supervisor.Stop(p.cmd)
-	}
+	p.cmd.stop(p.wsURL)
 	p.release()
-	return err
+	return nil
 }
 
 // release gives up the profile claim, or removes the private directory the
