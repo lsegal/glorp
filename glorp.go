@@ -994,6 +994,9 @@ type issueWatch struct {
 	// webhook delivery reaches the running agent as promptly in push mode as
 	// the poll notices it in poll mode.
 	nudge <-chan struct{}
+	// observed, when set, is handed every state read back for the issue, so
+	// the dashboards can show the pull request the run is on (issue #753).
+	observed func(OriginatingWorkState)
 }
 
 // canRelay reports whether this run can be resumed in place right now.
@@ -1016,6 +1019,9 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 		previous, err = checker.OriginatingWorkState(ctx, repo, issue.Number)
 		if err != nil && ctx.Err() == nil {
 			w.logf("issue #%d initial closure check failed: %v", issue.Number, err)
+		}
+		if err == nil && watch.observed != nil {
+			watch.observed(previous)
 		}
 	}
 	seen := w.commentsSeen(ctx, repo, issue.Number)
@@ -1042,6 +1048,9 @@ func (w *Glorp) watchForIssueUpdates(ctx context.Context, checker WorkClosureChe
 					w.logf("issue #%d closure check failed: %v", issue.Number, checkErr)
 				}
 			} else {
+				if watch.observed != nil {
+					watch.observed(current)
+				}
 				if reason := closedWorkReason(previous, current, issue.Number); reason != "" {
 					if !watch.canRelay() {
 						cause := fmt.Errorf("%w: %s", errWorkClosedByUser, reason)
@@ -1347,8 +1356,8 @@ func pausedRecord(state workState) core.PausedWork {
 // from the issue as the poll listed it. Work that left a pull request behind
 // also reads that pull request back, and a stacked one still blocked reads its
 // blockers' pull requests too. It also returns the rejected pull request when
-// the work restarts. A read that fails is left out, so it never wakes work.
-func (w *Glorp) pausedWake(ctx context.Context, checker WorkClosureChecker, paused core.PausedWork, issue Issue) (core.PausedWake, string, int) {
+// the work restarts, and the work's own state when it was read. A read that fails is left out, so it never wakes work.
+func (w *Glorp) pausedWake(ctx context.Context, checker WorkClosureChecker, paused core.PausedWork, issue Issue) (core.PausedWake, string, int, *OriginatingWorkState) {
 	check := core.PausedCheck{Issue: issue}
 	if checker != nil && paused.Kind != core.PausedBlocked {
 		repo := issueRepository(issue.Target, issue)
@@ -1372,7 +1381,7 @@ func (w *Glorp) pausedWake(ctx context.Context, checker WorkClosureChecker, paus
 	if wake == core.PausedRestart && check.Own != nil {
 		rejected, _ = core.RejectedPullRequest(*check.Own)
 	}
-	return wake, reason, rejected
+	return wake, reason, rejected, check.Own
 }
 
 // pausedJobReason is what the dashboards say paused work waits on when it
@@ -2027,7 +2036,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		// pauseJob shows paused work on the dashboards, apart from both active
 		// and completed work (issue #732).
-		pauseJob := func(issue Issue, key, reason string) {
+		// A paused job whose own state was read shows its pull request
+		// (issue #753).
+		pauseJob := func(issue Issue, key, reason string, own *OriginatingWorkState) {
 			jobMu.Lock()
 			job, ok := jobs[key]
 			if !ok {
@@ -2037,6 +2048,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 				job.Title = issue.Title
 			}
 			changed := job.Status != "paused" || job.WaitReason != reason
+			if own != nil && job.SetPullRequest(*own, issueRepository(issue.Target, issue)) {
+				changed = true
+			}
 			job.Status, job.WaitReason = "paused", reason
 			jobs[key] = job
 			jobMu.Unlock()
@@ -2096,9 +2110,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 			wasPaused := pausedState.Status == "paused" && !running
 			var paused core.PausedWork
 			wake, wakeReason, wakeRejected := core.PausedStay, "", 0
+			var pausedOwn *OriginatingWorkState
 			if wasPaused {
 				paused = pausedRecord(pausedState)
-				wake, wakeReason, wakeRejected = w.pausedWake(ctx, closureChecker, paused, issue)
+				wake, wakeReason, wakeRejected, pausedOwn = w.pausedWake(ctx, closureChecker, paused, issue)
 				if wake == core.PausedStay && paused.Kind == core.PausedBlocked {
 					if pullRequest, ok := w.stackableOnDependency(ctx, closureChecker, issue); ok {
 						w.logChanged("stack-"+key, strconv.Itoa(pullRequest), "issue #%d %s; stacking it on pull request #%d", issue.Number, wakeReason, pullRequest)
@@ -2114,7 +2129,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d paused work has a direct mention of instance %s; dispatching it", issue.Number, w.Identity)
 				case wake == core.PausedStay:
 					w.logChanged("paused-"+key, wakeReason, "issue #%d paused: %s", issue.Number, wakeReason)
-					pauseJob(issue, key, wakeReason)
+					pauseJob(issue, key, wakeReason, pausedOwn)
 					continue
 				case wake == core.PausedComplete:
 					finishPaused(issue, key, paused, wakeReason)
@@ -2136,7 +2151,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					work[key] = state
 					workMu.Unlock()
 					w.logChanged("paused-"+key, reason, "issue #%d not picked up: %s; paused until it closes", issue.Number, reason)
-					pauseJob(issue, key, reason)
+					pauseJob(issue, key, reason, nil)
 					continue
 				}
 			}
@@ -2539,6 +2554,17 @@ func (w *Glorp) Run(ctx context.Context) error {
 						defer workMu.Unlock()
 						state := work[key]
 						return state.SessionID != "" && state.Agent != ""
+					}, observed: func(state OriginatingWorkState) {
+						jobMu.Lock()
+						job, ok := jobs[key]
+						changed := ok && job.SetPullRequest(state, issueRepository(i.Target, i))
+						if changed {
+							jobs[key] = job
+						}
+						jobMu.Unlock()
+						if changed {
+							publish()
+						}
 					}}
 					var closureReady <-chan struct{}
 					if closureChecker != nil || w.Comments != nil {

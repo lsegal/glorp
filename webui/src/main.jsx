@@ -31,6 +31,7 @@ import {
 	jobActionAvailability,
 	jobAgentSummary,
 	jobPage,
+	jobPullRequestLabel,
 	jobWaitLabel,
 	modelGroupsFrom,
 	modelOptionsFrom,
@@ -137,6 +138,7 @@ function JobCard({ job }) {
 	const [pendingAction, setPendingAction] = useState("");
 	const [actionError, setActionError] = useState("");
 	const available = jobActionAvailability(job.Status);
+	const pullRequest = jobPullRequestLabel(job);
 	const runAction = async (action) => {
 		setPendingAction(action);
 		setActionError("");
@@ -153,7 +155,8 @@ function JobCard({ job }) {
 			<header className="card-header">
 				<JobIcon status={job.Status} />
 				<h2>
-					#{job.Number} {job.Title}
+					#{job.Number}
+					{pullRequest && ` · ${pullRequest}`} {job.Title}
 				</h2>
 			</header>
 			<div className="meta" title={job.CheckoutDirectory}>

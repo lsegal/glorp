@@ -84,6 +84,14 @@ export function jobAgentSummary(job) {
 	return summary;
 }
 
+// jobPullRequestLabel names the pull request a job is on, shown next to its
+// issue number: "PR #750", or "PR fork/repo#750" when the pull request lives
+// in another repository. A job without one has no label (issue #753).
+export function jobPullRequestLabel(job) {
+	if (!(job.PullRequest > 0)) return "";
+	return `PR ${job.PullRequestRepository || ""}#${job.PullRequest}`;
+}
+
 export function jobActionAvailability(status) {
 	return {
 		// A queued job is already on its way to a fresh gh-fix run, so retry is

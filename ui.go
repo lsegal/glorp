@@ -52,6 +52,17 @@ func sortJobSnapshots(jobs []JobSnapshot) {
 	})
 }
 
+// jobTitlePrefix is what a job card's title starts with: its status indicator
+// and issue number, followed by its pull request when it has one, such as
+// "✓ #747 · PR #750 " (issue #753).
+func jobTitlePrefix(indicator string, job JobSnapshot) string {
+	prefix := fmt.Sprintf("%s #%d", indicator, job.Number)
+	if label := job.PullRequestLabel(); label != "" {
+		prefix += " · " + label
+	}
+	return prefix + " "
+}
+
 // publishedJobs lists every in-flight job for the published snapshot, sorted
 // the way the dashboards draw them. Every job keeps its Log here so the web
 // dashboard can page through all of them (issue #739); its /api/state handler
@@ -400,7 +411,7 @@ func (m dashboard) View() string {
 			indicator = "⧗"
 		}
 		cardWidth := jobCardWidth(m.width)
-		prefix := fmt.Sprintf("%s #%d ", indicator, job.Number)
+		prefix := jobTitlePrefix(indicator, job)
 		title := panel.Copy().Width(max(1, cardWidth-2)).Render(prefix + truncate(job.Title, jobTitleWidth(cardWidth, prefix)))
 		metadataWidth := max(1, cardWidth-2)
 		checkout := muted.Render(truncate("checkout: "+job.CheckoutDirectory, metadataWidth))
