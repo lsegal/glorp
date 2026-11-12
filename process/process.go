@@ -313,3 +313,7 @@ func (Supervisor) Start(cmd *exec.Cmd) error { return Start(cmd) }
 func (Supervisor) Run(cmd *exec.Cmd) error { return Run(cmd) }
 
 func (Supervisor) Stop(cmd *exec.Cmd) error { return Stop(cmd) }
+
+func (Supervisor) Wait(cmd *exec.Cmd) error { return Wait(cmd) }
+
+func (Supervisor) Kill(cmd *exec.Cmd) error { return Kill(cmd) }
