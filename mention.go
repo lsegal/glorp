@@ -597,7 +597,7 @@ func (g GHCLI) RecentComments(ctx context.Context, repo string, since time.Time)
 // ClosingIssues reads repo#number and, when it is a pull request, returns the
 // issues its description closes.
 func (g GHCLI) ClosingIssues(ctx context.Context, repo string, number int) ([]int, error) {
-	output, err := g.apiGET(ctx, g.isPublicRepo(ctx, repo), "repos/"+repo+"/issues/"+strconv.Itoa(number))
+	output, err := g.apiGETObject(ctx, g.isPublicRepo(ctx, repo), "repos/"+repo+"/issues/"+strconv.Itoa(number))
 	if err != nil {
 		return nil, fmt.Errorf("read #%d: %w: %s", number, err, strings.TrimSpace(string(output)))
 	}
@@ -657,7 +657,7 @@ func (g GHCLI) RecentReviewComments(ctx context.Context, repo string, since time
 	query.Set("sort", "updated")
 	query.Set("direction", "desc")
 	query.Set("per_page", "100")
-	output, err = g.apiGET(ctx, public, "repos/"+repo+"/pulls?"+query.Encode())
+	output, err = g.apiGETPaginated(ctx, public, "repos/"+repo+"/pulls?"+query.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("list recently updated pull requests in %s: %w: %s", repo, err, strings.TrimSpace(string(output)))
 	}

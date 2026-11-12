@@ -98,12 +98,12 @@ func TestApiGETUsesPublicAPIWhenPublic(t *testing.T) {
 			return nil, nil
 		},
 	}
-	body, err := gh.apiGET(context.Background(), true, "repos/owner/repo/issues/7")
+	body, err := gh.apiGETObject(context.Background(), true, "repos/owner/repo/issues/7")
 	if err != nil || string(body) != `{"state":"open"}` {
-		t.Fatalf("apiGET() = (%q, %v)", body, err)
+		t.Fatalf("apiGETObject() = (%q, %v)", body, err)
 	}
 	if ranGH {
-		t.Fatal("apiGET() ran the gh CLI even though the public request succeeded")
+		t.Fatal("apiGETObject() ran the gh CLI even though the public request succeeded")
 	}
 	if requestedURL != "https://api.github.com/repos/owner/repo/issues/7" {
 		t.Fatalf("requested URL = %q", requestedURL)
@@ -121,9 +121,9 @@ func TestApiGETFallsBackToGHOnPublicFailure(t *testing.T) {
 			return []byte(`{"state":"open"}`), nil
 		},
 	}
-	body, err := gh.apiGET(context.Background(), true, "repos/owner/repo/issues/7")
+	body, err := gh.apiGETObject(context.Background(), true, "repos/owner/repo/issues/7")
 	if err != nil || string(body) != `{"state":"open"}` {
-		t.Fatalf("apiGET() = (%q, %v)", body, err)
+		t.Fatalf("apiGETObject() = (%q, %v)", body, err)
 	}
 	want := []string{"api", "repos/owner/repo/issues/7"}
 	if !reflect.DeepEqual(ghArgs, want) {
@@ -141,8 +141,8 @@ func TestApiGETSkipsPublicAPIWhenNotPublic(t *testing.T) {
 			return []byte(`{"state":"open"}`), nil
 		},
 	}
-	if _, err := gh.apiGET(context.Background(), false, "repos/owner/repo/issues/7"); err != nil {
-		t.Fatalf("apiGET() error = %v", err)
+	if _, err := gh.apiGETObject(context.Background(), false, "repos/owner/repo/issues/7"); err != nil {
+		t.Fatalf("apiGETObject() error = %v", err)
 	}
 }
 
@@ -151,13 +151,13 @@ func TestApiGETPassesExtraGHArgsOnFallback(t *testing.T) {
 	gh := GHCLI{
 		runCommand: func(_ context.Context, args ...string) ([]byte, error) {
 			ghArgs = args
-			return []byte(`[]`), nil
+			return []byte(`{"state":"open"}`), nil
 		},
 	}
-	if _, err := gh.apiGET(context.Background(), false, "repos/owner/repo/issues/7/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28"); err != nil {
-		t.Fatalf("apiGET() error = %v", err)
+	if _, err := gh.apiGETObject(context.Background(), false, "repos/owner/repo/issues/7", "--header", "X-GitHub-Api-Version: 2022-11-28"); err != nil {
+		t.Fatalf("apiGETObject() error = %v", err)
 	}
-	want := []string{"api", "repos/owner/repo/issues/7/dependencies/blocked_by", "--header", "X-GitHub-Api-Version: 2022-11-28"}
+	want := []string{"api", "repos/owner/repo/issues/7", "--header", "X-GitHub-Api-Version: 2022-11-28"}
 	if !reflect.DeepEqual(ghArgs, want) {
 		t.Fatalf("gh args = %#v, want %#v", ghArgs, want)
 	}
