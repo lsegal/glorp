@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lsegal/glorp/core"
 )
@@ -324,5 +325,36 @@ func TestBoardHydrationFailureIsReported(t *testing.T) {
 	board := hydratingTestBoard(page, &fakeIssueHydrator{err: errors.New("boom")}, nil)
 	if _, err := board.ListIssues(context.Background(), boardTestTarget); err == nil {
 		t.Fatal("ListIssues() error = nil, want the hydration failure")
+	}
+}
+
+// TestIssueSourceRefreshesBlockedIssues checks that a blocked issue's
+// dependency state is read again once it is due, so a paused issue sees its
+// last blocker close (issue #762), while an unblocked one stays cached.
+func TestIssueSourceRefreshesBlockedIssues(t *testing.T) {
+	page := &fakePage{results: repeatResult(rowsResult(5), 3)}
+	hydrate := &fakeIssueHydrator{dependsOn: []core.IssueDependency{{Number: 2, State: "open"}}}
+	source := hydratingTestSource(page, hydrate, nil)
+	now := time.Now()
+	source.now = func() time.Time { return now }
+	list := func(tick int) core.Issue {
+		t.Helper()
+		issues, err := source.ListIssues(context.Background(), "lsegal/glorp")
+		if err != nil || len(issues) != 1 {
+			t.Fatalf("tick %d: ListIssues() = %#v, %v", tick, issues, err)
+		}
+		return issues[0]
+	}
+	list(1)
+	// The blocker closes on GitHub; nothing on the page changes.
+	hydrate.dependsOn = []core.IssueDependency{{Number: 2, State: "closed"}}
+	now = now.Add(blockedRefreshInterval)
+	if blocked, reason := core.IssueBlocked(list(2)); blocked {
+		t.Fatalf("issue still blocked (%s) after its blocker closed, hydrations = %v", reason, hydrate.calls)
+	}
+	now = now.Add(blockedRefreshInterval)
+	list(3)
+	if len(hydrate.calls) != 2 {
+		t.Fatalf("hydrations = %v, want a refresh while blocked and none once unblocked", hydrate.calls)
 	}
 }
