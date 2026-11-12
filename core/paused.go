@@ -22,7 +22,9 @@ const (
 	// restarts it fresh (issues #690, #729).
 	PausedPullRequest = "pull-request"
 	// PausedManual is work the owner paused from a dashboard (issue #771). No
-	// GitHub event wakes it; it waits until the owner retries it.
+	// GitHub event wakes it; it waits until the owner retries it. Only its
+	// issue closing finishes it, so it does not linger once the work is gone
+	// (issue #775).
 	PausedManual = "manual"
 )
 
@@ -97,13 +99,16 @@ func OpenPullRequests(state OriginatingWorkState) []int {
 // wake paused work. Every instance that reads the same GitHub state decides
 // the same thing.
 func WakePaused(paused PausedWork, check PausedCheck) (PausedWake, string) {
-	// Only the owner ends a manual pause, by retrying the job, so nothing
-	// read from GitHub wakes or finishes it (issue #771).
-	if paused.Kind == PausedManual {
-		return PausedStay, ManualPauseReason
-	}
+	// A closed issue finishes every kind of paused work, a manual pause
+	// included, so a job the owner paused does not stay paused forever once
+	// its issue is gone (issue #775).
 	if strings.EqualFold(check.Issue.State, "closed") || (check.Own != nil && strings.EqualFold(check.Own.IssueState, "closed")) {
 		return PausedComplete, fmt.Sprintf("issue #%d was closed", check.Issue.Number)
+	}
+	// Only the owner resumes a manual pause, by retrying the job, so nothing
+	// else read from GitHub wakes or finishes it (issue #771).
+	if paused.Kind == PausedManual {
+		return PausedStay, ManualPauseReason
 	}
 	if check.Own != nil {
 		for _, pullRequest := range check.Own.PullRequests {

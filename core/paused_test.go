@@ -40,7 +40,9 @@ func TestWakePaused(t *testing.T) {
 		{"held pull request never wakes on unreadable state", pullRequest, PausedCheck{Issue: Issue{Number: 7}}, PausedStay},
 		{"manual stays when its pull request merges", PausedWork{Kind: PausedManual}, PausedCheck{Issue: Issue{Number: 7}, Own: merged}, PausedStay},
 		{"manual stays when its blockers close", PausedWork{Kind: PausedManual}, PausedCheck{Issue: unblockedIssue, Own: rejected}, PausedStay},
-		{"manual stays when its issue closes", PausedWork{Kind: PausedManual}, PausedCheck{Issue: Issue{Number: 7, State: "closed"}, Own: closedIssue}, PausedStay},
+		{"manual stays while its issue is open", PausedWork{Kind: PausedManual}, PausedCheck{Issue: Issue{Number: 7, State: "open"}, Own: held}, PausedStay},
+		{"manual completes when its issue closes", PausedWork{Kind: PausedManual}, PausedCheck{Issue: Issue{Number: 7, State: "closed"}}, PausedComplete},
+		{"manual completes when its own state shows its issue closed", PausedWork{Kind: PausedManual}, PausedCheck{Issue: Issue{Number: 7}, Own: closedIssue}, PausedComplete},
 	} {
 		got, reason := WakePaused(test.paused, test.check)
 		if got != test.want {
