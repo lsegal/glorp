@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep watching paused jobs whose issue is no longer in the dispatch list (issue #769). A paused job was only checked for a wake while its issue was among the issues a poll listed, so one that dropped out of that list, such as through a filter, label, or board change, was never woken when its blocker closed. Every paused job is now read back from GitHub on its own schedule, every 10 minutes or every poll if polling is slower, whether or not its issue is listed. It is woken when its blocker closes, its pull request merges or closes unmerged, or its issue closes, and it keeps showing on the dashboards with what it waits on. In webhook push mode the paused check runs on its own timer, so it does not wait for the fallback poll.
+
 ## v1.5.20 - 2026-11-12
 
 - Link each job's issue and pull request numbers to their GitHub pages in the web and terminal dashboards (issue #767). On a web job card, clicking `#24` opens the issue and clicking `PR #190` opens the pull request, each in a new tab; a pull request in another repository, such as a fork, opens in that repository, and a job watched through a project links to its issue's own repository. The terminal dashboard shows the same numbers as OSC 8 hyperlinks in terminals that support them, such as Windows Terminal, iTerm2, WezTerm, kitty, Ghostty, VS Code, and VTE-based terminals, and as plain text everywhere else; set `FORCE_HYPERLINK=1` or `FORCE_HYPERLINK=0` to override the guess.

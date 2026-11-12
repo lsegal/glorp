@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -307,5 +308,140 @@ func TestGlorpWebUIRetryKeepsPauseWhenNothingIsRequeued(t *testing.T) {
 	case extra := <-runner.sessions:
 		t.Fatalf("a retry that was refused still ran: %+v", extra)
 	default:
+	}
+}
+
+// hydratingPausingSource also reads single issues back, as the paused watch
+// does for paused work the poll does not list (issue #769).
+type hydratingPausingSource struct {
+	*fakePausingSource
+	issueMu   sync.Mutex
+	issues    map[int]Issue
+	hydrated  int
+	hydrateCh chan struct{}
+}
+
+func (f *hydratingPausingSource) HydrateIssue(_ context.Context, _ string, issue *Issue) error {
+	f.issueMu.Lock()
+	read := f.issues[issue.Number]
+	f.hydrated++
+	f.issueMu.Unlock()
+	issue.State, issue.DependsOn = read.State, read.DependsOn
+	if f.hydrateCh != nil {
+		select {
+		case f.hydrateCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (f *hydratingPausingSource) setIssue(issue Issue) {
+	f.issueMu.Lock()
+	defer f.issueMu.Unlock()
+	f.issues[issue.Number] = issue
+}
+
+// unlistedBlockedSource lists no issues at all, while issue #7 is paused on
+// its open blocker #12.
+func unlistedBlockedSource(t *testing.T, statePath string) *hydratingPausingSource {
+	t.Helper()
+	saved := `{"o/r#7": {"status": "paused", "paused": {"kind": "blocked", "waitingOn": [12]}}}`
+	if err := os.WriteFile(statePath, []byte(saved), 0600); err != nil {
+		t.Fatal(err)
+	}
+	src := &hydratingPausingSource{fakePausingSource: pausingSource([]Issue{}), issues: map[int]Issue{}, hydrateCh: make(chan struct{}, 1)}
+	src.states[7] = OriginatingWorkState{IssueState: "open"}
+	src.states[12] = OriginatingWorkState{IssueState: "open"}
+	src.setIssue(Issue{Number: 7, State: "open", DependsOn: []IssueDependency{{Number: 12, State: "open"}}})
+	return src
+}
+
+// A paused issue the poll no longer lists is still watched: once its blocker
+// closes, the paused watch wakes it and dispatches it (issue #769).
+func TestGlorpWakesPausedWorkTheDispatchListNoLongerHas(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := unlistedBlockedSource(t, statePath)
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	logs := &syncBuffer{}
+	w := &Glorp{
+		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: logs, closureInterval: time.Millisecond, pausedInterval: 20 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case <-src.hydrateCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unlisted paused issue was never read back")
+	}
+	select {
+	case extra := <-runner.sessions:
+		t.Fatalf("paused issue was dispatched while its blocker is open: %+v", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !strings.Contains(logs.String(), "issue #7 paused: depends on #12 (open)") {
+		t.Fatalf("unlisted paused issue was not re-checked:\n%s", logs)
+	}
+
+	src.setIssue(Issue{Number: 7, State: "open", DependsOn: []IssueDependency{{Number: 12, State: "closed"}}})
+	waitForSession(t, runner.sessions)
+	if !strings.Contains(logs.String(), "issue #7 unpaused: its blockers are closed; dispatching it") {
+		t.Fatalf("waking was not logged:\n%s", logs)
+	}
+}
+
+// In push mode the fallback poll can be far apart, so the paused watch runs
+// on its own interval: paused work is re-checked within it even when nothing
+// else in the run happens (issue #769).
+func TestGlorpWatchesPausedWorkOnItsOwnInterval(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	src := unlistedBlockedSource(t, statePath)
+	runner := &finishingSessionRunner{agent: "claude", sessions: make(chan AgentSession, 4), finish: 1}
+	w := &Glorp{
+		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: statePath,
+		Issues: src, Runner: runner, Out: io.Discard, closureInterval: time.Millisecond,
+		UseWebhooks: true, fallbackInterval: time.Hour, reapInterval: time.Hour, pausedInterval: 20 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	for range 3 {
+		select {
+		case <-src.hydrateCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("paused work was not re-checked within its paused interval")
+		}
+	}
+	src.setIssue(Issue{Number: 7, State: "open", DependsOn: []IssueDependency{{Number: 12, State: "closed"}}})
+	waitForSession(t, runner.sessions)
+}
+
+func TestPausedWatchIsNeverFasterThanThePoll(t *testing.T) {
+	w := &Glorp{Interval: time.Minute}
+	if got := w.pausedWatchEvery(); got != pausedWatchInterval {
+		t.Fatalf("pausedWatchEvery() = %s, want %s", got, pausedWatchInterval)
+	}
+	if got := w.pausedWatchTick(); got != 0 {
+		t.Fatalf("pausedWatchTick() = %s in poll mode, want every poll to carry the watch", got)
+	}
+	w.Interval = time.Hour
+	if got := w.pausedWatchEvery(); got != time.Hour {
+		t.Fatalf("pausedWatchEvery() = %s, want the slower poll interval", got)
+	}
+	push := &Glorp{Interval: time.Minute, UseWebhooks: true}
+	if got := push.pausedWatchTick(); got != pausedWatchInterval {
+		t.Fatalf("pausedWatchTick() = %s in push mode, want %s", got, pausedWatchInterval)
 	}
 }
