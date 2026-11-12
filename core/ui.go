@@ -229,8 +229,11 @@ func JobActionAvailability(status string) JobActions {
 	// A job waiting on a scheduled wakeup still holds its agent session, so
 	// it can be stopped just like a running one (issue #671). A queued job
 	// has nothing to stop yet, but it can be held back (issue #771).
-	actions.Stop = status == "active" || status == "waiting"
-	actions.Pause = actions.Stop || status == "queued"
+	running := status == "active" || status == "waiting"
+	actions.Pause = running || status == "queued"
+	// Stopping a paused job clears it, so a manual pause Retry cannot
+	// requeue still has a way out (issue #777).
+	actions.Stop = running || status == "paused"
 	return actions
 }
 

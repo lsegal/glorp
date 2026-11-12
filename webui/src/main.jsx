@@ -200,7 +200,12 @@ function JobCard({ job }) {
 						type="button"
 						disabled={!available.stop || pendingAction !== ""}
 						onClick={() => runAction("stop")}
-						title={actionError || "Stop gh-fix"}
+						title={
+							actionError ||
+							(job.Status === "paused"
+								? "Clear the pause and release the issue"
+								: "Stop gh-fix")
+						}
 					>
 						<StopIcon /> Stop
 					</button>

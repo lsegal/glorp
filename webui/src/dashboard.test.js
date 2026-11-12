@@ -109,7 +109,7 @@ describe("jobActionAvailability", () => {
 		});
 		expect(jobActionAvailability("paused")).toEqual({
 			retry: true,
-			stop: false,
+			stop: true,
 			pause: false,
 		});
 	});

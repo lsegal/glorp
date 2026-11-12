@@ -1344,14 +1344,15 @@ func TestDashboardJobActionButtons(t *testing.T) {
 }
 
 // TestCoreJobActionAvailability pins which job actions the run accepts in
-// each state (issue #771): pause only for active, waiting, and queued jobs.
+// each state (issue #771): pause only for active, waiting, and queued jobs,
+// and stop for paused jobs too, which clears them (issue #777).
 func TestCoreJobActionAvailability(t *testing.T) {
 	for status, want := range map[string]core.JobActions{
 		"active":   {Retry: true, Stop: true, Pause: true},
 		"waiting":  {Retry: true, Stop: true, Pause: true},
 		"queued":   {RetryReason: "Already queued for a gh-fix run", Pause: true},
 		"stopping": {RetryReason: "Waiting for the stopped run to exit"},
-		"paused":   {Retry: true},
+		"paused":   {Retry: true, Stop: true},
 		"failed":   {Retry: true},
 		"complete": {Retry: true},
 	} {
