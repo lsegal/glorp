@@ -789,6 +789,19 @@ func (s WatchIssues) StacksEnabled(ctx context.Context, repo string) (bool, erro
 	return stacks.StacksEnabled(ctx, repo)
 }
 
+// HydrateIssue forwards the paused watch's issue read to the API client, so
+// browser mode wakes paused work the page readers no longer list the same way
+// poll mode does (issue #769).
+func (s WatchIssues) HydrateIssue(ctx context.Context, repo string, issue *core.Issue) error {
+	hydrator, ok := s.Work.(interface {
+		HydrateIssue(context.Context, string, *core.Issue) error
+	})
+	if !ok {
+		return fmt.Errorf("read issue #%d: no issue source configured", issue.Number)
+	}
+	return hydrator.HydrateIssue(ctx, repo, issue)
+}
+
 func (s WatchIssues) ListIssues(ctx context.Context, target string) ([]core.Issue, error) {
 	if core.IsProjectTarget(target) {
 		return s.Board.ListIssues(ctx, target)

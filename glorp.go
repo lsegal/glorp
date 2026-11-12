@@ -37,6 +37,12 @@ const (
 	// over abandoned work. Polling can be much less frequent than this in
 	// webhook push mode, so reaping gets its own floor (issue #239).
 	reapPollInterval = 10 * time.Minute
+	// pausedWatchInterval is the longest paused work goes without a wake
+	// check. Paused work only resumes when glorp notices its blocker or pull
+	// request closing on GitHub, so every paused record is read back on this
+	// cadence, including ones whose issue the poll no longer lists. It is
+	// never faster than the main poll interval (issue #769).
+	pausedWatchInterval = 10 * time.Minute
 )
 
 var errWorkClosedByUser = errors.New("work closed by user")
@@ -248,6 +254,8 @@ type Glorp struct {
 	ownershipWait func(context.Context) bool
 	// reapInterval overrides the periodic reap cadence in tests.
 	reapInterval time.Duration
+	// pausedInterval overrides pausedWatchInterval in tests.
+	pausedInterval time.Duration
 	// staleClaim overrides the age at which another instance's claim is
 	// considered abandoned in tests.
 	staleClaim time.Duration
@@ -518,6 +526,30 @@ func (w *Glorp) reapPollTick() time.Duration {
 		return 0
 	}
 	return interval
+}
+
+// pausedWatchEvery is how often every paused record is checked for a wake:
+// pausedWatchInterval, or the main poll interval when that is slower.
+func (w *Glorp) pausedWatchEvery() time.Duration {
+	interval := pausedWatchInterval
+	if w.pausedInterval > 0 {
+		interval = w.pausedInterval
+	}
+	if w.Interval > interval {
+		return w.Interval
+	}
+	return interval
+}
+
+// pausedWatchTick is how often a paused watch runs on its own when ordinary
+// polling is slower than pausedWatchEvery (webhook push mode). It returns 0
+// when polling already runs at least that often, in which case the poll that
+// finds the watch due runs it.
+func (w *Glorp) pausedWatchTick() time.Duration {
+	if w.periodicPollInterval() <= w.pausedWatchEvery() {
+		return 0
+	}
+	return w.pausedWatchEvery()
 }
 
 func (w *Glorp) staleClaimAfter() time.Duration {
@@ -1384,6 +1416,36 @@ func (w *Glorp) pausedWake(ctx context.Context, checker WorkClosureChecker, paus
 	return wake, reason, rejected, check.Own
 }
 
+// IssueHydrator reads one issue back from GitHub with its state and
+// dependencies, so paused work whose issue the poll does not list can still
+// be woken when its blockers close (issue #769).
+type IssueHydrator interface {
+	HydrateIssue(ctx context.Context, repo string, issue *Issue) error
+}
+
+// unlistedPausedIssues reads back the paused work whose issue the poll did not
+// list, so the paused watch can decide its wake exactly as it does for listed
+// work (issue #769). An issue that cannot be read is left out; the poll still
+// finishes it if its own state shows it closed or merged.
+func (w *Glorp) unlistedPausedIssues(ctx context.Context, hydrator IssueHydrator, keys []string, targets []string) []Issue {
+	var issues []Issue
+	for _, key := range keys {
+		target, number, ok := parseIssueWorkKey(key)
+		if !ok || !slices.Contains(targets, target) || isDiscussionTarget(target) {
+			continue
+		}
+		issue := Issue{Number: number, Target: target, Repository: issueRepository(target, Issue{})}
+		if err := hydrator.HydrateIssue(ctx, issue.Repository, &issue); err != nil {
+			if ctx.Err() == nil {
+				w.logChanged("paused-watch-"+key, err.Error(), "issue #%d paused watch could not read the issue: %v", number, err)
+			}
+			continue
+		}
+		issues = append(issues, issue)
+	}
+	return issues
+}
+
 // pausedJobReason is what the dashboards say paused work waits on when it
 // pauses at the end of a run.
 func pausedJobReason(paused core.PausedWork) string {
@@ -1993,6 +2055,13 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// pause it again: the retry overrides what it waited on (issue #763).
 	// Only the run loop's own goroutine reads or writes it.
 	retriedPaused := make(map[string]bool)
+	// lastPausedWatch is when the paused watch last read back every paused
+	// record, including ones the poll did not list, and forcePausedWatch asks
+	// the next poll to run it regardless (issue #769). Only the run loop's own
+	// goroutine reads or writes them.
+	var lastPausedWatch time.Time
+	forcePausedWatch := false
+	issueHydrator, _ := w.Issues.(IssueHydrator)
 	pollOnce := func(sweep map[string]bool) error {
 		pollNumber++
 		n := pollNumber
@@ -2038,6 +2107,29 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.scanDirectMentions(ctx, mentions, mentionScanRepos(targets, issues), observed, directMentions)
 		} else if w.Mentions != nil {
 			w.scanLinkedPullRequests(ctx, mentions, webhookRepos, observed, directMentions)
+		}
+		// The paused watch: on its own cadence, paused work whose issue the
+		// poll did not list is read back and decided below like any listed
+		// paused work, so its wake never depends on the dispatch feed (issue
+		// #769). A watch a little early is still due, so a reap or webhook
+		// poll that lands just before the watch's tick runs it instead.
+		if every := w.pausedWatchEvery(); issueHydrator != nil && (forcePausedWatch || time.Since(lastPausedWatch) >= every-every/10) {
+			forcePausedWatch = false
+			lastPausedWatch = time.Now()
+			listed := make(map[string]bool, len(issues))
+			for _, issue := range issues {
+				listed[issueKey(issue)] = true
+			}
+			var keys []string
+			workMu.Lock()
+			for key, state := range work {
+				if _, running := active[key]; state.Status == "paused" && !running && !listed[key] {
+					keys = append(keys, key)
+				}
+			}
+			workMu.Unlock()
+			slices.Sort(keys)
+			issues = append(issues, w.unlistedPausedIssues(ctx, issueHydrator, keys, targets)...)
 		}
 		// pauseJob shows paused work on the dashboards, apart from both active
 		// and completed work (issue #732).
@@ -3000,6 +3092,16 @@ func (w *Glorp) Run(ctx context.Context) error {
 		reap = reapTicker.C
 		w.logf("reaping abandoned work every %s", reapTick)
 	}
+	// Paused work is watched on its own cadence, so when polling is slower
+	// than that (webhook push mode) the watch gets its own ticker (issue
+	// #769).
+	var pausedWatch <-chan time.Time
+	if pausedTick := w.pausedWatchTick(); pausedTick > 0 {
+		pausedTicker := time.NewTicker(pausedTick)
+		defer pausedTicker.Stop()
+		pausedWatch = pausedTicker.C
+		w.logf("watching paused work every %s", pausedTick)
+	}
 	retryAfterStop := make(map[string]bool)
 	for {
 		select {
@@ -3183,6 +3285,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("periodic reap started")
 			if err := poll(nil); err != nil && ctx.Err() == nil {
 				reportPollError("reap", err)
+			}
+		case <-pausedWatch:
+			// A poll that ran the watch moments ago already covered it.
+			if time.Since(lastPausedWatch) < w.pausedWatchEvery()/2 {
+				continue
+			}
+			forcePausedWatch = true
+			if err := poll(nil); err != nil && ctx.Err() == nil {
+				reportPollError("paused watch", err)
 			}
 		case event := <-w.Events:
 			w.logWebhookEvent(event)

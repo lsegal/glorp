@@ -232,6 +232,18 @@ func (g SignInGuard) StacksEnabled(ctx context.Context, repo string) (bool, erro
 	return stacks.StacksEnabled(ctx, repo)
 }
 
+// HydrateIssue passes the paused watch's issue read through to the wrapped
+// source for the same reason OriginatingWorkState does (issue #769).
+func (g SignInGuard) HydrateIssue(ctx context.Context, repo string, issue *core.Issue) error {
+	hydrator, ok := g.source.(interface {
+		HydrateIssue(context.Context, string, *core.Issue) error
+	})
+	if !ok {
+		return fmt.Errorf("read issue #%d: %T cannot read issues", issue.Number, g.source)
+	}
+	return hydrator.HydrateIssue(ctx, repo, issue)
+}
+
 func (g SignInGuard) ListIssues(ctx context.Context, target string) ([]core.Issue, error) {
 	issues, err := g.source.ListIssues(ctx, target)
 	if err != nil {
