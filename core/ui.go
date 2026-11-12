@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -31,6 +32,39 @@ type JobSnapshot struct {
 	// says what a job with Status "paused" waits on (issue #732).
 	WaitReason string
 	WakeAt     time.Time
+	// PullRequest is the number of the job's current pull request, or 0 while
+	// it has none. PullRequestRepository is the OWNER/REPO hosting it, set
+	// only when that differs from the issue's repository, such as a pull
+	// request opened from a fork (issue #753).
+	PullRequest           int
+	PullRequestRepository string
+}
+
+// PullRequestLabel is how the dashboards name a job's pull request next to its
+// issue number: "PR #750", or "PR fork/repo#750" when it lives in another
+// repository. A job without a pull request has no label.
+func (j JobSnapshot) PullRequestLabel() string {
+	if j.PullRequest <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("PR %s#%d", j.PullRequestRepository, j.PullRequest)
+}
+
+// SetPullRequest records the current pull request in state as the job's, and
+// reports whether that changed what the dashboards show (issue #753).
+func (j *JobSnapshot) SetPullRequest(state OriginatingWorkState, issueRepository string) bool {
+	number, repository := 0, ""
+	if pullRequest, ok := CurrentPullRequest(state); ok {
+		number = pullRequest.Number
+		if !pullRequest.InRepo(issueRepository) {
+			repository = pullRequest.Repository
+		}
+	}
+	if j.PullRequest == number && j.PullRequestRepository == repository {
+		return false
+	}
+	j.PullRequest, j.PullRequestRepository = number, repository
+	return true
 }
 
 // Snapshot is the whole run as the dashboards draw it. The terminal dashboard

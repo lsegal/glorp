@@ -15,6 +15,7 @@ import {
 	jobActionAvailability,
 	jobAgentSummary,
 	jobPage,
+	jobPullRequestLabel,
 	jobWaitLabel,
 	lastPollLabel,
 	modelGroupsFrom,
@@ -117,6 +118,29 @@ describe("jobActionAvailability", () => {
 			retry: true,
 			stop: true,
 		});
+	});
+});
+
+describe("jobPullRequestLabel", () => {
+	it("names the job's pull request next to its issue number", () => {
+		expect(jobPullRequestLabel({ Number: 747, PullRequest: 750 })).toBe(
+			"PR #750",
+		);
+	});
+
+	it("qualifies a pull request in another repository", () => {
+		expect(
+			jobPullRequestLabel({
+				Number: 747,
+				PullRequest: 12,
+				PullRequestRepository: "fork/glorp",
+			}),
+		).toBe("PR fork/glorp#12");
+	});
+
+	it("is empty for a job without a pull request", () => {
+		expect(jobPullRequestLabel({ Number: 743 })).toBe("");
+		expect(jobPullRequestLabel({ Number: 743, PullRequest: 0 })).toBe("");
 	});
 });
 
