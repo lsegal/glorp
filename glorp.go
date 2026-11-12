@@ -3102,112 +3102,6 @@ func (w *Glorp) Run(ctx context.Context) error {
 			w.logf("issue #%d failed to respond to ownership ask: %v", event.IssueNumber, err)
 		}
 	}
-	// Signal readiness now, immediately before the first dispatch. Initial
-	// dispatch already services settingsRequestsChan itself through
-	// acquireSlot while it blocks on a full concurrency semaphore, so
-	// requests are handled correctly from here on even though the main
-	// select loop below is still a moment away. Everything above --
-	// loading work state, resetFailedWork's GitHub calls, and in webhook
-	// mode the ngrok tunnel and per-target webhook configuration in
-	// main.go's run() -- can take a real amount of time, and a settings or
-	// job-action request that lands during that window must not block on a
-	// channel nothing is reading yet (issue #579).
-	close(w.readyChan())
-	if err := poll(nil); err != nil {
-		if ctx.Err() != nil {
-			wg.Wait()
-			w.logf("stopped during initial poll")
-			return nil
-		}
-		reportPollError("initial", err)
-	}
-	publish()
-	// Board-only project changes never reach a webhook, so push mode probes a
-	// cheap board fingerprint instead. Seeding it here (rather than on the
-	// first tick) means an idle board costs one small request per probe and
-	// never triggers a redundant full poll at startup.
-	probedTargets := w.projectProbeTargets(targets)
-	boardState := make(map[string]string, len(probedTargets))
-	probeBoards := func(ctx context.Context) bool {
-		changed := false
-		for _, target := range probedTargets {
-			state, err := w.Projects.ProjectState(ctx, target)
-			if err != nil {
-				if ctx.Err() == nil {
-					w.logChanged("board-probe:"+target, err.Error(), "project board probe for %s failed: %v", target, err)
-				}
-				continue
-			}
-			previous, known := boardState[target]
-			boardState[target] = state
-			if known && previous != state {
-				w.logf("project board change detected for %s; refreshing", target)
-				changed = true
-			}
-		}
-		return changed
-	}
-	probeBoards(ctx)
-	var ticker *time.Ticker
-	go w.watchPollProgress(watchCtx, w.periodicPollInterval(), time.Now(), func() time.Time {
-		jobMu.Lock()
-		defer jobMu.Unlock()
-		return lastPoll
-	})
-	wakes := watchForWake(watchCtx)
-	var tick <-chan time.Time
-	var retryTimer *time.Timer
-	var retry <-chan time.Time
-	retriesRemaining := 0
-	// pendingWebhookIssue names the issue whose delivery scheduled the current
-	// follow-up chain, so the chain can stop early once a refresh sees it.
-	pendingWebhookIssue := ""
-	// pendingWebhookSweep preserves referenced continuation work across the
-	// follow-up chain, including while GitHub's issue/dependency indexes lag.
-	var pendingWebhookSweep map[string]bool
-	var stateReloadTimer *time.Timer
-	var stateReload <-chan time.Time
-	defer func() {
-		if stateReloadTimer != nil {
-			stateReloadTimer.Stop()
-		}
-	}()
-	// Keep periodic reconciliation active in webhook mode so issue state that
-	// changes without a delivery can still be recovered.
-	periodicInterval := w.periodicPollInterval()
-	ticker = time.NewTicker(periodicInterval)
-	defer ticker.Stop()
-	tick = ticker.C
-	var boardTick <-chan time.Time
-	if len(probedTargets) > 0 {
-		boardTicker := time.NewTicker(w.projectBoardProbeInterval())
-		defer boardTicker.Stop()
-		boardTick = boardTicker.C
-		w.logf("probing %d project board(s) for board-only changes every %s", len(probedTargets), w.projectBoardProbeInterval())
-	}
-	if pushed := w.pushedBoardTargets(targets); len(pushed) > 0 {
-		w.logf("not probing %d project board(s) that push board changes over webhooks: %s", len(pushed), strings.Join(pushed, ", "))
-	}
-	// Reaping abandoned work rides along with polling, so when polling is
-	// slower than reapPollInterval (webhook push mode) it gets its own,
-	// faster ticker (issue #239).
-	var reap <-chan time.Time
-	if reapTick := w.reapPollTick(); reapTick > 0 {
-		reapTicker := time.NewTicker(reapTick)
-		defer reapTicker.Stop()
-		reap = reapTicker.C
-		w.logf("reaping abandoned work every %s", reapTick)
-	}
-	// Paused work is watched on its own cadence, so when polling is slower
-	// than that (webhook push mode) the watch gets its own ticker (issue
-	// #769).
-	var pausedWatch <-chan time.Time
-	if pausedTick := w.pausedWatchTick(); pausedTick > 0 {
-		pausedTicker := time.NewTicker(pausedTick)
-		defer pausedTicker.Stop()
-		pausedWatch = pausedTicker.C
-		w.logf("watching paused work every %s", pausedTick)
-	}
 	// awaitPausedRun replies to a pause once the run it stopped has exited
 	// and recorded the pause, after pushing the run's work with the shutdown
 	// checkpoint (issues #719, #741, #771).
@@ -3421,6 +3315,112 @@ func (w *Glorp) Run(ctx context.Context) error {
 		default:
 			request.done <- fmt.Errorf("unknown job action %q", action.Action)
 		}
+	}
+	// Signal readiness now, immediately before the first dispatch. Initial
+	// dispatch already services settingsRequestsChan and job actions itself
+	// through acquireDispatchSlot while it blocks on a full concurrency
+	// semaphore, so requests are handled correctly from here on even though
+	// the main select loop below is still a moment away. Everything above --
+	// loading work state, resetFailedWork's GitHub calls, and in webhook
+	// mode the ngrok tunnel and per-target webhook configuration in
+	// main.go's run() -- can take a real amount of time, and a settings or
+	// job-action request that lands during that window must not block on a
+	// channel nothing is reading yet (issue #579).
+	close(w.readyChan())
+	if err := poll(nil); err != nil {
+		if ctx.Err() != nil {
+			wg.Wait()
+			w.logf("stopped during initial poll")
+			return nil
+		}
+		reportPollError("initial", err)
+	}
+	publish()
+	// Board-only project changes never reach a webhook, so push mode probes a
+	// cheap board fingerprint instead. Seeding it here (rather than on the
+	// first tick) means an idle board costs one small request per probe and
+	// never triggers a redundant full poll at startup.
+	probedTargets := w.projectProbeTargets(targets)
+	boardState := make(map[string]string, len(probedTargets))
+	probeBoards := func(ctx context.Context) bool {
+		changed := false
+		for _, target := range probedTargets {
+			state, err := w.Projects.ProjectState(ctx, target)
+			if err != nil {
+				if ctx.Err() == nil {
+					w.logChanged("board-probe:"+target, err.Error(), "project board probe for %s failed: %v", target, err)
+				}
+				continue
+			}
+			previous, known := boardState[target]
+			boardState[target] = state
+			if known && previous != state {
+				w.logf("project board change detected for %s; refreshing", target)
+				changed = true
+			}
+		}
+		return changed
+	}
+	probeBoards(ctx)
+	var ticker *time.Ticker
+	go w.watchPollProgress(watchCtx, w.periodicPollInterval(), time.Now(), func() time.Time {
+		jobMu.Lock()
+		defer jobMu.Unlock()
+		return lastPoll
+	})
+	wakes := watchForWake(watchCtx)
+	var tick <-chan time.Time
+	var retryTimer *time.Timer
+	var retry <-chan time.Time
+	retriesRemaining := 0
+	// pendingWebhookIssue names the issue whose delivery scheduled the current
+	// follow-up chain, so the chain can stop early once a refresh sees it.
+	pendingWebhookIssue := ""
+	// pendingWebhookSweep preserves referenced continuation work across the
+	// follow-up chain, including while GitHub's issue/dependency indexes lag.
+	var pendingWebhookSweep map[string]bool
+	var stateReloadTimer *time.Timer
+	var stateReload <-chan time.Time
+	defer func() {
+		if stateReloadTimer != nil {
+			stateReloadTimer.Stop()
+		}
+	}()
+	// Keep periodic reconciliation active in webhook mode so issue state that
+	// changes without a delivery can still be recovered.
+	periodicInterval := w.periodicPollInterval()
+	ticker = time.NewTicker(periodicInterval)
+	defer ticker.Stop()
+	tick = ticker.C
+	var boardTick <-chan time.Time
+	if len(probedTargets) > 0 {
+		boardTicker := time.NewTicker(w.projectBoardProbeInterval())
+		defer boardTicker.Stop()
+		boardTick = boardTicker.C
+		w.logf("probing %d project board(s) for board-only changes every %s", len(probedTargets), w.projectBoardProbeInterval())
+	}
+	if pushed := w.pushedBoardTargets(targets); len(pushed) > 0 {
+		w.logf("not probing %d project board(s) that push board changes over webhooks: %s", len(pushed), strings.Join(pushed, ", "))
+	}
+	// Reaping abandoned work rides along with polling, so when polling is
+	// slower than reapPollInterval (webhook push mode) it gets its own,
+	// faster ticker (issue #239).
+	var reap <-chan time.Time
+	if reapTick := w.reapPollTick(); reapTick > 0 {
+		reapTicker := time.NewTicker(reapTick)
+		defer reapTicker.Stop()
+		reap = reapTicker.C
+		w.logf("reaping abandoned work every %s", reapTick)
+	}
+	// Paused work is watched on its own cadence, so when polling is slower
+	// than that (webhook push mode) the watch gets its own ticker (issue
+	// #769).
+	var pausedWatch <-chan time.Time
+	if pausedTick := w.pausedWatchTick(); pausedTick > 0 {
+		pausedTicker := time.NewTicker(pausedTick)
+		defer pausedTicker.Stop()
+		pausedWatch = pausedTicker.C
+		w.logf("watching paused work every %s", pausedTick)
 	}
 	for {
 		select {

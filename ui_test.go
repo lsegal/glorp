@@ -1,10 +1,13 @@
 package main
 
 import (
+	"github.com/lsegal/glorp/core"
 	"github.com/lsegal/glorp/webui"
 
+	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1281,6 +1284,79 @@ func TestTerminalSupportsHyperlinks(t *testing.T) {
 	} {
 		if got := terminalSupportsHyperlinks(func(key string) string { return test.env[key] }); got != test.want {
 			t.Errorf("terminalSupportsHyperlinks(%v) = %v, want %v", test.env, got, test.want)
+		}
+	}
+}
+
+// TestDashboardJobActionButtons checks that a terminal job card draws retry,
+// stop, and pause buttons, and that clicking an enabled one sends that action
+// for the card's job while a dimmed one does nothing (issue #771).
+func TestDashboardJobActionButtons(t *testing.T) {
+	var got []core.JobAction
+	ui := &TerminalUI{}
+	ui.SetJobActionHandler(func(_ context.Context, action core.JobAction) error {
+		got = append(got, action)
+		return nil
+	})
+	m := newDashboard(ui)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = updated.(dashboard)
+	updated, _ = m.Update(snapshotMsg(GlorpSnapshot{Jobs: []JobSnapshot{
+		{Number: 7, Target: "o/r", Title: "Running", Status: "active", Started: time.Now()},
+		{Number: 8, Target: "o/r", Title: "Failed", Status: "failed", Started: time.Now().Add(-time.Hour)},
+	}}))
+	m = updated.(dashboard)
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	click := func(label string, card int) tea.Cmd {
+		t.Helper()
+		for y, line := range lines {
+			cells := []rune(line)
+			found := 0
+			for x := range cells {
+				if strings.HasPrefix(string(cells[x:]), label) {
+					if found == card {
+						_, cmd := m.Update(tea.MouseMsg{X: x + 1, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+						return cmd
+					}
+					found++
+				}
+			}
+		}
+		t.Fatalf("no %s button for card %d in %q", label, card, strings.Join(lines, "\n"))
+		return nil
+	}
+	cmd := click("[pause]", 0)
+	if cmd == nil {
+		t.Fatal("clicking pause on an active job sent nothing")
+	}
+	if msg := cmd(); !strings.Contains(string(msg.(logMsg)), "#7 pause done") {
+		t.Fatalf("pause outcome = %q", msg)
+	}
+	if want := []core.JobAction{{Action: "pause", Target: "o/r", Number: 7}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("actions = %#v, want %#v", got, want)
+	}
+	if cmd := click("[pause]", 1); cmd != nil {
+		t.Fatal("clicking pause on a failed job sent an action")
+	}
+	if cmd := click("[retry]", 1); cmd == nil {
+		t.Fatal("clicking retry on a failed job sent nothing")
+	}
+}
+
+// TestCoreJobActionAvailability pins which job actions the run accepts in
+// each state (issue #771): pause only for active, waiting, and queued jobs.
+func TestCoreJobActionAvailability(t *testing.T) {
+	for status, want := range map[string]core.JobActions{
+		"active":   {Retry: true, Stop: true, Pause: true},
+		"waiting":  {Retry: true, Stop: true, Pause: true},
+		"queued":   {RetryReason: "Already queued for a gh-fix run", Pause: true},
+		"stopping": {RetryReason: "Waiting for the stopped run to exit"},
+		"paused":   {Retry: true},
+		"failed":   {Retry: true},
+		"complete": {Retry: true},
+	} {
+		if got := core.JobActionAvailability(status); got != want {
+			t.Errorf("JobActionAvailability(%q) = %+v, want %+v", status, got, want)
 		}
 	}
 }
