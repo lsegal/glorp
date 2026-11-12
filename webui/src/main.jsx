@@ -191,7 +191,7 @@ function JobCard({ job }) {
 						type="button"
 						disabled={!available.retry || pendingAction !== ""}
 						onClick={() => runAction("retry")}
-						title={actionError || "Retry gh-fix"}
+						title={actionError || available.retryReason || "Retry gh-fix"}
 					>
 						<ArrowPathIcon /> Retry
 					</button>

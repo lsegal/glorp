@@ -130,11 +130,18 @@ export function jobProgress(job) {
 	};
 }
 
+// retryUnavailable names why the run refuses to retry a job in each state it
+// refuses, so the button is disabled with that reason instead (issue #763).
+const retryUnavailable = {
+	queued: "Already queued for a gh-fix run",
+	stopping: "Waiting for the stopped run to exit",
+};
+
 export function jobActionAvailability(status) {
+	const retryReason = retryUnavailable[status];
 	return {
-		// A queued job is already on its way to a fresh gh-fix run, so retry is
-		// available for every state shown in the dashboard.
-		retry: true,
+		retry: !retryReason,
+		...(retryReason && { retryReason }),
 		// A job waiting on a scheduled wakeup still holds its agent session,
 		// so it can be stopped just like a running one (issue #671).
 		stop: status === "active" || status === "waiting",

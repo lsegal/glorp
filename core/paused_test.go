@@ -62,3 +62,42 @@ func TestWakePausedIgnoresReviewActivity(t *testing.T) {
 		}
 	}
 }
+
+// Every kind of paused work wakes once nothing blocks its issue and it has no
+// pull request left to wait on: the nupp#5 shape, an open issue whose
+// dependencies all closed, with no sub-issues and no pull requests (issue
+// #762). A pull-request record that holds no pull request must not wait for
+// one to merge forever.
+func TestWakePausedResumesWhenEveryBlockerClosed(t *testing.T) {
+	issue := Issue{Number: 5, State: "open", DependsOn: []IssueDependency{{Number: 2, State: "closed"}, {Number: 3, State: "closed"}, {Number: 4, State: "closed"}}}
+	none := &OriginatingWorkState{IssueState: "open"}
+	for _, paused := range []PausedWork{
+		{Kind: PausedBlocked, WaitingOn: []int{2, 3, 4}},
+		{Kind: PausedStacked},
+		{Kind: PausedPullRequest},
+		{Kind: PausedPullRequest, PullRequests: []int{15}},
+		{},
+	} {
+		if got, reason := WakePaused(paused, PausedCheck{Issue: issue, Own: none}); got != PausedResume {
+			t.Errorf("%+v: WakePaused() = %v (%q), want it resumed", paused, got, reason)
+		}
+	}
+}
+
+// A pull-request record with no open pull request falls back to its blockers,
+// and the reason it stays names what keeps it paused (issue #762).
+func TestWakePausedPullRequestWithoutOneNamesItsBlocker(t *testing.T) {
+	none := &OriginatingWorkState{IssueState: "open"}
+	paused := PausedWork{Kind: PausedPullRequest}
+	for _, test := range []struct {
+		issue Issue
+		want  string
+	}{
+		{Issue{Number: 5, State: "open", DependsOn: []IssueDependency{{Number: 2, State: "open"}}}, "depends on #2 (open); it has no open pull request"},
+		{Issue{Number: 5, State: "open", HasSubIssues: true}, "has sub-issues; it has no open pull request"},
+	} {
+		if got, reason := WakePaused(paused, PausedCheck{Issue: test.issue, Own: none}); got != PausedStay || reason != test.want {
+			t.Errorf("%+v: WakePaused() = %v (%q), want it to stay paused with %q", test.issue, got, reason, test.want)
+		}
+	}
+}
