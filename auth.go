@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/lsegal/glorp/browser"
+	"github.com/lsegal/glorp/process"
 )
 
 const (
@@ -223,7 +222,10 @@ func runAuthCommand(args []string) int {
 		Binary:  flagValue[string](flags, "browser-binary"),
 		Profile: flagValue[string](flags, "browser-profile"),
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// The shared shutdown signals, hangup included, so closing the terminal closes
+	// the browser cleanly too; a second signal kills it with every other owned
+	// subprocess (issue #773).
+	ctx, stop := process.ShutdownContext(nil)
 	defer stop()
 	if flagValue[bool](flags, "status") {
 		signedIn, err := authStatus(ctx, config, os.Stdout)
