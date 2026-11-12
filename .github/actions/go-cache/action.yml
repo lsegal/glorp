@@ -7,9 +7,10 @@ description: >-
 inputs:
   key-prefix:
     description: >-
-      Distinguishes one job's cache from another's. Jobs that compile the same
-      packages the same way should share a prefix; jobs that do not should each
-      have their own, so neither keeps overwriting the other's entry.
+      Distinguishes one job's build cache from another's. Jobs that compile the
+      same packages the same way should share a prefix; jobs that do not should
+      each have their own, so neither keeps overwriting the other's entry. The
+      module cache does not use it: every job shares that one.
     required: true
   go-version:
     description: Go version the job set up, so a version bump starts a fresh cache.
@@ -31,18 +32,38 @@ runs:
           echo "buildcache=$(go env GOCACHE)"
         } >> "$GITHUB_OUTPUT"
 
+    # Downloaded modules are the same for every job that builds this module,
+    # however it compiles them, so they get one entry that all jobs on a
+    # platform share instead of a copy inside each job's build cache. That lets
+    # the release pipeline download them once and restore them in every later
+    # job and run.
+    - name: Cache the Go module cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.paths.outputs.modcache }}
+        key: go-mod-${{ runner.os }}-${{ runner.arch }}-${{ inputs.go-version }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          go-mod-${{ runner.os }}-${{ runner.arch }}-${{ inputs.go-version }}-
+
+    # A cache entry cannot be replaced once saved, so whichever job saves the
+    # shared entry first must save every module, not just the ones its own
+    # build happened to need. go.mod lists every module any package needs on
+    # any platform, so downloading it all here also covers the targets a
+    # cross-compile adds. On a hit this downloads nothing.
+    - name: Download Go modules
+      shell: bash
+      run: go mod download
+
     # The key covers the sources as well as go.sum: the build cache holds
     # compiled objects for this repository's own packages, not just its
     # dependencies, so keying on go.sum alone would pin the cache to whatever
     # the tree looked like the day a dependency last changed. The restore-keys
     # fall back from that to any cache for the same dependencies, and then to
     # any cache for this job at all, so an edit still starts warm.
-    - name: Cache the Go module and build caches
+    - name: Cache the Go build cache
       uses: actions/cache@v4
       with:
-        path: |
-          ${{ steps.paths.outputs.modcache }}
-          ${{ steps.paths.outputs.buildcache }}
+        path: ${{ steps.paths.outputs.buildcache }}
         key: go-${{ inputs.key-prefix }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.go-version }}-${{ hashFiles('**/go.sum') }}-${{ hashFiles('**/*.go') }}
         restore-keys: |
           go-${{ inputs.key-prefix }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.go-version }}-${{ hashFiles('**/go.sum') }}-
