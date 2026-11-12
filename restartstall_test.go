@@ -169,7 +169,12 @@ func TestRestartWithDirtyRunsPushesThenStopsAgents(t *testing.T) {
 // at the run budget even though the hook's own child holds git's output open.
 // The run is reported as timed out, the other run's pushed work stays, and
 // both agents are stopped.
+//
+// The budget is shared by both runs, so it has to cover the healthy run's
+// whole checkpoint, about fifteen git processes, on a slow runner too. A 3s
+// budget timed it out on Windows CI (issue #761).
 func TestRestartWithHangingPushTimesOutAndStopsAgents(t *testing.T) {
+	const budget = 15 * time.Second
 	_, hung := checkpointRepo(t)
 	writeCheckpointFile(t, filepath.Join(hung, "work.txt"), "unsaved\n")
 	hooks := t.TempDir()
@@ -187,9 +192,9 @@ func TestRestartWithHangingPushTimesOutAndStopsAgents(t *testing.T) {
 		startStallAgent(t, ctx, agents, Issue{Target: "o/r", Number: 2}, ok),
 	}
 	start := time.Now()
-	results := restartForTest(t, agents, cancel, nil, 3*time.Second, time.Minute)
-	if elapsed := time.Since(start); elapsed > 30*time.Second {
-		t.Fatalf("checkpoint took %s, want the hung push cut off at its 3s run budget", elapsed)
+	results := restartForTest(t, agents, cancel, nil, budget, time.Minute)
+	if elapsed := time.Since(start); elapsed > budget+15*time.Second {
+		t.Fatalf("checkpoint took %s, want the hung push cut off at its %s run budget", elapsed, budget)
 	}
 	if results[0].Outcome != checkpointTimedOut {
 		t.Fatalf("hung push = %+v, want timed out", results[0])
