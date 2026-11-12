@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix paused jobs that never woke after their last blocker closed (issue #762). A job paused while some pull request was held for review kept waiting for that pull request to merge even once the issue had no open pull request at all, so it stayed paused forever. Such a job now falls back to its blockers: it is dispatched again when every issue it depends on is closed and it has no open sub-issues, and while it stays paused the dashboard names the dependency or sub-issues keeping it there. In browser mode, a blocked issue's dependencies are now read again about once a minute rather than only once per run, so it sees its last blocker close.
 - Fix pull requests going unseen on issues with more than 30 timeline events (issue #759). glorp read only the first page of an issue's timeline, so on a long-lived issue a pull request cross-referenced after the 30th event was missing: the dashboards showed no PR number or progress bar for its job, and paused-work, completed-work, and linked pull request tracking missed it too. glorp now reads every page of the timeline. It also now reads every page of a repository's open pull requests when scanning reviews for mentions, and of its webhooks when configuring push mode, so a repository with more than one page of webhooks no longer gets a duplicate glorp webhook.
 
 ## v1.5.19 - 2026-11-12
