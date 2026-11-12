@@ -198,11 +198,40 @@ type UIReporter interface {
 	Log(string)
 }
 
-// JobAction is a retry or stop a dashboard asks the run to perform on one job.
+// JobAction is a retry, stop, or pause a dashboard asks the run to perform on
+// one job.
 type JobAction struct {
 	Action string `json:"action"`
 	Target string `json:"target"`
 	Number int    `json:"number"`
+}
+
+// JobActions says which job actions the run accepts for a job in one state,
+// so a dashboard never enables a button whose request is guaranteed to fail
+// (issue #763). RetryReason says why retry is refused, when it is.
+type JobActions struct {
+	Retry       bool
+	RetryReason string
+	Stop        bool
+	Pause       bool
+}
+
+// JobActionAvailability reports the job actions the run accepts for a job in
+// status. The web dashboard's jobActionAvailability mirrors it.
+func JobActionAvailability(status string) JobActions {
+	actions := JobActions{Retry: true}
+	switch status {
+	case "queued":
+		actions.Retry, actions.RetryReason = false, "Already queued for a gh-fix run"
+	case "stopping":
+		actions.Retry, actions.RetryReason = false, "Waiting for the stopped run to exit"
+	}
+	// A job waiting on a scheduled wakeup still holds its agent session, so
+	// it can be stopped just like a running one (issue #671). A queued job
+	// has nothing to stop yet, but it can be held back (issue #771).
+	actions.Stop = status == "active" || status == "waiting"
+	actions.Pause = actions.Stop || status == "queued"
+	return actions
 }
 
 // SettingsUpdate carries a partial update to glorp's live-editable runtime

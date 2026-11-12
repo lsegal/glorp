@@ -205,6 +205,8 @@ type Glorp struct {
 	// wakeupDelayOverride replaces the delay of an agent's scheduled wakeup
 	// in tests.
 	wakeupDelayOverride time.Duration
+	// checkpointGit replaces the git a paused run's checkpoint runs in tests.
+	checkpointGit checkpointGit
 	// Projects supplies the push-mode project board fingerprint. When nil,
 	// board changes are only picked up by the fallback poll.
 	Projects ProjectStateSource
@@ -1391,7 +1393,7 @@ func pausedRecord(state workState) core.PausedWork {
 // the work restarts, and the work's own state when it was read. A read that fails is left out, so it never wakes work.
 func (w *Glorp) pausedWake(ctx context.Context, checker WorkClosureChecker, paused core.PausedWork, issue Issue) (core.PausedWake, string, int, *OriginatingWorkState) {
 	check := core.PausedCheck{Issue: issue}
-	if checker != nil && paused.Kind != core.PausedBlocked {
+	if checker != nil && paused.Kind != core.PausedBlocked && paused.Kind != core.PausedManual {
 		repo := issueRepository(issue.Target, issue)
 		state, err := checker.OriginatingWorkState(ctx, repo, issue.Number)
 		if err == nil {
@@ -1449,6 +1451,9 @@ func (w *Glorp) unlistedPausedIssues(ctx context.Context, hydrator IssueHydrator
 // pausedJobReason is what the dashboards say paused work waits on when it
 // pauses at the end of a run.
 func pausedJobReason(paused core.PausedWork) string {
+	if paused.Kind == core.PausedManual {
+		return core.ManualPauseReason
+	}
 	if paused.Kind == core.PausedStacked {
 		return "its stacked pull request waits on its blocker to merge"
 	}
@@ -1776,6 +1781,24 @@ func activeIssuesForRepo(active map[string]string, repo string) []int {
 	return numbers
 }
 
+// manuallyPausedIssuesForRepo returns the issue numbers in repo whose work
+// the owner paused from a dashboard (issue #771).
+func manuallyPausedIssuesForRepo(work map[string]workState, repo string) []int {
+	var numbers []int
+	for key, state := range work {
+		if state.Status != "paused" || pausedRecord(state).Kind != core.PausedManual {
+			continue
+		}
+		target, number, ok := parseIssueWorkKey(key)
+		if !ok || !strings.EqualFold(issueRepository(target, Issue{}), repo) {
+			continue
+		}
+		numbers = append(numbers, number)
+	}
+	slices.Sort(numbers)
+	return numbers
+}
+
 type taskState struct {
 	mu        sync.Mutex
 	running   int
@@ -1994,6 +2017,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// dispatches a second run beside the one still unwinding (issue #719).
 	runExits := make(map[string]chan struct{})
 	stopping := make(map[string]bool)
+	// pausing marks a stopping run that the owner paused, so its exit records
+	// a manual pause instead of a failure (issue #771).
+	pausing := make(map[string]bool)
 	directMentions := make(map[string]bool)
 	mentions := newMentionScan(time.Now())
 	// Every issue state read for active, parked, and completed work also
@@ -2055,6 +2081,35 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// pause it again: the retry overrides what it waited on (issue #763).
 	// Only the run loop's own goroutine reads or writes it.
 	retriedPaused := make(map[string]bool)
+	// retryAfterStop holds running jobs a web UI retry stopped, to requeue
+	// once their run exits. serveJobAction answers dashboard job actions, both
+	// from the run loop and while a poll waits for a slot (issue #771).
+	retryAfterStop := make(map[string]bool)
+	var serveJobAction func(request jobActionRequest, dispatching bool)
+	// acquireDispatchSlot waits for a free slot for the queued job key, as
+	// acquireSlot does, while also answering job actions, so the owner can
+	// pause the queued job or stop a running one to free its slot (issue
+	// #771). It reports whether the queued job was paused instead.
+	acquireDispatchSlot := func(key string) (bool, error) {
+		for {
+			select {
+			case <-sem.tokens:
+				return false, nil
+			case request := <-w.settingsRequestsChan():
+				request.done <- w.applySettingsRequest(request.update, sem)
+			case request := <-w.jobActionRequests():
+				serveJobAction(request, true)
+				workMu.Lock()
+				paused := work[key].Status == "paused"
+				workMu.Unlock()
+				if paused {
+					return true, nil
+				}
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
+		}
+	}
 	// lastPausedWatch is when the paused watch last read back every paused
 	// record, including ones the poll did not list, and forcePausedWatch asks
 	// the next poll to run it regardless (issue #769). Only the run loop's own
@@ -2123,7 +2178,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 			var keys []string
 			workMu.Lock()
 			for key, state := range work {
-				if _, running := active[key]; state.Status == "paused" && !running && !listed[key] {
+				// GitHub never wakes a manual pause, so there is nothing
+				// to read back for one (issue #771).
+				if _, running := active[key]; state.Status == "paused" && !running && !listed[key] && pausedRecord(state).Kind != core.PausedManual {
 					keys = append(keys, key)
 				}
 			}
@@ -2384,11 +2441,26 @@ func (w *Glorp) Run(ctx context.Context) error {
 		// Paused work whose issue the poll no longer lists cannot be woken by
 		// it, so its own pull requests are read back once per poll to finish
 		// it when its issue closed or its pull request merged (issue #732).
+		// A job the owner paused whose issue the poll no longer lists still
+		// shows on the dashboards until the owner retries it (issue #771).
+		workMu.Lock()
+		var manual []string
+		for key, state := range work {
+			if _, running := active[key]; state.Status == "paused" && !running && !observedWork[key] && pausedRecord(state).Kind == core.PausedManual {
+				manual = append(manual, key)
+			}
+		}
+		workMu.Unlock()
+		for _, key := range manual {
+			if target, number, ok := parseIssueWorkKey(key); ok && slices.Contains(targets, target) {
+				pauseJob(Issue{Number: number, Target: target, Repository: issueRepository(target, Issue{})}, key, core.ManualPauseReason, nil)
+			}
+		}
 		if closureChecker != nil {
 			workMu.Lock()
 			unlisted := make(map[string]core.PausedWork)
 			for key, state := range work {
-				if _, running := active[key]; state.Status == "paused" && !running && !observedWork[key] {
+				if _, running := active[key]; state.Status == "paused" && !running && !observedWork[key] && pausedRecord(state).Kind != core.PausedManual {
 					unlisted[key] = pausedRecord(state)
 				}
 			}
@@ -2526,11 +2598,15 @@ func (w *Glorp) Run(ctx context.Context) error {
 			tasks.mu.Unlock()
 			w.logf("issue #%d queued (tasks: %d running, %d queued)", issue.Number, running, queued)
 			publish()
-			if err := w.acquireSlot(ctx, sem); err != nil {
+			paused, err := acquireDispatchSlot(key)
+			if err != nil || paused {
 				tasks.mu.Lock()
 				tasks.queued--
 				tasks.mu.Unlock()
-				return ctx.Err()
+				if err != nil {
+					return ctx.Err()
+				}
+				continue
 			}
 			tasks.mu.Lock()
 			tasks.queued--
@@ -2569,6 +2645,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					workMu.Lock()
 					delete(runExits, key)
 					delete(stopping, key)
+					delete(pausing, key)
 					workMu.Unlock()
 					close(exited)
 				}()
@@ -2827,7 +2904,33 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d resuming session %s with the update", i.Number, state.SessionID)
 					publish()
 				}
-				if runErr != nil {
+				workMu.Lock()
+				manualPause := pausing[key] && errors.Is(runErr, errWorkStoppedFromWebUI)
+				workMu.Unlock()
+				if manualPause {
+					// The owner paused the run: it is held, keeping its session
+					// and its claim on the issue, until the owner retries it.
+					// Its project item stays in progress (issue #771).
+					workMu.Lock()
+					delete(active, key)
+					mentions.agentStopped(i.Repository+"#"+strconv.Itoa(i.Number), time.Now())
+					jobMu.Lock()
+					job := jobs[key]
+					job.Status, job.WaitReason = "paused", core.ManualPauseReason
+					jobs[key] = job
+					jobMu.Unlock()
+					state := work[key]
+					state.Status, state.Paused = "paused", &core.PausedWork{Kind: core.PausedManual}
+					work[key] = state
+					_ = saveScopedWorkState(w.StatePath, work, targets)
+					workMu.Unlock()
+					tasks.mu.Lock()
+					tasks.running--
+					running, queued, completed, failed := tasks.running, tasks.queued, tasks.completed, tasks.failed
+					tasks.mu.Unlock()
+					w.logf("issue #%d paused by owner; its run stopped and frees its slot (tasks: %d running, %d queued, %d completed, %d failed)", i.Number, running, queued, completed, failed)
+					publish()
+				} else if runErr != nil {
 					if w.Status != nil {
 						if statusErr := w.Status.SetIssueStatus(context.Background(), i.Target, i, projectReadyState(w.ReadyState, i.ProjectStatus)); statusErr != nil {
 							w.logf("issue #%d failed to reset project status: %v", i.Number, statusErr)
@@ -2960,8 +3063,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		workMu.Lock()
 		numbers := activeIssuesForRepo(active, event.Repository)
+		paused := manuallyPausedIssuesForRepo(work, event.Repository)
 		workMu.Unlock()
-		owned := slices.Contains(numbers, event.IssueNumber)
+		// A job the owner paused keeps the issue reserved, so this instance
+		// still answers for it (issue #771).
+		owned := slices.Contains(numbers, event.IssueNumber) || slices.Contains(paused, event.IssueNumber)
 		// Once a draft pull request exists the handshake moves to it
 		// (ownershipTargetFor), so the ask names the pull request number and
 		// never matches an active issue number. Checking the open pull
@@ -3102,27 +3208,80 @@ func (w *Glorp) Run(ctx context.Context) error {
 		pausedWatch = pausedTicker.C
 		w.logf("watching paused work every %s", pausedTick)
 	}
-	retryAfterStop := make(map[string]bool)
-	for {
+	// awaitPausedRun replies to a pause once the run it stopped has exited
+	// and recorded the pause, after pushing the run's work with the shutdown
+	// checkpoint (issues #719, #741, #771).
+	awaitPausedRun := func(key, target string, number int, exited <-chan struct{}, done chan<- error) {
 		select {
-		case request := <-w.settingsRequestsChan():
-			request.done <- w.applySettingsRequest(request.update, sem)
-		case request := <-w.jobActionRequests():
-			action := request.action
-			key := action.Target + "#" + strconv.Itoa(action.Number)
-			jobMu.Lock()
-			job, exists := jobs[key]
-			jobMu.Unlock()
-			if !exists {
-				request.done <- fmt.Errorf("job not found")
-				continue
+		case <-exited:
+		case <-ctx.Done():
+			done <- fmt.Errorf("job is still stopping: %w", ctx.Err())
+			return
+		}
+		workMu.Lock()
+		state := work[key]
+		workMu.Unlock()
+		if state.Status != "paused" || pausedRecord(state).Kind != core.PausedManual {
+			done <- fmt.Errorf("job finished before it could be paused")
+			return
+		}
+		git := w.checkpointGit
+		if git == nil {
+			git = runCheckpointGit
+		}
+		checkpointCtx, cancel := context.WithTimeout(ctx, checkpointRunBudget)
+		result := checkpointCheckout(checkpointCtx, git, checkpointRun{Target: target, Number: number, Checkout: state.CheckoutDirectory})
+		cancel()
+		if result.Detail != "" {
+			w.logf("issue #%d paused from web UI; its agent has exited; checkpoint %s: %s", number, result.Outcome, result.Detail)
+		} else {
+			w.logf("issue #%d paused from web UI; its agent has exited; checkpoint %s", number, result.Outcome)
+		}
+		done <- nil
+	}
+	// serveJobAction answers a dashboard's retry, stop, or pause on one job.
+	// dispatching is set while a poll waits for a slot to dispatch queued
+	// work, when a retry that needs a poll of its own is refused.
+	serveJobAction = func(request jobActionRequest, dispatching bool) {
+		action := request.action
+		key := action.Target + "#" + strconv.Itoa(action.Number)
+		jobMu.Lock()
+		job, exists := jobs[key]
+		jobMu.Unlock()
+		if !exists {
+			request.done <- fmt.Errorf("job not found")
+			return
+		}
+		switch action.Action {
+		case "stop":
+			if !core.JobActionAvailability(job.Status).Stop {
+				request.done <- fmt.Errorf("job cannot be stopped while %s", job.Status)
+				return
 			}
-			switch action.Action {
-			case "stop":
-				if job.Status != "active" && job.Status != "waiting" {
-					request.done <- fmt.Errorf("job cannot be stopped while %s", job.Status)
-					continue
-				}
+			workMu.Lock()
+			cancel, exited := cancellations[key], runExits[key]
+			if cancel != nil {
+				stopping[key] = true
+			}
+			workMu.Unlock()
+			if cancel == nil {
+				request.done <- fmt.Errorf("job is not running")
+				return
+			}
+			w.logf("issue #%d stop requested from web UI", action.Number)
+			jobMu.Lock()
+			job.Status = "stopping"
+			jobs[key] = job
+			jobMu.Unlock()
+			publish()
+			cancel(errWorkStoppedFromWebUI)
+			// Cancelling only signals the agent, so the reply waits for
+			// the run to exit, off the dispatch loop so it keeps serving
+			// everything else meanwhile (issue #719).
+			go w.awaitStoppedRun(ctx, action.Number, exited, request.done)
+		case "retry":
+			switch job.Status {
+			case "active", "waiting":
 				workMu.Lock()
 				cancel, exited := cancellations[key], runExits[key]
 				if cancel != nil {
@@ -3131,102 +3290,144 @@ func (w *Glorp) Run(ctx context.Context) error {
 				workMu.Unlock()
 				if cancel == nil {
 					request.done <- fmt.Errorf("job is not running")
-					continue
+					return
 				}
-				w.logf("issue #%d stop requested from web UI", action.Number)
+				w.logf("issue #%d retry requested from web UI; stopping and rerunning gh-fix", action.Number)
+				retryAfterStop[key] = true
 				jobMu.Lock()
 				job.Status = "stopping"
 				jobs[key] = job
 				jobMu.Unlock()
 				publish()
 				cancel(errWorkStoppedFromWebUI)
-				// Cancelling only signals the agent, so the reply waits for
-				// the run to exit, off the dispatch loop so it keeps serving
-				// everything else meanwhile (issue #719).
 				go w.awaitStoppedRun(ctx, action.Number, exited, request.done)
-			case "retry":
-				switch job.Status {
-				case "active", "waiting":
-					workMu.Lock()
-					cancel, exited := cancellations[key], runExits[key]
-					if cancel != nil {
-						stopping[key] = true
+				return
+			}
+			if dispatching && (job.Status == "failed" || job.Status == "complete" || job.Status == "paused") {
+				// Requeuing takes a poll, and the poll already running is
+				// waiting for a slot to dispatch queued work (issue #771).
+				request.done <- fmt.Errorf("job cannot be retried while glorp waits for a free slot to dispatch queued work; try again once that work starts")
+				return
+			}
+			switch job.Status {
+			case "failed", "complete":
+				w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
+				workMu.Lock()
+				state := work[key]
+				state.Status = "failed"
+				work[key] = state
+				workMu.Unlock()
+				jobMu.Lock()
+				job.Status = "failed"
+				jobs[key] = job
+				jobMu.Unlock()
+				request.done <- poll(nil)
+			case "paused":
+				// Retrying overrides whatever the paused job waits on: its
+				// pause is dropped, its session is kept as a failed run's
+				// is, and it is requeued. A held pull request is left as it
+				// is on GitHub; the rerun picks it up (issue #763).
+				w.logf("issue #%d retry requested from web UI; clearing its pause and rerunning gh-fix", action.Number)
+				workMu.Lock()
+				paused := work[key]
+				state := paused
+				state.Status, state.Paused = "failed", nil
+				work[key] = state
+				workMu.Unlock()
+				pausedJob := job
+				jobMu.Lock()
+				job.Status, job.WaitReason = "failed", ""
+				jobs[key] = job
+				jobMu.Unlock()
+				retriedPaused[key] = true
+				err := poll(nil)
+				delete(retriedPaused, key)
+				workMu.Lock()
+				_, requeued := active[key]
+				if !requeued {
+					// Nothing was requeued, so the pause is put back rather
+					// than reporting a retry that changed nothing.
+					work[key] = paused
+					if saveErr := saveScopedWorkState(w.StatePath, work, targets); saveErr != nil && err == nil {
+						err = fmt.Errorf("saving state: %w", saveErr)
 					}
-					workMu.Unlock()
-					if cancel == nil {
-						request.done <- fmt.Errorf("job is not running")
-						continue
-					}
-					w.logf("issue #%d retry requested from web UI; stopping and rerunning gh-fix", action.Number)
-					retryAfterStop[key] = true
+				}
+				workMu.Unlock()
+				if !requeued {
 					jobMu.Lock()
-					job.Status = "stopping"
-					jobs[key] = job
+					if current, ok := jobs[key]; ok && current.Status == "failed" {
+						jobs[key] = pausedJob
+					}
 					jobMu.Unlock()
 					publish()
-					cancel(errWorkStoppedFromWebUI)
-					go w.awaitStoppedRun(ctx, action.Number, exited, request.done)
-				case "failed", "complete":
-					w.logf("issue #%d retry requested from web UI; rerunning gh-fix", action.Number)
-					workMu.Lock()
-					state := work[key]
-					state.Status = "failed"
-					work[key] = state
-					workMu.Unlock()
-					jobMu.Lock()
-					job.Status = "failed"
-					jobs[key] = job
-					jobMu.Unlock()
-					request.done <- poll(nil)
-				case "paused":
-					// Retrying overrides whatever the paused job waits on: its
-					// pause is dropped, its session is kept as a failed run's
-					// is, and it is requeued. A held pull request is left as it
-					// is on GitHub; the rerun picks it up (issue #763).
-					w.logf("issue #%d retry requested from web UI; clearing its pause and rerunning gh-fix", action.Number)
-					workMu.Lock()
-					paused := work[key]
-					state := paused
-					state.Status, state.Paused = "failed", nil
-					work[key] = state
-					workMu.Unlock()
-					pausedJob := job
-					jobMu.Lock()
-					job.Status, job.WaitReason = "failed", ""
-					jobs[key] = job
-					jobMu.Unlock()
-					retriedPaused[key] = true
-					err := poll(nil)
-					delete(retriedPaused, key)
-					workMu.Lock()
-					_, requeued := active[key]
-					if !requeued {
-						// Nothing was requeued, so the pause is put back rather
-						// than reporting a retry that changed nothing.
-						work[key] = paused
-						if saveErr := saveScopedWorkState(w.StatePath, work, targets); saveErr != nil && err == nil {
-							err = fmt.Errorf("saving state: %w", saveErr)
-						}
+					if err == nil {
+						err = fmt.Errorf("job was not requeued, so it stays paused")
 					}
-					workMu.Unlock()
-					if !requeued {
-						jobMu.Lock()
-						if current, ok := jobs[key]; ok && current.Status == "failed" {
-							jobs[key] = pausedJob
-						}
-						jobMu.Unlock()
-						publish()
-						if err == nil {
-							err = fmt.Errorf("job was not requeued, so it stays paused")
-						}
-					}
-					request.done <- err
-				default:
-					request.done <- fmt.Errorf("job cannot be retried while %s", job.Status)
 				}
+				request.done <- err
 			default:
-				request.done <- fmt.Errorf("unknown job action %q", action.Action)
+				request.done <- fmt.Errorf("job cannot be retried while %s", job.Status)
 			}
+		case "pause":
+			if !core.JobActionAvailability(job.Status).Pause {
+				request.done <- fmt.Errorf("job cannot be paused while %s", job.Status)
+				return
+			}
+			if job.Status == "queued" {
+				// A queued job has not started, so pausing it only takes it
+				// out of the queue: nothing is dispatched or cancelled, and
+				// later polls pass it over until it is retried (issue #771).
+				w.logf("issue #%d pause requested from web UI; holding it out of the queue until it is retried", action.Number)
+				workMu.Lock()
+				state := work[key]
+				state.Status, state.Paused = "paused", &core.PausedWork{Kind: core.PausedManual}
+				work[key] = state
+				delete(active, key)
+				mentions.agentStopped(job.Repository+"#"+strconv.Itoa(job.Number), time.Now())
+				err := saveScopedWorkState(w.StatePath, work, targets)
+				workMu.Unlock()
+				jobMu.Lock()
+				job.Status, job.WaitReason = "paused", core.ManualPauseReason
+				jobs[key] = job
+				jobMu.Unlock()
+				publish()
+				if err != nil {
+					err = fmt.Errorf("saving state: %w", err)
+				}
+				request.done <- err
+				return
+			}
+			workMu.Lock()
+			cancel, exited := cancellations[key], runExits[key]
+			if cancel != nil {
+				stopping[key] = true
+				pausing[key] = true
+			}
+			workMu.Unlock()
+			if cancel == nil {
+				request.done <- fmt.Errorf("job is not running")
+				return
+			}
+			// Pausing a running job stops it the way Stop does, then holds
+			// it, still reserved, until it is retried (issue #771).
+			w.logf("issue #%d pause requested from web UI; stopping its run and pausing it until it is retried", action.Number)
+			jobMu.Lock()
+			job.Status = "stopping"
+			jobs[key] = job
+			jobMu.Unlock()
+			publish()
+			cancel(errWorkStoppedFromWebUI)
+			go awaitPausedRun(key, job.Target, action.Number, exited, request.done)
+		default:
+			request.done <- fmt.Errorf("unknown job action %q", action.Action)
+		}
+	}
+	for {
+		select {
+		case request := <-w.settingsRequestsChan():
+			request.done <- w.applySettingsRequest(request.update, sem)
+		case request := <-w.jobActionRequests():
+			serveJobAction(request, false)
 		case <-ctx.Done():
 			w.logf("shutdown requested; waiting for running tasks to finish")
 			wg.Wait()
