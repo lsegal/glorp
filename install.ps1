@@ -31,10 +31,17 @@ try {
     if (Test-Path $installedExe) {
         # Windows won't let us overwrite a running glorp.exe in place, but it
         # will let us rename one out of the way, so upgrading a running
-        # instance still succeeds.
-        $backupExe = Join-Path $installDir 'glorp.exe.bak'
-        Remove-Item $backupExe -Force -ErrorAction SilentlyContinue
-        Rename-Item $installedExe 'glorp.exe.bak' -Force
+        # instance still succeeds. Stale backups are removed first; one that is
+        # still a running image cannot be deleted, so it stays behind and the
+        # current binary is moved to a fresh backup name instead.
+        Get-ChildItem -Path $installDir -Filter 'glorp.exe*.bak' -File | ForEach-Object {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+        $backupName = 'glorp.exe.bak'
+        if (Test-Path (Join-Path $installDir $backupName)) {
+            $backupName = 'glorp.exe.' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.bak'
+        }
+        Rename-Item $installedExe $backupName
     }
     Copy-Item (Join-Path $temp 'glorp.exe') (Join-Path $installDir 'glorp.exe') -Force
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
