@@ -80,6 +80,18 @@ func (l *jobList) get() []JobSnapshot {
 	return append([]JobSnapshot(nil), l.jobs...)
 }
 
+// awaitLog waits for the watchdog to log want, which it does after the call
+// a test synchronizes on has returned.
+func awaitLog(t *testing.T, logs *syncBuffer, want string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if strings.Contains(logs.String(), want) {
+			return
+		}
+	}
+	t.Fatalf("log never showed %q:\n%s", want, logs.String())
+}
+
 func watchdogGlorp(calls *unblockCalls, logs *syncBuffer) *Glorp {
 	w := &Glorp{Identity: "ABCD1234", SelfLogin: "octo", Out: logs, Registry: agents.MustBuiltin(), Runner: CommandRunner{Agent: "claude/opus", Agents: []string{"claude/opus"}}, unblockRun: calls.run}
 	w.SetUnblockInterval(30 * time.Millisecond)
@@ -179,6 +191,7 @@ func TestWatchdogRunsOneCallForEveryStuckJobAndEscalates(t *testing.T) {
 	if !strings.Contains(second, "already tried in earlier rounds") || !strings.Contains(second, "comment: https://github.com/o/r/pull/11#issuecomment-5 blocker merged, rebase") {
 		t.Errorf("second round does not carry the comment already posted:\n%s", second)
 	}
+	awaitLog(t, logs, "o/r#1 got a local task: rebased the stack")
 	cancel()
 	<-done
 	got := logs.String()
@@ -209,9 +222,7 @@ func TestWatchdogFindsAnActiveJobWhoseOutputStopped(t *testing.T) {
 	if !strings.Contains(prompt, "key: o/r#5") || !strings.Contains(prompt, "written no output") || !strings.Contains(prompt, "waiting forever") {
 		t.Errorf("prompt does not describe the silent job:\n%s", prompt)
 	}
-	if !strings.Contains(logs.String(), "the unblock agent reported no action for o/r#5") {
-		t.Errorf("a call with no report was not logged:\n%s", logs.String())
-	}
+	awaitLog(t, logs, "the unblock agent reported no action for o/r#5")
 }
 
 func TestWatchdogLeavesHealthyJobsAlone(t *testing.T) {
