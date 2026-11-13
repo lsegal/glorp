@@ -1361,3 +1361,66 @@ func TestCoreJobActionAvailability(t *testing.T) {
 		}
 	}
 }
+
+// An available update shows in the status bar with a button, and both "u"
+// and clicking the button install it, once (issue #783).
+func TestDashboardUpdateButton(t *testing.T) {
+	for _, how := range []string{"key", "click"} {
+		t.Run(how, func(t *testing.T) {
+			calls := 0
+			ui := &TerminalUI{}
+			ui.SetUpdateHandler(func(context.Context) error {
+				calls++
+				return nil
+			})
+			m := newDashboard(ui)
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+			m = updated.(dashboard)
+			if strings.Contains(m.View(), updateButton) {
+				t.Fatal("update button shown before an update is available")
+			}
+			if _, cmd := m.Update(runeKey('u')); cmd != nil {
+				t.Fatal("u with no update available produced a command")
+			}
+			updated, _ = m.Update(updateMsg("v1.5.23"))
+			m = updated.(dashboard)
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, "glorp v1.5.23 available "+updateButton) {
+				t.Fatalf("update notice missing from %q", view)
+			}
+			var cmd tea.Cmd
+			if how == "key" {
+				updated, cmd = m.Update(runeKey('u'))
+			} else {
+				lines := strings.Split(view, "\n")
+				y := len(lines) - 1
+				for ; y >= 0 && !strings.Contains(lines[y], updateButton); y-- {
+				}
+				x := ansi.StringWidth(lines[y][:strings.Index(lines[y], updateButton)])
+				if _, miss := m.Update(tea.MouseMsg{X: x - 2, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}); miss != nil {
+					t.Fatal("click beside the update button produced a command")
+				}
+				updated, cmd = m.Update(tea.MouseMsg{X: x + 1, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+			}
+			if cmd == nil {
+				t.Fatal("update button produced no command")
+			}
+			cmd()
+			if calls != 1 {
+				t.Fatalf("update handler calls = %d, want 1", calls)
+			}
+			m = updated.(dashboard)
+			if !strings.Contains(ansi.Strip(m.View()), "updating to glorp v1.5.23") {
+				t.Fatal("dashboard does not show the update under way")
+			}
+			if _, again := m.Update(runeKey('u')); again != nil {
+				t.Fatal("u while updating produced a second command")
+			}
+			updated, _ = m.Update(updateFailedMsg("update to glorp v1.5.23 failed: boom"))
+			m = updated.(dashboard)
+			if !strings.Contains(ansi.Strip(m.View()), updateButton) {
+				t.Fatal("update button not offered again after a failure")
+			}
+		})
+	}
+}

@@ -554,3 +554,57 @@ func TestServerRejectsAgentsPost(t *testing.T) {
 		t.Fatalf("POST agents = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 	}
 }
+
+// The dashboard publishes a downloaded update and its button installs it
+// (issue #783).
+func TestServerUpdate(t *testing.T) {
+	ui, err := New("v1.5.22")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/update", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST update without a handler = %d", response.Code)
+	}
+	state := func() State {
+		t.Helper()
+		response := httptest.NewRecorder()
+		ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+		var state State
+		if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	if got := state().Update; got != "" {
+		t.Fatalf("update before one is found = %q", got)
+	}
+	ui.SetUpdate("v1.5.23")
+	if got := state().Update; got != "v1.5.23" {
+		t.Fatalf("update = %q, want v1.5.23", got)
+	}
+	calls := 0
+	ui.SetUpdateHandler(func(context.Context) error {
+		calls++
+		if calls > 1 {
+			return errors.New("glorp is already updating")
+		}
+		return nil
+	})
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/update", nil))
+	if response.Code != http.StatusNoContent || calls != 1 {
+		t.Fatalf("POST update = %d, calls = %d", response.Code, calls)
+	}
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/update", nil))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "already updating") {
+		t.Fatalf("second POST update = %d %q", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/update", nil))
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET update = %d", response.Code)
+	}
+}
