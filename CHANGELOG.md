@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.22 - 2026-11-13
+
 - Add a stuck-job watchdog that unblocks paused and stalled jobs (issue #779). Every 5 minutes glorp looks for jobs that are paused, other than ones the owner paused, and running jobs whose agent output has not changed since the last look. When it finds any, it runs one agent call covering all of them, because stuck jobs are often related, such as stacked pull requests parked behind one root pull request. That agent checks each job's live issue and pull request state before acting, since an earlier report on the thread may be stale. It then posts a comment that mentions the author with concrete next steps, which the job picks up through the normal mention path, or does a local task when a comment will not work. A job still stuck in the next round is included again with what was already tried, so the agent tries something else instead of repeating the same comment. Each round's findings and actions are logged. Set the interval with `--unblock-interval` (`0` turns the watchdog off), and the agent and model with `--unblock-agent` and `--unblock-model`; both default to the coding agent and its model. All three can also be changed in the web dashboard's settings.
 
 ## v1.5.21 - 2026-11-12
