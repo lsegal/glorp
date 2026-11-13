@@ -325,6 +325,17 @@ type Glorp struct {
 	// #381); the issue source runs on the poll's own goroutine but the
 	// snapshot is published under workMu, so it is stored atomically.
 	handledIssues atomic.Pointer[map[string]bool]
+	// unblockInterval is how often the stuck-job watchdog runs, in
+	// nanoseconds, or 0 when it is off (issue #779). unblockReset restarts its
+	// wait when the interval changes, and unblockOverride holds the unblock
+	// call's agent and model override. All are read from the watchdog's own
+	// goroutine, so they are stored atomically.
+	unblockInterval  atomic.Int64
+	unblockResetOnce sync.Once
+	unblockReset     chan struct{}
+	unblockOverride  atomic.Pointer[unblockConfig]
+	// unblockRun replaces the unblock agent call in tests.
+	unblockRun func(context.Context, agentSpec, string) (string, error)
 }
 
 // publishHandledIssues records which issues are no longer dispatch candidates:
@@ -3406,6 +3417,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 		jobMu.Lock()
 		defer jobMu.Unlock()
 		return lastPoll
+	})
+	go w.watchStuckJobs(watchCtx, func() []JobSnapshot {
+		jobMu.Lock()
+		defer jobMu.Unlock()
+		return publishedJobs(jobs)
 	})
 	wakes := watchForWake(watchCtx)
 	var tick <-chan time.Time
