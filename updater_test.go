@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -425,5 +426,36 @@ func TestReplaceExecutableWhileRunning(t *testing.T) {
 		if got, _ := os.ReadFile(filepath.Join(dir, name)); !strings.HasSuffix(name, ".bak") || string(got) != "glorp v2" {
 			t.Fatalf("extra file %s = %q, want the v2 backup", name, got)
 		}
+	}
+}
+
+// The background lookup prefers gh's authenticated API and falls back to the
+// public one when gh is missing or fails.
+func TestLatestReleaseTagVia(t *testing.T) {
+	publicCalls := 0
+	public := func(_ context.Context, url string) ([]byte, http.Header, int, error) {
+		publicCalls++
+		if url != "https://api.github.com/repos/o/glorp/releases/latest" {
+			t.Errorf("public URL = %q", url)
+		}
+		return []byte(`{"tag_name":"v1.5.23"}`), nil, 200, nil
+	}
+	var ghArgs []string
+	gh := func(_ context.Context, args ...string) ([]byte, error) {
+		ghArgs = args
+		return []byte("v1.5.24\n"), nil
+	}
+	if tag, err := latestReleaseTagVia(context.Background(), gh, public, "o/glorp"); err != nil || tag != "v1.5.24" || publicCalls != 0 {
+		t.Fatalf("with gh: tag=%q err=%v public calls=%d", tag, err, publicCalls)
+	}
+	if got := strings.Join(ghArgs, " "); got != "api repos/o/glorp/releases/latest --jq .tag_name" {
+		t.Fatalf("gh args = %q", got)
+	}
+	failing := func(context.Context, ...string) ([]byte, error) { return nil, errors.New("HTTP 401") }
+	if tag, err := latestReleaseTagVia(context.Background(), failing, public, "o/glorp"); err != nil || tag != "v1.5.23" || publicCalls != 1 {
+		t.Fatalf("gh failing: tag=%q err=%v public calls=%d", tag, err, publicCalls)
+	}
+	if tag, err := latestReleaseTagVia(context.Background(), nil, public, "o/glorp"); err != nil || tag != "v1.5.23" || publicCalls != 2 {
+		t.Fatalf("no gh: tag=%q err=%v public calls=%d", tag, err, publicCalls)
 	}
 }

@@ -175,6 +175,28 @@ func ghReleaseCommand(binary string) func(context.Context, ...string) error {
 	}
 }
 
+// latestReleaseTagVia looks up repo's latest release tag with gh when it is
+// installed, which spends the authenticated rate limit rather than the
+// 60-an-hour unauthenticated one glorp's other public lookups share, and
+// falls back to the unauthenticated lookup `glorp upgrade` makes otherwise.
+func latestReleaseTagVia(ctx context.Context, gh func(context.Context, ...string) ([]byte, error), doer publicAPIDoer, repo string) (string, error) {
+	if gh != nil {
+		output, err := gh(ctx, "api", "repos/"+repo+"/releases/latest", "--jq", ".tag_name")
+		if tag := strings.TrimSpace(string(output)); err == nil && tag != "" {
+			return tag, nil
+		}
+	}
+	return latestReleaseTag(ctx, doer, repo)
+}
+
+// ghOutput runs gh with args through the process package and reports its
+// standard output.
+func ghOutput(binary string) func(context.Context, ...string) ([]byte, error) {
+	return func(ctx context.Context, args ...string) ([]byte, error) {
+		return process.Output(exec.CommandContext(ctx, binary, args...))
+	}
+}
+
 // fetchReleaseAsset downloads url to dst over HTTPS, as the installer
 // scripts do when they fetch the release archive.
 func fetchReleaseAsset(ctx context.Context, url, dst string) error {
@@ -440,7 +462,11 @@ func newWatchUpdater(interval time.Duration, active *activeAgents, restart func(
 		Current:  version,
 		Interval: interval,
 		LatestTag: func(ctx context.Context) (string, error) {
-			return latestReleaseTag(ctx, doPublicGitHubRequest, repo)
+			var gh func(context.Context, ...string) ([]byte, error)
+			if binary, err := exec.LookPath("gh"); err == nil {
+				gh = ghOutput(binary)
+			}
+			return latestReleaseTagVia(ctx, gh, doPublicGitHubRequest, repo)
 		},
 		Download: func(ctx context.Context, tag string) (string, error) {
 			downloader := releaseDownloader{Repo: repo, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Dir: os.TempDir(), Fetch: fetchReleaseAsset}
