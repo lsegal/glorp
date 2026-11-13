@@ -346,6 +346,119 @@ func TestReleaseDownloaderReportsBothFailures(t *testing.T) {
 	}
 }
 
+// A download removes the staging directories earlier downloads left, such as
+// an older release's that a newer one replaces, but nothing else in the
+// directory (issue #787).
+func TestReleaseDownloaderRemovesOldStaging(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"glorp-update-1.5.22", "glorp-update-1.5.23", "other"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, "glorp"), []byte("old"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive := tarGzArchive(t, "glorp", []byte("new glorp"))
+	d := releaseDownloader{Repo: "o/glorp", GOOS: "linux", GOARCH: "amd64", Dir: dir,
+		Fetch: func(_ context.Context, _, dst string) error { return os.WriteFile(dst, archive, 0o644) },
+	}
+	binary, err := d.Download(context.Background(), "v1.5.24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(filepath.Dir(binary)) != "glorp-update-1.5.24" {
+		t.Fatalf("binary = %s", binary)
+	}
+	entries, _ := os.ReadDir(dir)
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if strings.Join(names, " ") != "glorp-update-1.5.24 other" {
+		t.Fatalf("entries = %v, want only the new staging directory and other", names)
+	}
+}
+
+// Installing an update removes its staging directory (issue #787).
+func TestInstallUpdateRemovesStaging(t *testing.T) {
+	tmp := t.TempDir()
+	staging := filepath.Join(tmp, "glorp-update-1.5.23")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(staging, "glorp")
+	if err := os.WriteFile(staged, []byte("glorp v2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "glorp_1.5.23_linux_amd64.tar.gz"), []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "glorp")
+	if err := os.WriteFile(target, []byte("glorp v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := installUpdate(target, staged, runtime.GOOS == "windows"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "glorp v2" {
+		t.Fatalf("target = %q", got)
+	}
+	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging directory left behind: %v", err)
+	}
+	// A failed install keeps the staging directory for the next try.
+	if err := installUpdate(target, staged, runtime.GOOS == "windows"); err == nil {
+		t.Fatal("install from a removed staging directory succeeded")
+	}
+}
+
+// A retry after a failed restart restarts without installing again, since
+// the first install removed the staging directory.
+func TestUpdaterRetryAfterRestartFailureSkipsInstall(t *testing.T) {
+	f := &fakeUpdater{latest: "v1.5.23", active: 1}
+	u := f.updater()
+	u.check(context.Background())
+	restartErr := errors.New("glorp is already restarting")
+	u.Restart = func(context.Context) ([]core.CheckpointResult, error) {
+		f.restarts++
+		return nil, restartErr
+	}
+	if _, err := u.Apply(context.Background()); !errors.Is(err, restartErr) {
+		t.Fatalf("Apply = %v", err)
+	}
+	restartErr = nil
+	if _, err := u.Apply(context.Background()); err != nil {
+		t.Fatalf("retry Apply = %v", err)
+	}
+	if len(f.installs) != 1 || f.restarts != 2 {
+		t.Fatalf("installs=%v restarts=%d", f.installs, f.restarts)
+	}
+}
+
+// When the staged binary has gone missing, such as removed by another glorp's
+// cleanup, the next round downloads the release again.
+func TestUpdaterRedownloadsMissingStagedBinary(t *testing.T) {
+	f := &fakeUpdater{latest: "v1.5.23", active: 1}
+	u := f.updater()
+	u.check(context.Background())
+	u.Install = func(staged string) error {
+		f.installs = append(f.installs, staged)
+		if len(f.installs) == 1 {
+			return &os.PathError{Op: "open", Path: staged, Err: os.ErrNotExist}
+		}
+		return nil
+	}
+	if _, err := u.Apply(context.Background()); err == nil {
+		t.Fatal("Apply with a missing staged binary succeeded")
+	}
+	f.active = 0
+	u.check(context.Background())
+	if len(f.downloads) != 2 || len(f.installs) != 2 || f.restarts != 1 {
+		t.Fatalf("downloads=%v installs=%v restarts=%d", f.downloads, f.installs, f.restarts)
+	}
+}
+
 // TestUpdaterHelperProcess is not a real test: replaceExecutable's test runs a
 // copy of the test binary as a stand-in for a running glorp.
 func TestUpdaterHelperProcess(t *testing.T) {
