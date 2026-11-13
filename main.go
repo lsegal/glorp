@@ -65,6 +65,9 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.Bool("remote-control", false, "ask Claude runs to start Remote Control so they are viewable from the Claude mobile app and claude.ai/code (nothing honours the request under -p yet and no alternative lever exists, so this is off by default and currently reaches nobody)")
 	flags.Bool("no-merge", false, "leave completed gh-fix pull requests ready for a human to merge")
 	flags.Bool("no-changelog", false, "skip changelog entries in gh-fix pull requests")
+	flags.Duration("unblock-interval", defaultUnblockInterval, "how often the stuck-job watchdog checks for paused jobs and jobs with no new output, and runs one agent call to unblock them (0 turns it off)")
+	flags.String("unblock-agent", "", "agent the stuck-job watchdog's unblock call runs, as agent/model:level (default: the coding agent)")
+	flags.String("unblock-model", "", "model the stuck-job watchdog's unblock call runs (default: the unblock agent's model)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
@@ -150,6 +153,16 @@ func runWatch(args []string) (code int) {
 	remoteControl := flagValue[bool](flags, "remote-control")
 	noMerge := flagValue[bool](flags, "no-merge")
 	noChangelog := flagValue[bool](flags, "no-changelog")
+	unblockInterval := flagValue[time.Duration](flags, "unblock-interval")
+	if err := validateUnblockInterval(unblockInterval); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	unblock := unblockConfig{Agent: strings.TrimSpace(flagValue[string](flags, "unblock-agent")), Model: strings.TrimSpace(flagValue[string](flags, "unblock-model"))}
+	if err := validateUnblockAgent(registry, unblock); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	statePath := flagValue[string](flags, "state")
 	if err := guardWorkStateFile(statePath); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -353,6 +366,8 @@ func runWatch(args []string) (code int) {
 	checkpointer.SetLog(w.logf)
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
+	w.SetUnblockInterval(unblockInterval)
+	w.SetUnblockAgent(unblock)
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
