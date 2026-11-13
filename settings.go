@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lsegal/glorp/agents"
 	"github.com/lsegal/glorp/core"
@@ -152,6 +153,11 @@ func validateSettingsUpdate(registry *agents.Registry, update SettingsUpdate) er
 			}
 		}
 	}
+	if update.UnblockInterval != nil {
+		if _, err := parseUnblockInterval(*update.UnblockInterval); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -161,6 +167,30 @@ func validateSettingsUpdate(registry *agents.Registry, update SettingsUpdate) er
 func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySemaphore) settingsResult {
 	if err := validateSettingsUpdate(w.registry(), update); err != nil {
 		return settingsResult{err: err}
+	}
+	if update.UnblockAgent != nil || update.UnblockModel != nil {
+		config := w.unblockSettings()
+		if update.UnblockAgent != nil {
+			config.Agent = strings.TrimSpace(*update.UnblockAgent)
+		}
+		if update.UnblockModel != nil {
+			config.Model = strings.TrimSpace(*update.UnblockModel)
+		}
+		if err := validateUnblockAgent(w.registry(), config); err != nil {
+			return settingsResult{err: err}
+		}
+		w.SetUnblockAgent(config)
+	}
+	if update.UnblockInterval != nil {
+		interval, _ := parseUnblockInterval(*update.UnblockInterval)
+		if interval != w.UnblockInterval() {
+			w.SetUnblockInterval(interval)
+			if interval > 0 {
+				w.logf("checking for stuck jobs every %s", formatInterval(interval))
+			} else {
+				w.logf("stuck-job watchdog turned off")
+			}
+		}
 	}
 	if update.Concurrency != nil {
 		w.Concurrency = *update.Concurrency
@@ -236,7 +266,29 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		Agents:            w.registry().Names(),
 		AgentOptions:      w.agentOptions(),
 		ConfiguredAgents:  w.configuredAgents(),
+		UnblockInterval:   unblockIntervalText(w.UnblockInterval()),
+		UnblockAgent:      w.unblockSettings().Agent,
+		UnblockModel:      w.unblockSettings().Model,
+		UnblockDefault:    w.unblockDefault(),
 	}
+}
+
+// unblockIntervalText renders the watchdog interval the way the dashboard and
+// the config file take it back.
+func unblockIntervalText(interval time.Duration) string {
+	if interval <= 0 {
+		return "0"
+	}
+	return formatInterval(interval)
+}
+
+// unblockDefault is the coding agent spec the unblock call falls back to.
+func (w *Glorp) unblockDefault() string {
+	runner, ok := w.runner().(CommandRunner)
+	if !ok {
+		return ""
+	}
+	return runner.specForSession(AgentSession{}).String()
 }
 
 // runner returns the AgentRunner new dispatches should use, applying any

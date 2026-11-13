@@ -373,6 +373,9 @@ function SettingsModal({ onClose }) {
 					allowedCommenters: (snapshot.allowedCommenters || []).join(", "),
 					noMerge: Boolean(snapshot.noMerge),
 					noChangelog: Boolean(snapshot.noChangelog),
+					unblockInterval: snapshot.unblockInterval ?? "",
+					unblockAgent: snapshot.unblockAgent ?? "",
+					unblockModel: snapshot.unblockModel ?? "",
 					activeAgents: snapshot.configuredAgents ?? [],
 				});
 			})
@@ -523,6 +526,45 @@ function SettingsModal({ onClose }) {
 										}
 									/>
 									Skip changelog entries in gh-fix pull requests
+								</label>
+								<label htmlFor="settings-unblock-interval">
+									Stuck-job check interval (0 turns it off)
+									<input
+										id="settings-unblock-interval"
+										type="text"
+										value={form.unblockInterval}
+										onChange={update("unblockInterval")}
+										placeholder="5m"
+									/>
+								</label>
+								<label htmlFor="settings-unblock-agent">
+									Unblock agent
+									<select
+										id="settings-unblock-agent"
+										value={form.unblockAgent}
+										onChange={update("unblockAgent")}
+									>
+										<option value="">
+											{settings?.unblockDefault
+												? `Coding agent (${settings.unblockDefault})`
+												: "Coding agent"}
+										</option>
+										{(settings?.agents || []).map((agent) => (
+											<option key={agent} value={agent}>
+												{agent}
+											</option>
+										))}
+									</select>
+								</label>
+								<label htmlFor="settings-unblock-model">
+									Unblock model
+									<input
+										id="settings-unblock-model"
+										type="text"
+										value={form.unblockModel}
+										onChange={update("unblockModel")}
+										placeholder="the unblock agent's model"
+									/>
 								</label>
 							</>
 						)}

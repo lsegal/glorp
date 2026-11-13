@@ -169,6 +169,9 @@ func (w *Glorp) unblockSpec() (agentSpec, error) {
 // last look, and runs one out-of-band unblock agent call covering all of them.
 // Rounds never overlap: the next interval starts once a call has finished.
 func (w *Glorp) watchStuckJobs(ctx context.Context, jobs func() []JobSnapshot) {
+	if interval := w.UnblockInterval(); interval > 0 {
+		w.logf("checking for stuck jobs every %s", formatInterval(interval))
+	}
 	baseline := map[string]string{}
 	history := map[string][]string{}
 	for {

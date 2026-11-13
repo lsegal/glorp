@@ -428,6 +428,9 @@ describe("buildSettingsUpdate", () => {
 				allowedCommenters: "alice, bob",
 				noMerge: true,
 				noChangelog: true,
+				unblockInterval: " 10m ",
+				unblockAgent: "claude",
+				unblockModel: "opus",
 				activeAgents: ["codex", "muse"],
 			}),
 		).toEqual({
@@ -436,6 +439,9 @@ describe("buildSettingsUpdate", () => {
 			allowedCommenters: ["alice", "bob"],
 			noMerge: true,
 			noChangelog: true,
+			unblockInterval: "10m",
+			unblockAgent: "claude",
+			unblockModel: "opus",
 			activeAgents: ["codex", "muse"],
 		});
 	});
@@ -456,6 +462,9 @@ describe("buildSettingsUpdate", () => {
 			allowedCommenters: [],
 			noMerge: false,
 			noChangelog: false,
+			unblockInterval: "0",
+			unblockAgent: "",
+			unblockModel: "",
 		});
 	});
 });

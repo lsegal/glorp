@@ -250,6 +250,13 @@ type SettingsUpdate struct {
 	// startup. When given it must name at least one valid agent spec; the
 	// result is reported back as SettingsSnapshot.ConfiguredAgents.
 	ActiveAgents *[]string `json:"activeAgents,omitempty"`
+	// UnblockInterval is how often the stuck-job watchdog runs, as a
+	// duration such as "5m", or "0" to turn it off (issue #779).
+	UnblockInterval *string `json:"unblockInterval,omitempty"`
+	// UnblockAgent and UnblockModel override the agent and model of the
+	// watchdog's unblock call. Empty means the coding agent and its model.
+	UnblockAgent *string `json:"unblockAgent,omitempty"`
+	UnblockModel *string `json:"unblockModel,omitempty"`
 }
 
 // AgentOption describes one agent the registry knows, so the dashboard's
@@ -282,6 +289,13 @@ type SettingsSnapshot struct {
 	// is a subset of Agents chosen by --agent or the live ActiveAgents
 	// override (issue #572).
 	ConfiguredAgents []string `json:"configuredAgents"`
+	// UnblockInterval, UnblockAgent, and UnblockModel are the stuck-job
+	// watchdog's settings (issue #779), and UnblockDefault is the agent spec
+	// its unblock call uses when no agent or model override is set.
+	UnblockInterval string `json:"unblockInterval"`
+	UnblockAgent    string `json:"unblockAgent"`
+	UnblockModel    string `json:"unblockModel"`
+	UnblockDefault  string `json:"unblockDefault"`
 }
 
 // AgentStatus reports one registered agent's install, sign-in, and quota

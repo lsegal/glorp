@@ -241,6 +241,9 @@ export function buildSettingsUpdate(form) {
 		allowedCommenters: parseAllowedCommenters(form.allowedCommenters),
 		noMerge: Boolean(form.noMerge),
 		noChangelog: Boolean(form.noChangelog),
+		unblockInterval: String(form.unblockInterval ?? "").trim() || "0",
+		unblockAgent: form.unblockAgent ?? "",
+		unblockModel: String(form.unblockModel ?? "").trim(),
 	};
 	const activeAgents = (form.activeAgents || []).filter(Boolean);
 	if (activeAgents.length) update.activeAgents = activeAgents;

@@ -168,6 +168,15 @@ func settingsUpdateFlags(update core.SettingsUpdate) map[string]any {
 	if update.ActiveAgents != nil {
 		values["agent"] = append([]string(nil), *update.ActiveAgents...)
 	}
+	if update.UnblockInterval != nil {
+		values["unblock-interval"] = strings.TrimSpace(*update.UnblockInterval)
+	}
+	if update.UnblockAgent != nil {
+		values["unblock-agent"] = strings.TrimSpace(*update.UnblockAgent)
+	}
+	if update.UnblockModel != nil {
+		values["unblock-model"] = strings.TrimSpace(*update.UnblockModel)
+	}
 	return values
 }
 
