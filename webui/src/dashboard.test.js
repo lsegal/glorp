@@ -28,6 +28,7 @@ import {
 	submitRefresh,
 	submitRestart,
 	submitSettings,
+	submitUpdate,
 	toggleActiveModel,
 } from "./dashboard";
 
@@ -350,6 +351,29 @@ describe("fetchRestartProgress", () => {
 		});
 		vi.stubGlobal("fetch", fetch);
 		await expect(fetchRestartProgress()).resolves.toEqual([]);
+	});
+});
+
+describe("submitUpdate", () => {
+	it("posts to /api/update and returns each run's checkpoint", async () => {
+		const checkpoints = [{ Target: "o/r", Number: 7, Outcome: "pushed" }];
+		const fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ Checkpoints: checkpoints }),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitUpdate()).resolves.toEqual(checkpoints);
+		expect(fetch).toHaveBeenCalledWith("/api/update", { method: "POST" });
+	});
+
+	it("reports why the daemon refused the update", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 409,
+			text: () => Promise.resolve("glorp is already updating"),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitUpdate()).rejects.toThrow("glorp is already updating");
 	});
 });
 

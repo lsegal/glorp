@@ -201,6 +201,18 @@ export async function submitRestart() {
 	return Array.isArray(body?.Checkpoints) ? body.Checkpoints : [];
 }
 
+// submitUpdate asks the daemon to install the newer glorp release it has
+// downloaded and restart onto it (issue #783). The restart takes the same
+// shutdown checkpoint as submitRestart and answers with each run's outcome.
+export async function submitUpdate() {
+	const response = await fetch("/api/update", { method: "POST" });
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+	const body = await response.json().catch(() => ({}));
+	return Array.isArray(body?.Checkpoints) ? body.Checkpoints : [];
+}
+
 // fetchRestartProgress reads the shutdown checkpoint a restart is taking
 // (issue #749): each run's outcome so far, with runs still going reported as
 // "pending". It is empty before the checkpoint starts.

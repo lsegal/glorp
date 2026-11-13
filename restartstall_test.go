@@ -239,7 +239,7 @@ func restartForTest(t *testing.T, agents *activeAgents, shutdown func(), git che
 		s.git = git
 	}
 	var requested atomic.Bool
-	handler := newRestartHandler(&requested, s.Checkpoint, shutdown, func(string, ...interface{}) {})
+	handler := newRestartHandler(&requested, s.Checkpoint, shutdown, func(string, ...interface{}) {}, "restart requested")
 	results, err := handler(context.Background())
 	if err != nil {
 		t.Fatalf("restart: %v", err)

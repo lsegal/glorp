@@ -91,6 +91,8 @@ glorp upgrade
 
 The command re-runs the installer for the current platform, so it picks up the latest release along with the current `gh-fix` skill. `GLORP_REPO` and the other installer environment variables above still apply.
 
+A running `glorp watch` also keeps itself current. Every 5 minutes it checks for a newer release and downloads it with `gh`, or straight from the release page when `gh` is not installed. The terminal and web dashboards then show the new version with an update button (`u` or a click in the terminal). When no agents are running, glorp installs the update and restarts on its own, pushing every run's work first, as the restart button does. Set `--update-interval` to change how often it checks, or `0` to turn it off. The skills are not updated this way; run `glorp upgrade` for those.
+
 ## Quick start
 
 Every glorp invocation starts with a subcommand:

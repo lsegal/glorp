@@ -41,6 +41,7 @@ import {
 	submitRefresh,
 	submitRestart,
 	submitSettings,
+	submitUpdate,
 	toggleActiveModel,
 } from "./dashboard";
 import { JobTitle } from "./jobtitle";
@@ -701,12 +702,10 @@ function App() {
 			setRefreshing(false);
 		}
 	};
-	const restart = async () => {
-		if (
-			!window.confirm(
-				"Restart glorp? Running agents are paused and their work is pushed to their branches, then they are stopped and resumed once it starts again.",
-			)
-		) {
+	// restartWith runs a restart through submit: the restart button's, or the
+	// update button's, which installs the new release first (issue #783).
+	const restartWith = async (submit, question, failure) => {
+		if (!window.confirm(question)) {
 			return;
 		}
 		setRestarting("requested");
@@ -723,7 +722,7 @@ function App() {
 			}
 		}, 1000);
 		try {
-			const results = await submitRestart();
+			const results = await submit();
 			waiting = false;
 			setCheckpoints(results);
 		} catch (error) {
@@ -731,11 +730,23 @@ function App() {
 			// A dropped connection means the daemon is already going down.
 			if (error instanceof TypeError) return;
 			setRestarting("");
-			window.alert(`Could not restart glorp: ${error.message}`);
+			window.alert(`${failure}: ${error.message}`);
 		} finally {
 			clearInterval(progress);
 		}
 	};
+	const restart = () =>
+		restartWith(
+			submitRestart,
+			"Restart glorp? Running agents are paused and their work is pushed to their branches, then they are stopped and resumed once it starts again.",
+			"Could not restart glorp",
+		);
+	const update = () =>
+		restartWith(
+			submitUpdate,
+			`Update glorp to ${state.update}? Running agents are paused and their work is pushed to their branches, then glorp restarts on the new version and resumes them.`,
+			"Could not update glorp",
+		);
 	return (
 		<main>
 			<div className="masthead">
@@ -783,6 +794,17 @@ function App() {
 				</div>
 			</div>
 			{settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+			{state.update && (
+				<section className="update-notice" aria-label="Update available">
+					<span>
+						glorp <strong>{state.update}</strong> is available. It installs on
+						its own once no agents are running.
+					</span>
+					<button type="button" onClick={update} disabled={restarting !== ""}>
+						{restarting ? "Updating..." : "Update now"}
+					</button>
+				</section>
+			)}
 			<StatusBar snapshot={snapshot} connected={connected} />
 			{checkpoints && (
 				<CheckpointReport

@@ -68,6 +68,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.Duration("unblock-interval", defaultUnblockInterval, "how often the stuck-job watchdog checks for paused jobs and jobs with no new output, and runs one agent call to unblock them (0 turns it off)")
 	flags.String("unblock-agent", "", "agent the stuck-job watchdog's unblock call runs, as agent/model:level (default: the coding agent)")
 	flags.String("unblock-model", "", "model the stuck-job watchdog's unblock call runs (default: the unblock agent's model)")
+	flags.Duration("update-interval", defaultUpdateInterval, "how often to check for a newer glorp release; an update is offered in the dashboards and applied automatically when no agents are active (0 turns it off)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
@@ -160,6 +161,11 @@ func runWatch(args []string) (code int) {
 	}
 	unblock := unblockConfig{Agent: strings.TrimSpace(flagValue[string](flags, "unblock-agent")), Model: strings.TrimSpace(flagValue[string](flags, "unblock-model"))}
 	if err := validateUnblockAgent(registry, unblock); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	updateInterval := flagValue[time.Duration](flags, "update-interval")
+	if err := validateUpdateInterval(updateInterval); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
@@ -371,6 +377,10 @@ func runWatch(args []string) (code int) {
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
+	restartHandler := newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf, "restart requested from the web dashboard")
+	// The updater (issue #783) restarts through the same checkpoint and
+	// shutdown as the restart button, after swapping in the new binary.
+	updates := newWatchUpdater(updateInterval, activeRuns, newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf, "restarting onto the updated glorp"), w.logf, ui, webUI)
 	if webUI != nil {
 		agentsHandler := func(ctx context.Context) ([]core.AgentStatus, error) {
 			return agentStatuses(ctx, w.registry())
@@ -379,13 +389,21 @@ func runWatch(args []string) (code int) {
 			w.nudgePoll()
 			return nil
 		}
-		restartHandler := newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf)
 		webUI.SetRestartProgressHandler(checkpointer.Progress)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
 		ui.SetRefreshHandler(w.nudgePoll)
 		ui.SetJobActionHandler(w.handleJobAction)
+	}
+	if updates != nil {
+		if webUI != nil {
+			webUI.SetUpdateHandler(updates.Apply)
+		}
+		if ui != nil {
+			ui.SetUpdateHandler(updates.Apply)
+		}
+		go updates.Run(ctx)
 	}
 	var server *http.Server
 	if !poll {

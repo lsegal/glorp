@@ -408,6 +408,33 @@ h1 .version {
 	width: 22px;
 	color: var(--green);
 }
+.update-notice {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	border: 1px solid var(--green);
+	border-radius: 10px;
+	background: #14532d4d;
+	padding: 10px 16px;
+	margin-bottom: 14px;
+	font-size: 13px;
+}
+.update-notice button {
+	border: 1px solid var(--green);
+	border-radius: 8px;
+	background: var(--green);
+	color: #052e16;
+	font: inherit;
+	font-weight: 600;
+	padding: 6px 12px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.update-notice button:disabled {
+	opacity: 0.6;
+	cursor: wait;
+}
 .checkpoint-report {
 	border: 1px solid var(--border);
 	border-radius: 10px;

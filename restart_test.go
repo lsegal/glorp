@@ -18,7 +18,7 @@ func TestRestartHandlerShutsDownOnce(t *testing.T) {
 		}
 		return []core.CheckpointResult{{Target: "o/r", Number: 3, Outcome: checkpointPushed}}
 	}
-	handler := newRestartHandler(&requested, checkpoint, func() { shutdowns++ }, func(string, ...interface{}) {})
+	handler := newRestartHandler(&requested, checkpoint, func() { shutdowns++ }, func(string, ...interface{}) {}, "restart requested")
 	results, err := handler(context.Background())
 	if err != nil {
 		t.Fatalf("first restart: %v", err)

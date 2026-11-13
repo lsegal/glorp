@@ -143,6 +143,18 @@ type GlorpSnapshot = core.Snapshot
 type snapshotMsg GlorpSnapshot
 type logMsg string
 
+// updateMsg tells the dashboard glorp version is downloaded and ready to
+// install (issue #783).
+type updateMsg string
+
+// updateFailedMsg reports an update that could not be installed, so its
+// button can be pressed again.
+type updateFailedMsg string
+
+// updateButton is the clickable label the status bar offers an available
+// update with; "u" does the same.
+const updateButton = "[update]"
+
 type viewportTarget struct {
 	jobNumber int
 	logs      bool
@@ -172,6 +184,10 @@ type dashboard struct {
 	// hyperlinks is whether job cards link their issue and pull request
 	// numbers with OSC 8 (issue #767).
 	hyperlinks bool
+	// update is the newer glorp release ready to install, and updating is
+	// set once its button was pressed (issue #783).
+	update   string
+	updating bool
 }
 
 var (
@@ -263,6 +279,11 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if followOutput {
 			m.viewport.GotoBottom()
 		}
+	case updateMsg:
+		m.update = string(msg)
+	case updateFailedMsg:
+		m.updating = false
+		return m.Update(logMsg(msg))
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -285,6 +306,9 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ui.requestRefresh()
 			}
 			return m, nil
+		}
+		if msg.String() == "u" {
+			return m.startUpdate()
 		}
 		if _, page, pages := m.visibleJobs(); pages > 1 {
 			switch msg.String() {
@@ -325,6 +349,9 @@ func (m dashboard) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if event.Action == tea.MouseActionPress && event.Button == tea.MouseButtonLeft {
 		if job, action, ok := m.jobActionAt(event.X, event.Y); ok && m.ui != nil {
 			return m, m.ui.runJobAction(job, action)
+		}
+		if m.updateButtonAt(event.X, event.Y) {
+			return m.startUpdate()
 		}
 	}
 	region, ok := m.viewportAt(event.X, event.Y)
@@ -437,6 +464,7 @@ var helpLines = []string{
 	"",
 	"q, ctrl+c   quit",
 	"r           refresh now (repoll GitHub)",
+	"u, click    install an available glorp update",
 	"h/l, ←/→    switch job page",
 	"click       a job card's [retry] [stop] [pause]",
 	"?           toggle this help",
@@ -528,6 +556,39 @@ func (m dashboard) jobActionAt(x, y int) (JobSnapshot, string, bool) {
 	return JobSnapshot{}, "", false
 }
 
+// startUpdate installs the available update, once.
+func (m dashboard) startUpdate() (tea.Model, tea.Cmd) {
+	if m.update == "" || m.updating || m.ui == nil {
+		return m, nil
+	}
+	cmd := m.ui.runUpdate(m.update)
+	if cmd == nil {
+		return m, nil
+	}
+	m.updating = true
+	return m, cmd
+}
+
+// updateButtonAt reports whether x, y is on the status bar's update button.
+// The status bar is the bottom of the dashboard, so only its last lines are
+// searched, never a job's output that happens to print the same label.
+func (m dashboard) updateButtonAt(x, y int) bool {
+	if m.update == "" || m.updating {
+		return false
+	}
+	lines := strings.Split(m.View(), "\n")
+	if y < max(0, len(lines)-2) || y >= len(lines) {
+		return false
+	}
+	line := ansi.Strip(lines[y])
+	index := strings.Index(line, updateButton)
+	if index < 0 {
+		return false
+	}
+	start := ansi.StringWidth(line[:index])
+	return x >= start && x < start+ansi.StringWidth(updateButton)
+}
+
 func (m dashboard) helpView() string {
 	box := panel.Copy().Padding(1, 2).Render(strings.Join(helpLines, "\n"))
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -610,8 +671,9 @@ func (m dashboard) View() string {
 	return joinVerticalWithGap(sections, dashboardGap)
 }
 
-// renderStatusInfoLine renders the instance id, the pager hint, and the web
-// dashboard link as a second status-bar-styled line, so they share the
+// renderStatusInfoLine renders the instance id, the pager hint, the web
+// dashboard link, and an available update (issue #783) as a second
+// status-bar-styled line, so they share the
 // counts line's background and page/web sit together on one line (issue
 // #647). It returns "" when none of the three apply.
 func (m dashboard) renderStatusInfoLine(page, pages, startIndex int) string {
@@ -624,6 +686,13 @@ func (m dashboard) renderStatusInfoLine(page, pages, startIndex int) string {
 	}
 	if m.snapshot.WebUIURL != "" {
 		items = append(items, "web: "+underlineSpanStyle(startIndex+len(items)).Render(m.snapshot.WebUIURL))
+	}
+	if m.update != "" {
+		if m.updating {
+			items = append(items, "updating to glorp "+m.update+"...")
+		} else {
+			items = append(items, "glorp "+m.update+" available "+updateButton)
+		}
 	}
 	if len(items) == 0 {
 		return ""
@@ -949,6 +1018,7 @@ type TerminalUI struct {
 	mu      sync.Mutex
 	refresh func()
 	action  func(context.Context, core.JobAction) error
+	update  func(context.Context) ([]core.CheckpointResult, error)
 }
 
 func NewTerminalUI() *TerminalUI {
@@ -1001,6 +1071,34 @@ func (ui *TerminalUI) runJobAction(job JobSnapshot, action string) tea.Cmd {
 			return logMsg(fmt.Sprintf("issue #%d %s failed: %v", job.Number, action, err))
 		}
 		return logMsg(fmt.Sprintf("issue #%d %s done", job.Number, action))
+	}
+}
+
+// SetUpdateHandler wires the status bar's update button (issue #783) to the
+// updater, the same one the web dashboard's update button uses.
+func (ui *TerminalUI) SetUpdateHandler(handler func(context.Context) ([]core.CheckpointResult, error)) {
+	ui.mu.Lock()
+	ui.update = handler
+	ui.mu.Unlock()
+}
+
+// SetUpdate shows that glorp version is downloaded and ready to install.
+func (ui *TerminalUI) SetUpdate(version string) { ui.program.Send(updateMsg(version)) }
+
+// runUpdate installs the update off the dashboard's goroutine, since it takes
+// the shutdown checkpoint before glorp restarts, and logs a failure.
+func (ui *TerminalUI) runUpdate(version string) tea.Cmd {
+	ui.mu.Lock()
+	handler := ui.update
+	ui.mu.Unlock()
+	if handler == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if _, err := handler(context.Background()); err != nil {
+			return updateFailedMsg(fmt.Sprintf("update to glorp %s failed: %v", version, err))
+		}
+		return nil
 	}
 }
 

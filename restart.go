@@ -11,7 +11,8 @@ import (
 	"github.com/lsegal/glorp/core"
 )
 
-// newRestartHandler backs the web dashboard's restart button (issue #665). It
+// newRestartHandler backs the web dashboard's restart button (issue #665) and
+// the updater's restart (issue #783), logging reason when it starts. It
 // records that a restart was asked for, takes the shutdown checkpoint that
 // pushes every active run's work (issue #741), and only then starts the same
 // shutdown Ctrl+C does, reporting each run's checkpoint outcome. runWatch
@@ -19,12 +20,12 @@ import (
 // has released the ports, browser, and subprocesses the new instance needs. A
 // second press while the first is still shutting down is refused rather than
 // queued.
-func newRestartHandler(requested *atomic.Bool, checkpoint func() []core.CheckpointResult, shutdown func(), logf func(string, ...interface{})) func(context.Context) ([]core.CheckpointResult, error) {
+func newRestartHandler(requested *atomic.Bool, checkpoint func() []core.CheckpointResult, shutdown func(), logf func(string, ...interface{}), reason string) func(context.Context) ([]core.CheckpointResult, error) {
 	return func(context.Context) ([]core.CheckpointResult, error) {
 		if !requested.CompareAndSwap(false, true) {
 			return nil, fmt.Errorf("glorp is already restarting")
 		}
-		logf("restart requested from the web dashboard; pushing active work, then stopping glorp and starting it again")
+		logf("%s; pushing active work, then stopping glorp and starting it again", reason)
 		results := checkpoint()
 		shutdown()
 		return results, nil
