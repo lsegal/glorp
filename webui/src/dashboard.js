@@ -203,13 +203,14 @@ export async function submitRestart() {
 
 // submitUpdate asks the daemon to install the newer glorp release it has
 // downloaded and restart onto it (issue #783). The restart takes the same
-// shutdown checkpoint as submitRestart, which fetchRestartProgress reports.
+// shutdown checkpoint as submitRestart and answers with each run's outcome.
 export async function submitUpdate() {
 	const response = await fetch("/api/update", { method: "POST" });
 	if (!response.ok) {
 		throw new Error((await response.text()) || `HTTP ${response.status}`);
 	}
-	return [];
+	const body = await response.json().catch(() => ({}));
+	return Array.isArray(body?.Checkpoints) ? body.Checkpoints : [];
 }
 
 // fetchRestartProgress reads the shutdown checkpoint a restart is taking

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lsegal/glorp/core"
 )
 
 func TestNewerRelease(t *testing.T) {
@@ -100,9 +102,9 @@ func (f *fakeUpdater) updater() *updater {
 			f.installs = append(f.installs, staged)
 			return nil
 		},
-		Restart: func(context.Context) error {
+		Restart: func(context.Context) ([]core.CheckpointResult, error) {
 			f.restarts++
-			return nil
+			return []core.CheckpointResult{{Target: "o/r", Number: 7, Outcome: "pushed"}}, nil
 		},
 		Active: func() int { return f.active },
 		Notify: func(version string) { f.notices = append(f.notices, version) },
@@ -183,17 +185,21 @@ func TestUpdaterWaitsForActiveAgents(t *testing.T) {
 func TestUpdaterApplyFromButton(t *testing.T) {
 	f := &fakeUpdater{latest: "v1.5.23", active: 2}
 	u := f.updater()
-	if err := u.Apply(context.Background()); err == nil {
+	if _, err := u.Apply(context.Background()); err == nil {
 		t.Fatal("Apply with no update available succeeded")
 	}
 	u.check(context.Background())
-	if err := u.Apply(context.Background()); err != nil {
+	results, err := u.Apply(context.Background())
+	if err != nil {
 		t.Fatalf("Apply: %v", err)
+	}
+	if len(results) != 1 || results[0].Outcome != "pushed" {
+		t.Fatalf("checkpoints = %+v", results)
 	}
 	if len(f.installs) != 1 || f.restarts != 1 {
 		t.Fatalf("installs=%v restarts=%d", f.installs, f.restarts)
 	}
-	if err := u.Apply(context.Background()); err == nil || !strings.Contains(err.Error(), "already updating") {
+	if _, err := u.Apply(context.Background()); err == nil || !strings.Contains(err.Error(), "already updating") {
 		t.Fatalf("second Apply = %v, want already updating", err)
 	}
 }
@@ -211,13 +217,13 @@ func TestUpdaterApplyInstallFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if err := u.Apply(context.Background()); err == nil || !strings.Contains(err.Error(), "access denied") {
+	if _, err := u.Apply(context.Background()); err == nil || !strings.Contains(err.Error(), "access denied") {
 		t.Fatalf("Apply = %v, want access denied", err)
 	}
 	if f.restarts != 0 {
 		t.Fatalf("restarted after a failed install")
 	}
-	if err := u.Apply(context.Background()); err != nil || f.restarts != 1 {
+	if _, err := u.Apply(context.Background()); err != nil || f.restarts != 1 {
 		t.Fatalf("retry Apply = %v, restarts=%d", err, f.restarts)
 	}
 }

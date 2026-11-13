@@ -1369,9 +1369,9 @@ func TestDashboardUpdateButton(t *testing.T) {
 		t.Run(how, func(t *testing.T) {
 			calls := 0
 			ui := &TerminalUI{}
-			ui.SetUpdateHandler(func(context.Context) error {
+			ui.SetUpdateHandler(func(context.Context) ([]core.CheckpointResult, error) {
 				calls++
-				return nil
+				return nil, nil
 			})
 			m := newDashboard(ui)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})

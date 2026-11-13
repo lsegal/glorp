@@ -58,7 +58,7 @@ type Server struct {
 	restartProgress func() []core.CheckpointResult
 	// update installs the downloaded glorp release and restarts onto it, and
 	// updateVersion names that release (issue #783).
-	update        func(context.Context) error
+	update        func(context.Context) ([]core.CheckpointResult, error)
 	updateVersion string
 	// agentStatuses is the most recent completed probe. Probing starts as soon
 	// as the handler is wired, rather than making the first settings modal wait
@@ -119,7 +119,7 @@ func (ui *Server) SetRestartProgressHandler(handler func() []core.CheckpointResu
 
 // SetUpdateHandler wires the dashboard's update button (issue #783) to a
 // function that installs the downloaded glorp release and restarts onto it.
-func (ui *Server) SetUpdateHandler(handler func(context.Context) error) {
+func (ui *Server) SetUpdateHandler(handler func(context.Context) ([]core.CheckpointResult, error)) {
 	ui.mu.Lock()
 	ui.update = handler
 	ui.mu.Unlock()
@@ -310,7 +310,8 @@ func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 
 // serveUpdate backs the dashboard's update button (issue #783). It installs
 // the downloaded release and starts the same restart the restart button does,
-// whose checkpoint progress GET /api/restart reports.
+// answering with each run's shutdown checkpoint as POST /api/restart does;
+// GET /api/restart reports its progress meanwhile.
 func (ui *Server) serveUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -323,11 +324,12 @@ func (ui *Server) serveUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "update unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if err := handler(r.Context()); err != nil {
+	checkpoints, err := handler(r.Context())
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeCheckpoints(w, checkpoints)
 }
 
 // serveRestartProgress reports the shutdown checkpoint a restart is taking,

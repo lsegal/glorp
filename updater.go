@@ -349,8 +349,9 @@ type updater struct {
 	Download func(ctx context.Context, tag string) (string, error)
 	// Install swaps the downloaded binary in for the running one.
 	Install func(staged string) error
-	// Restart restarts glorp onto the binary Install swapped in.
-	Restart func(context.Context) error
+	// Restart restarts glorp onto the binary Install swapped in, reporting
+	// each run's shutdown checkpoint.
+	Restart func(context.Context) ([]core.CheckpointResult, error)
 	// Active reports how many agent runs are in flight.
 	Active func() int
 	// Notify tells the dashboards an update to version is available.
@@ -405,7 +406,7 @@ func (u *updater) check(ctx context.Context) {
 		return
 	}
 	u.Logf("no agents are active; updating glorp to %s", tag)
-	if err := u.Apply(ctx); err != nil {
+	if _, err := u.Apply(ctx); err != nil {
 		u.Logf("update glorp to %s: %v", tag, err)
 	}
 }
@@ -419,27 +420,29 @@ func (u *updater) Available() string {
 }
 
 // Apply swaps in the downloaded update and restarts glorp on it. It backs the
-// dashboards' update buttons as well as the automatic update.
-func (u *updater) Apply(ctx context.Context) error {
+// dashboards' update buttons as well as the automatic update, and reports
+// each run's shutdown checkpoint as the restart button does.
+func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 	u.mu.Lock()
 	tag, staged := u.available, u.staged
 	u.mu.Unlock()
 	if tag == "" {
-		return fmt.Errorf("no glorp update is available")
+		return nil, fmt.Errorf("no glorp update is available")
 	}
 	if !u.applying.CompareAndSwap(false, true) {
-		return fmt.Errorf("glorp is already updating")
+		return nil, fmt.Errorf("glorp is already updating")
 	}
 	if err := u.Install(staged); err != nil {
 		u.applying.Store(false)
-		return fmt.Errorf("install glorp %s: %w", tag, err)
+		return nil, fmt.Errorf("install glorp %s: %w", tag, err)
 	}
 	u.Logf("installed glorp %s; restarting", tag)
-	if err := u.Restart(ctx); err != nil {
+	results, err := u.Restart(ctx)
+	if err != nil {
 		u.applying.Store(false)
-		return err
+		return nil, err
 	}
-	return nil
+	return results, nil
 }
 
 // newWatchUpdater builds the updater a watch runs, or nil when it is turned
@@ -480,11 +483,8 @@ func newWatchUpdater(interval time.Duration, active *activeAgents, restart func(
 		Install: func(staged string) error {
 			return replaceExecutable(target, staged, runtime.GOOS == "windows")
 		},
-		Restart: func(ctx context.Context) error {
-			_, err := restart(ctx)
-			return err
-		},
-		Active: active.count,
+		Restart: restart,
+		Active:  active.count,
 		Notify: func(version string) {
 			if ui != nil {
 				ui.SetUpdate(version)

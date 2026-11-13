@@ -585,17 +585,17 @@ func TestServerUpdate(t *testing.T) {
 		t.Fatalf("update = %q, want v1.5.23", got)
 	}
 	calls := 0
-	ui.SetUpdateHandler(func(context.Context) error {
+	ui.SetUpdateHandler(func(context.Context) ([]core.CheckpointResult, error) {
 		calls++
 		if calls > 1 {
-			return errors.New("glorp is already updating")
+			return nil, errors.New("glorp is already updating")
 		}
-		return nil
+		return []core.CheckpointResult{{Target: "o/r", Number: 7, Outcome: "pushed"}}, nil
 	})
 	response = httptest.NewRecorder()
 	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/update", nil))
-	if response.Code != http.StatusNoContent || calls != 1 {
-		t.Fatalf("POST update = %d, calls = %d", response.Code, calls)
+	if response.Code != http.StatusOK || calls != 1 || !strings.Contains(response.Body.String(), `"Outcome":"pushed"`) {
+		t.Fatalf("POST update = %d %q, calls = %d", response.Code, response.Body.String(), calls)
 	}
 	response = httptest.NewRecorder()
 	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/update", nil))

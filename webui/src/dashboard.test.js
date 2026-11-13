@@ -355,10 +355,14 @@ describe("fetchRestartProgress", () => {
 });
 
 describe("submitUpdate", () => {
-	it("posts to /api/update", async () => {
-		const fetch = vi.fn().mockResolvedValue({ ok: true });
+	it("posts to /api/update and returns each run's checkpoint", async () => {
+		const checkpoints = [{ Target: "o/r", Number: 7, Outcome: "pushed" }];
+		const fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ Checkpoints: checkpoints }),
+		});
 		vi.stubGlobal("fetch", fetch);
-		await expect(submitUpdate()).resolves.toEqual([]);
+		await expect(submitUpdate()).resolves.toEqual(checkpoints);
 		expect(fetch).toHaveBeenCalledWith("/api/update", { method: "POST" });
 	});
 

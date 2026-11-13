@@ -1018,7 +1018,7 @@ type TerminalUI struct {
 	mu      sync.Mutex
 	refresh func()
 	action  func(context.Context, core.JobAction) error
-	update  func(context.Context) error
+	update  func(context.Context) ([]core.CheckpointResult, error)
 }
 
 func NewTerminalUI() *TerminalUI {
@@ -1076,7 +1076,7 @@ func (ui *TerminalUI) runJobAction(job JobSnapshot, action string) tea.Cmd {
 
 // SetUpdateHandler wires the status bar's update button (issue #783) to the
 // updater, the same one the web dashboard's update button uses.
-func (ui *TerminalUI) SetUpdateHandler(handler func(context.Context) error) {
+func (ui *TerminalUI) SetUpdateHandler(handler func(context.Context) ([]core.CheckpointResult, error)) {
 	ui.mu.Lock()
 	ui.update = handler
 	ui.mu.Unlock()
@@ -1095,7 +1095,7 @@ func (ui *TerminalUI) runUpdate(version string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		if err := handler(context.Background()); err != nil {
+		if _, err := handler(context.Background()); err != nil {
 			return updateFailedMsg(fmt.Sprintf("update to glorp %s failed: %v", version, err))
 		}
 		return nil
