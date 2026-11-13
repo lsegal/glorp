@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v1.5.24 - 2026-11-13
+
+
 ## v1.5.23 - 2026-11-13
 
 - Download glorp with `gh` in the installers, and so in `glorp upgrade`, the way the updater does (issue #789). `install.sh` and `install.ps1` now fetch the release archive with `gh release download` when `gh` is installed, and fall back to the direct download from the release page when `gh` is missing, not signed in, or its download fails. Both installers also no longer require `gh` to be installed, since nothing they do needs it any more.
