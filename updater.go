@@ -15,13 +15,16 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/lsegal/glorp/core"
 	"github.com/lsegal/glorp/process"
+	"github.com/lsegal/glorp/webui"
 )
 
 // defaultUpdateInterval is how often a watch checks for a newer glorp release
@@ -415,4 +418,55 @@ func (u *updater) Apply(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// newWatchUpdater builds the updater a watch runs, or nil when it is turned
+// off or glorp is a development build with no release version to compare.
+func newWatchUpdater(interval time.Duration, active *activeAgents, restart func(context.Context) ([]core.CheckpointResult, error), logf func(string, ...interface{}), ui *TerminalUI, web *webui.Server) *updater {
+	if interval == 0 {
+		return nil
+	}
+	if _, ok := parseReleaseVersion(version); !ok {
+		return nil
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		logf("glorp updates are off: %v", err)
+		return nil
+	}
+	target := restartExecutable(executable)
+	repo := upgradeRepo(os.Getenv)
+	return &updater{
+		Current:  version,
+		Interval: interval,
+		LatestTag: func(ctx context.Context) (string, error) {
+			return latestReleaseTag(ctx, doPublicGitHubRequest, repo)
+		},
+		Download: func(ctx context.Context, tag string) (string, error) {
+			downloader := releaseDownloader{Repo: repo, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Dir: os.TempDir(), Fetch: fetchReleaseAsset}
+			// gh is looked up each time, so installing it while glorp runs
+			// is picked up by the next download.
+			if binary, err := exec.LookPath("gh"); err == nil {
+				downloader.GH = ghReleaseCommand(binary)
+			}
+			return downloader.Download(ctx, tag)
+		},
+		Install: func(staged string) error {
+			return replaceExecutable(target, staged, runtime.GOOS == "windows")
+		},
+		Restart: func(ctx context.Context) error {
+			_, err := restart(ctx)
+			return err
+		},
+		Active: active.count,
+		Notify: func(version string) {
+			if ui != nil {
+				ui.SetUpdate(version)
+			}
+			if web != nil {
+				web.SetUpdate(version)
+			}
+		},
+		Logf: logf,
+	}
 }

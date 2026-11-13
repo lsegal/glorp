@@ -35,6 +35,10 @@ type State struct {
 	Version  string        `json:"version"`
 	Snapshot core.Snapshot `json:"snapshot"`
 	Logs     []string      `json:"logs"`
+	// Update is the newer glorp release the updater downloaded and the
+	// dashboard offers to install (issue #783), or empty when glorp is
+	// current.
+	Update string `json:"update,omitempty"`
 }
 
 // Server keeps the browser dashboard's state and serves its frontend.
@@ -52,6 +56,10 @@ type Server struct {
 	// restartProgress reports the shutdown checkpoint while a restart is
 	// taking it (issue #749).
 	restartProgress func() []core.CheckpointResult
+	// update installs the downloaded glorp release and restarts onto it, and
+	// updateVersion names that release (issue #783).
+	update        func(context.Context) error
+	updateVersion string
 	// agentStatuses is the most recent completed probe. Probing starts as soon
 	// as the handler is wired, rather than making the first settings modal wait
 	// for every installed CLI to answer (issue #595).
@@ -106,6 +114,22 @@ func (ui *Server) SetRestartHandler(handler func(context.Context) ([]core.Checkp
 func (ui *Server) SetRestartProgressHandler(handler func() []core.CheckpointResult) {
 	ui.mu.Lock()
 	ui.restartProgress = handler
+	ui.mu.Unlock()
+}
+
+// SetUpdateHandler wires the dashboard's update button (issue #783) to a
+// function that installs the downloaded glorp release and restarts onto it.
+func (ui *Server) SetUpdateHandler(handler func(context.Context) error) {
+	ui.mu.Lock()
+	ui.update = handler
+	ui.mu.Unlock()
+}
+
+// SetUpdate records that glorp version is downloaded and ready to install, so
+// the dashboard shows its update notice.
+func (ui *Server) SetUpdate(version string) {
+	ui.mu.Lock()
+	ui.updateVersion = version
 	ui.mu.Unlock()
 }
 
@@ -173,6 +197,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/restart" {
 		ui.serveRestart(w, r)
+		return
+	}
+	if r.URL.Path == "/api/update" {
+		ui.serveUpdate(w, r)
 		return
 	}
 	if r.URL.Path == "/api/settings" {
@@ -280,6 +308,28 @@ func (ui *Server) serveRestart(w http.ResponseWriter, r *http.Request) {
 	writeCheckpoints(w, checkpoints)
 }
 
+// serveUpdate backs the dashboard's update button (issue #783). It installs
+// the downloaded release and starts the same restart the restart button does,
+// whose checkpoint progress GET /api/restart reports.
+func (ui *Server) serveUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ui.mu.RLock()
+	handler := ui.update
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "update unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := handler(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // serveRestartProgress reports the shutdown checkpoint a restart is taking,
 // with runs still going marked pending, or no runs before one starts.
 func (ui *Server) serveRestartProgress(w http.ResponseWriter) {
@@ -377,7 +427,7 @@ func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	ui.mu.RLock()
-	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...)}
+	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion}
 	ui.mu.RUnlock()
 	state.Snapshot.Jobs = pageLogs(state.Snapshot.Jobs, state.Snapshot.VisibleJobs, page)
 	w.Header().Set("Content-Type", "application/json")
