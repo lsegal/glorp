@@ -115,6 +115,30 @@ func newerRelease(latest, current string) bool {
 	return false
 }
 
+// updateStagingPrefix names the directories releaseDownloader downloads and
+// unpacks each release into.
+const updateStagingPrefix = "glorp-update-"
+
+// removeUpdateStaging removes every release staging directory in dir. It is
+// best effort: a directory that cannot be removed now is tried again later.
+func removeUpdateStaging(dir string) {
+	stale, _ := filepath.Glob(filepath.Join(dir, updateStagingPrefix+"*"))
+	for _, path := range stale {
+		_ = os.RemoveAll(path)
+	}
+}
+
+// installUpdate swaps the staged binary in for target and then removes the
+// staging directory it was unpacked into (issue #787). Failing to remove it
+// does not fail the install; the next download tries again.
+func installUpdate(target, staged string, windows bool) error {
+	if err := replaceExecutable(target, staged, windows); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(filepath.Dir(staged))
+	return nil
+}
+
 // releaseDownloader fetches and unpacks a release's glorp binary for one
 // platform.
 type releaseDownloader struct {
@@ -135,7 +159,10 @@ type releaseDownloader struct {
 func (d releaseDownloader) Download(ctx context.Context, tag string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, updateDownloadTimeout)
 	defer cancel()
-	dir := filepath.Join(d.Dir, "glorp-update-"+normalizedReleaseVersion(tag))
+	// Staging directories left by earlier downloads, such as an older
+	// release this one replaces, are removed first (issue #787).
+	removeUpdateStaging(d.Dir)
+	dir := filepath.Join(d.Dir, updateStagingPrefix+normalizedReleaseVersion(tag))
 	if err := os.RemoveAll(dir); err != nil {
 		return "", err
 	}
@@ -361,6 +388,10 @@ type updater struct {
 	mu        sync.Mutex
 	available string
 	staged    string
+	// installed is the tag Install last swapped in, so a retry after a
+	// failed restart does not install again from a removed staging
+	// directory.
+	installed string
 	applying  atomic.Bool
 }
 
@@ -424,7 +455,7 @@ func (u *updater) Available() string {
 // each run's shutdown checkpoint as the restart button does.
 func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 	u.mu.Lock()
-	tag, staged := u.available, u.staged
+	tag, staged, installed := u.available, u.staged, u.installed
 	u.mu.Unlock()
 	if tag == "" {
 		return nil, fmt.Errorf("no glorp update is available")
@@ -432,11 +463,26 @@ func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 	if !u.applying.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("glorp is already updating")
 	}
-	if err := u.Install(staged); err != nil {
-		u.applying.Store(false)
-		return nil, fmt.Errorf("install glorp %s: %w", tag, err)
+	if installed != tag {
+		if err := u.Install(staged); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// The staged binary is gone, such as removed by
+				// another glorp's cleanup, so the next round
+				// downloads the release again.
+				u.mu.Lock()
+				if u.available == tag {
+					u.available, u.staged = "", ""
+				}
+				u.mu.Unlock()
+			}
+			u.applying.Store(false)
+			return nil, fmt.Errorf("install glorp %s: %w", tag, err)
+		}
+		u.mu.Lock()
+		u.installed = tag
+		u.mu.Unlock()
+		u.Logf("installed glorp %s; restarting", tag)
 	}
-	u.Logf("installed glorp %s; restarting", tag)
 	results, err := u.Restart(ctx)
 	if err != nil {
 		u.applying.Store(false)
@@ -481,7 +527,7 @@ func newWatchUpdater(interval time.Duration, active *activeAgents, restart func(
 			return downloader.Download(ctx, tag)
 		},
 		Install: func(staged string) error {
-			return replaceExecutable(target, staged, runtime.GOOS == "windows")
+			return installUpdate(target, staged, runtime.GOOS == "windows")
 		},
 		Restart: restart,
 		Active:  active.count,
