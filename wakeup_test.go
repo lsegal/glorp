@@ -326,7 +326,7 @@ func TestGlorpCapsConsecutiveWakeups(t *testing.T) {
 	if calls := runner.callCount(); calls != maxConsecutiveWakeups+1 {
 		t.Fatalf("agent ran %d times, want the first run plus %d wakeups", calls, maxConsecutiveWakeups)
 	}
-	if !strings.Contains(h.out.String(), "wakeups in a row") {
-		t.Fatalf("the wakeup cap was not reported:\n%s", h.out.String())
-	}
+	// The failed state is saved before the run's error is logged (issue
+	// #785), so the log is waited on rather than read once the state fails.
+	waitForLog(t, h.out, "wakeups in a row")
 }
