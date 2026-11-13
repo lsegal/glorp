@@ -4,9 +4,6 @@ $repo = if ($env:GLORP_REPO) { $env:GLORP_REPO } else { 'lsegal/glorp' }
 $version = if ($env:GLORP_VERSION) { $env:GLORP_VERSION } else { 'latest' }
 $installDir = if ($env:GLORP_BIN_DIR) { $env:GLORP_BIN_DIR } else { Join-Path $HOME 'AppData\Local\glorp' }
 
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    throw 'gh CLI is required: https://cli.github.com/'
-}
 if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
     throw 'Node.js and npx are required to install gh-fix from skills.sh'
 }
@@ -24,7 +21,28 @@ $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("glorp-" + [guid]::NewGuid(
 $zip = Join-Path $temp $archive
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
-    Invoke-WebRequest -Uri $url -OutFile $zip
+    # Download with gh first, and straight from the release page when gh is
+    # not installed or its download fails, the same policy glorp's updater
+    # follows.
+    $downloaded = $false
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        try {
+            # Under 'Stop' a failing gh can raise a terminating error, from its
+            # stderr in Windows PowerShell or its exit code in PowerShell 7, so
+            # it is caught here and the direct download runs instead.
+            $ErrorActionPreference = 'Continue'
+            & gh release download $tag --repo $repo --pattern $archive --dir $temp --clobber
+            $downloaded = ($LASTEXITCODE -eq 0) -and (Test-Path $zip)
+        } catch {
+            $downloaded = $false
+        } finally {
+            $ErrorActionPreference = 'Stop'
+        }
+        if (-not $downloaded) { Write-Host "gh could not download $archive; downloading it directly." }
+    }
+    if (-not $downloaded) {
+        Invoke-WebRequest -Uri $url -OutFile $zip
+    }
     Expand-Archive -Path $zip -DestinationPath $temp -Force
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
     $installedExe = Join-Path $installDir 'glorp.exe'

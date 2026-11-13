@@ -4,7 +4,6 @@ set -euo pipefail
 repo="${GLORP_REPO:-lsegal/glorp}"
 version="${GLORP_VERSION:-latest}"
 bin_dir="${GLORP_BIN_DIR:-$HOME/.local/bin}"
-command -v gh >/dev/null 2>&1 || { echo "gh CLI is required: https://cli.github.com/" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 mkdir -p "$bin_dir"
 if [[ "$version" == "latest" ]]; then
@@ -19,7 +18,15 @@ archive="glorp_${version#v}_${os_name}_${arch}.tar.gz"
 url="https://github.com/$repo/releases/download/$version/$archive"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-curl -fsSL "$url" -o "$tmp/$archive"
+# Download with gh first, and straight from the release page when gh is not
+# installed or its download fails, the same policy glorp's updater follows.
+# gh is kept off stdin for the same reason npx is below.
+downloaded=0
+if command -v gh >/dev/null 2>&1; then
+  gh release download "$version" --repo "$repo" --pattern "$archive" --dir "$tmp" --clobber </dev/null && downloaded=1 ||
+    echo "gh could not download $archive; downloading it directly." >&2
+fi
+[[ "$downloaded" == 1 ]] || curl -fsSL "$url" -o "$tmp/$archive"
 tar -xzf "$tmp/$archive" -C "$tmp"
 install "$tmp/glorp" "$bin_dir/glorp"
 # Which agents the skills are installed for comes from the agent registry in
