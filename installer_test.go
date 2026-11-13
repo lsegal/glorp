@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -174,4 +177,105 @@ func uniqueSorted(values []string) []string {
 		}
 	}
 	return unique
+}
+
+// updaterReleaseRequests reports what glorp's updater asks for when it
+// downloads tag: the gh arguments it tries first, without the --dir value, and
+// the direct URL it falls back to when gh fails. The installer tests hold both
+// scripts to these, so the scripts and the updater cannot drift apart.
+func updaterReleaseRequests(t *testing.T, repo, tag, goos, goarch string) ([]string, string) {
+	t.Helper()
+	var ghArgs []string
+	var url string
+	downloader := releaseDownloader{
+		Repo:   repo,
+		GOOS:   goos,
+		GOARCH: goarch,
+		Dir:    t.TempDir(),
+		GH: func(_ context.Context, args ...string) error {
+			ghArgs = args
+			return errors.New("gh failed")
+		},
+		Fetch: func(_ context.Context, fetched, _ string) error {
+			url = fetched
+			return errors.New("direct download failed")
+		},
+	}
+	if _, err := downloader.Download(context.Background(), tag); err == nil {
+		t.Fatal("the updater's download succeeded with both gh and the direct download failing")
+	}
+	return withoutDirFlag(ghArgs), url
+}
+
+// withoutDirFlag drops --dir and its value from gh arguments, since each
+// downloader picks its own directory.
+func withoutDirFlag(args []string) []string {
+	kept := []string{}
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--dir" {
+			i++
+			continue
+		}
+		kept = append(kept, args[i])
+	}
+	return kept
+}
+
+// installerDownloads splits the log the fake gh and direct downloaders write,
+// one "gh <args>" or "<direct> <url>" line per call, into the gh arguments
+// without --dir and the direct URLs, in order.
+func installerDownloads(t *testing.T, log, direct string) (gh [][]string, urls []string) {
+	t.Helper()
+	data, err := os.ReadFile(log)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) == 0:
+		case fields[0] == "gh":
+			gh = append(gh, withoutDirFlag(fields[1:]))
+		case fields[0] == direct:
+			for _, field := range fields[1:] {
+				if strings.HasPrefix(field, "https://") {
+					urls = append(urls, field)
+				}
+			}
+		default:
+			t.Fatalf("unexpected download log line %q", line)
+		}
+	}
+	return gh, urls
+}
+
+// assertInstallerDownloads checks that an install tried gh with the updater's
+// arguments only when wantGH is set, and fell back to the updater's direct URL
+// only when wantDirect is set.
+func assertInstallerDownloads(t *testing.T, log, direct string, wantGH, wantDirect bool, updaterGH []string, updaterURL string) {
+	t.Helper()
+	gh, urls := installerDownloads(t, log, direct)
+	switch {
+	case wantGH && (len(gh) != 1 || !reflect.DeepEqual(gh[0], updaterGH)):
+		t.Errorf("gh calls = %q, want one with the updater's arguments %q", gh, updaterGH)
+	case !wantGH && len(gh) != 0:
+		t.Errorf("gh calls = %q, want none", gh)
+	}
+	switch {
+	case wantDirect && (len(urls) != 1 || urls[0] != updaterURL):
+		t.Errorf("direct downloads = %q, want only the updater's %q", urls, updaterURL)
+	case !wantDirect && len(urls) != 0:
+		t.Errorf("direct downloads = %q, want none", urls)
+	}
+}
+
+func assertFileBytes(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", filepath.Base(path), err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s is not the expected build", filepath.Base(path))
+	}
 }

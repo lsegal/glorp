@@ -2,10 +2,10 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,17 +13,48 @@ import (
 // installerHarness runs install.ps1 against archives built in the test instead
 // of a GitHub release. The wrapper shadows the cmdlets and commands the script
 // reaches the network or the user's tools with, and restores the user Path the
-// script appends the install directory to.
+// script appends the install directory to. GLORP_TEST_BIN holds a fake gh.cmd
+// and goes first on Path; without it Path keeps only Windows' own directories,
+// so no installed gh is found either.
 const installerHarness = `$ErrorActionPreference = 'Stop'
-function gh {}
 function npx {}
-function Invoke-WebRequest { param($Uri, $OutFile) Copy-Item $env:GLORP_TEST_ARCHIVE $OutFile }
+function Invoke-WebRequest {
+    param($Uri, $OutFile)
+    Add-Content -Path $env:GLORP_TEST_LOG -Value "Invoke-WebRequest $Uri"
+    if ($env:GLORP_TEST_DIRECT -eq 'fail') { throw 'direct download failed' }
+    Copy-Item $env:GLORP_TEST_ARCHIVE $OutFile
+}
+if ($env:GLORP_TEST_BIN) {
+    $env:Path = "$env:GLORP_TEST_BIN;$env:Path"
+} else {
+    $env:Path = "$env:SystemRoot\System32;$PSHOME"
+}
 $savedPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 try {
     & $env:GLORP_TEST_SCRIPT
 } finally {
     [Environment]::SetEnvironmentVariable('Path', $savedPath, 'User')
 }
+`
+
+// fakeInstallGH stands in for gh as a real native command: it logs its
+// arguments, then either copies the test archive to --dir\--pattern the way
+// `gh release download` would or writes to stderr and exits 1, as
+// GLORP_TEST_GH says.
+const fakeInstallGH = `@echo off
+>>"%GLORP_TEST_LOG%" echo gh %*
+if not "%GLORP_TEST_GH%"=="ok" (
+  echo gh: download failed 1>&2
+  exit /b 1
+)
+:next
+if "%~1"=="" goto done
+if "%~1"=="--dir" set "dir=%~2"
+if "%~1"=="--pattern" set "pattern=%~2"
+shift
+goto next
+:done
+copy /y "%GLORP_TEST_ARCHIVE%" "%dir%\%pattern%" >nul
 `
 
 // Windows will not overwrite a running glorp.exe, so the installer renames it
@@ -50,14 +81,12 @@ func TestInstallPowerShellUpgradesWhileGlorpRuns(t *testing.T) {
 	}
 	install := func(version string) {
 		t.Helper()
-		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness)
-		cmd.Env = append(os.Environ(),
-			"GLORP_TEST_SCRIPT="+script,
+		output, err := runInstallPowerShell(harness, script,
 			"GLORP_TEST_ARCHIVE="+archives[version],
+			"GLORP_TEST_LOG="+filepath.Join(work, "downloads.log"),
 			"GLORP_VERSION=v"+version,
 			"GLORP_BIN_DIR="+installDir,
 		)
-		output, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("install v%s failed: %v\n%s", version, err, output)
 		}
@@ -125,6 +154,101 @@ func TestInstallPowerShellUpgradesWhileGlorpRuns(t *testing.T) {
 	assertFileBytes(t, filepath.Join(installDir, "glorp.exe.bak"), builds["3.0.0"])
 }
 
+// install.ps1 downloads the release with gh when gh is on Path and falls back
+// to Invoke-WebRequest when gh is missing or its download fails, the same
+// policy and the same requests as the updater, and fails only when the direct
+// download fails too. gh is not required up front, so a machine without it
+// still installs.
+func TestInstallPowerShellDownloadsWithGHFirst(t *testing.T) {
+	script, err := filepath.Abs("install.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	harness := filepath.Join(work, "harness.ps1")
+	if err := os.WriteFile(harness, []byte(installerHarness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const repo, tag = "acme/glorp-fork", "v1.2.3"
+	architecture := "amd64"
+	if runtime.GOARCH == "arm64" {
+		architecture = "arm64"
+	}
+	updaterGH, updaterURL := updaterReleaseRequests(t, repo, tag, "windows", architecture)
+	archive, build := buildFakeGlorpArchive(t, work, "1.2.3")
+
+	for _, tc := range []struct {
+		name               string
+		gh                 string // "ok", "fail", or "" for no gh on Path
+		directFails        bool
+		wantGH, wantDirect bool
+		wantInstalled      bool
+	}{
+		{name: "gh downloads", gh: "ok", wantGH: true, wantInstalled: true},
+		{name: "gh fails", gh: "fail", wantGH: true, wantDirect: true, wantInstalled: true},
+		{name: "gh missing", wantDirect: true, wantInstalled: true},
+		{name: "both fail", gh: "fail", directFails: true, wantGH: true, wantDirect: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseDir := t.TempDir()
+			installDir := filepath.Join(caseDir, "installed")
+			log := filepath.Join(caseDir, "downloads.log")
+			direct, bin := "ok", ""
+			if tc.directFails {
+				direct = "fail"
+			}
+			if tc.gh != "" {
+				bin = filepath.Join(caseDir, "bin")
+				if err := os.MkdirAll(bin, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(bin, "gh.cmd"), []byte(fakeInstallGH), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			output, err := runInstallPowerShell(harness, script,
+				"GLORP_REPO="+repo,
+				"GLORP_VERSION="+tag,
+				"GLORP_BIN_DIR="+installDir,
+				"GLORP_TEST_ARCHIVE="+archive,
+				"GLORP_TEST_LOG="+log,
+				"GLORP_TEST_BIN="+bin,
+				"GLORP_TEST_GH="+tc.gh,
+				"GLORP_TEST_DIRECT="+direct,
+			)
+			if tc.wantInstalled && err != nil {
+				t.Fatalf("install failed: %v\n%s", err, output)
+			}
+			if !tc.wantInstalled && err == nil {
+				t.Fatalf("install succeeded with every download failing:\n%s", output)
+			}
+			assertInstallerDownloads(t, log, "Invoke-WebRequest", tc.wantGH, tc.wantDirect, updaterGH, updaterURL)
+			if got := strings.Contains(string(output), "downloading it directly"); got != (tc.gh == "fail") {
+				t.Errorf("output mentions the fallback = %v, want %v:\n%s", got, tc.gh == "fail", output)
+			}
+			installed := filepath.Join(installDir, "glorp.exe")
+			if !tc.wantInstalled {
+				if _, err := os.Stat(installed); err == nil {
+					t.Fatal("glorp.exe was installed although every download failed")
+				}
+				return
+			}
+			assertFileBytes(t, installed, build)
+			if want := "Installed glorp " + tag; !strings.Contains(string(output), want) {
+				t.Fatalf("output does not report %q:\n%s", want, output)
+			}
+		})
+	}
+}
+
+// runInstallPowerShell runs install.ps1 through the harness with env added to
+// the test's environment.
+func runInstallPowerShell(harness, script string, env ...string) ([]byte, error) {
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness)
+	cmd.Env = append(append(os.Environ(), "GLORP_TEST_SCRIPT="+script), env...)
+	return cmd.CombinedOutput()
+}
+
 // buildFakeGlorpArchive builds testdata/fakeglorp stamped with version and
 // zips it the way a release archive holds glorp.exe.
 func buildFakeGlorpArchive(t *testing.T, work, version string) (string, []byte) {
@@ -176,15 +300,4 @@ func fakeGlorpBackups(t *testing.T, dir string) []string {
 		names = append(names, filepath.Base(match))
 	}
 	return uniqueSorted(names)
-}
-
-func assertFileBytes(t *testing.T, path string, want []byte) {
-	t.Helper()
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", filepath.Base(path), err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("%s is not the expected build", filepath.Base(path))
-	}
 }
