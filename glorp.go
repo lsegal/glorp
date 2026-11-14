@@ -336,6 +336,10 @@ type Glorp struct {
 	unblockOverride  atomic.Pointer[unblockConfig]
 	// unblockRun replaces the unblock agent call in tests.
 	unblockRun func(context.Context, agentSpec, string) (string, error)
+	// settingsView is the settings snapshot the Run loop last published. The
+	// settings modal reads it directly, so opening settings never waits on a
+	// poll, startup, or anything else the loop is busy with (issue #803).
+	settingsView atomic.Pointer[SettingsSnapshot]
 }
 
 // publishHandledIssues records which issues are no longer dispatch candidates:
@@ -1970,6 +1974,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// them posting comments after it has returned. Cancelling ctx cuts the
 	// wait short, so this does not hold a shutdown open for the full window.
 	defer w.awaitNegotiations()
+	// Published before anything slow, so settings read from here on even
+	// while startup is still loading state or calling GitHub (issue #803).
+	w.publishSettings()
 	targets := append([]string(nil), w.Targets...)
 	if len(targets) == 0 && w.Repo != "" {
 		targets = []string{w.Repo}

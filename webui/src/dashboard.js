@@ -323,20 +323,44 @@ function defaultWait(delayMs, signal) {
 }
 
 export async function fetchAgentStatuses() {
+	return (await fetchAgentReport()).statuses;
+}
+
+// fetchAgentReport reads /api/agents along with whether the server is still
+// probing for fresher values than the ones it answered with (issue #803).
+async function fetchAgentReport() {
 	const response = await fetch("/api/agents", { cache: "no-store" });
 	if (!response.ok) {
 		await throwForResponse(response);
 	}
-	return response.json();
+	return {
+		statuses: await response.json(),
+		refreshing: response.headers?.get(agentsRefreshingHeader) === "true",
+	};
 }
 
+// agentsRefreshingHeader matches webui.AgentsRefreshingHeader.
+const agentsRefreshingHeader = "X-Glorp-Agents-Refreshing";
+
+// agentsRefreshPollMs is how often the settings modal reads /api/agents
+// again while the server refreshes a stale probe in the background.
+const agentsRefreshPollMs = 3000;
+
 // fetchAgentStatusesWithRetry waits for the server's background model probe
-// when the settings modal opens before it completes (issue #595).
-export async function fetchAgentStatusesWithRetry(signal, wait = defaultWait) {
+// when the settings modal opens before it completes (issue #595). When the
+// server answers from a stale probe it is refreshing, onStatuses gets those
+// values at once and again whenever a later read brings fresh ones, so the
+// modal never waits on a probe to show what it already knows (issue #803).
+export async function fetchAgentStatusesWithRetry(
+	signal,
+	wait = defaultWait,
+	onStatuses = () => {},
+) {
 	for (let attempt = 0; ; attempt++) {
 		if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+		let report;
 		try {
-			return await fetchAgentStatuses();
+			report = await fetchAgentReport();
 		} catch (err) {
 			if (err.status !== 503) throw err;
 			const delay =
@@ -344,7 +368,11 @@ export async function fetchAgentStatusesWithRetry(signal, wait = defaultWait) {
 					Math.min(attempt, settingsRetryDelaysMs.length - 1)
 				];
 			await wait(delay, signal);
+			continue;
 		}
+		if (!report.refreshing) return report.statuses;
+		onStatuses(report.statuses);
+		await wait(agentsRefreshPollMs, signal);
 	}
 }
 
