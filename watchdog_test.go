@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -389,4 +390,72 @@ func TestRunWatchdogCoversASilentRunningJob(t *testing.T) {
 	close(r.release)
 	cancel()
 	<-done
+}
+
+// TestWatchdogLogsAFailedUnblockCallsOutput covers a call that exits non-zero:
+// the agent's own output, not just the exit code, reaches the log and each
+// job's history, a report printed before the exit reads as that report, and a
+// silent failure says the agent produced no output (issue #793).
+func TestWatchdogLogsAFailedUnblockCallsOutput(t *testing.T) {
+	stuck := []stuckJob{
+		{Key: "o/r#1", Job: JobSnapshot{Target: "o/r", Number: 1, Status: "paused"}, Why: "paused"},
+		{Key: "o/r#2", Job: JobSnapshot{Target: "o/r", Number: 2, Status: "paused"}, Why: "paused"},
+	}
+	exit := errors.New("exit status 1")
+	for _, tc := range []struct {
+		name    string
+		output  string
+		logs    []string
+		history []string
+		absent  []string
+	}{
+		{
+			name:    "explanation",
+			output:  "checking o/r#1\nAgent error: gh is not signed in, so no job could be checked\n",
+			logs:    []string{"unblock agent failed: exit status 1; its last output:\n  checking o/r#1\n  Agent error: gh is not signed in"},
+			history: []string{"the unblock agent failed (exit status 1) before acting, saying: checking o/r#1 / Agent error: gh is not signed in, so no job could be checked"},
+			absent:  []string{"produced no output"},
+		},
+		{
+			name:    "silent",
+			output:  "  \n",
+			logs:    []string{"unblock agent failed: exit status 1, and the agent produced no output"},
+			history: []string{"the unblock agent failed (exit status 1) with no output before acting"},
+		},
+		{
+			name:    "reported",
+			output:  "UNBLOCK o/r#1 none: its blocker is still open, nothing can unblock it yet\n",
+			logs:    []string{"unblock agent exited with exit status 1 after reporting its actions", "o/r#1 needed no action: its blocker is still open", "reported no action for o/r#2"},
+			history: []string{"none: its blocker is still open, nothing can unblock it yet", "the unblock agent exited with exit status 1 and reported no action"},
+			absent:  []string{"unblock agent failed"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &syncBuffer{}
+			w := watchdogGlorp(newUnblockCalls(), logs)
+			w.unblockRun = func(context.Context, agentSpec, string) (string, error) { return tc.output, exit }
+			history := map[string][]string{}
+			w.runUnblockRound(context.Background(), stuck, history, time.Minute)
+			got := logs.String()
+			for _, want := range tc.logs {
+				if !strings.Contains(got, want) {
+					t.Errorf("log is missing %q:\n%s", want, got)
+				}
+			}
+			for _, unwanted := range tc.absent {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("log has %q:\n%s", unwanted, got)
+				}
+			}
+			recorded := strings.Join(append(history["o/r#1"], history["o/r#2"]...), "\n")
+			for _, want := range tc.history {
+				if !strings.Contains(recorded, want) {
+					t.Errorf("history is missing %q:\n%s", want, recorded)
+				}
+			}
+			if tc.name != "reported" && (len(history["o/r#1"]) != 1 || len(history["o/r#2"]) != 1) {
+				t.Errorf("each job should get one history entry: %v", history)
+			}
+		})
+	}
 }

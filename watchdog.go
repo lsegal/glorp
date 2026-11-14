@@ -32,6 +32,11 @@ const unblockCallTimeout = 30 * time.Minute
 // agent is shown.
 const unblockOutputLines = 20
 
+// unblockHistoryLines is how much of a failed unblock call's output each
+// stuck job's history keeps, short because the history is repeated in every
+// later round's prompt.
+const unblockHistoryLines = 5
+
 // unblockConfig is the unblock call's agent and model override. Empty fields
 // fall back to the coding agent and its model.
 type unblockConfig struct {
@@ -296,18 +301,39 @@ func (w *Glorp) runUnblockRound(ctx context.Context, stuck []stuckJob, history m
 		return
 	}
 	stamp := time.Now().Format("2006-01-02 15:04")
-	if err != nil {
-		w.logf("stuck-job watchdog unblock agent failed: %v", err)
+	actions := parseUnblockActions(output)
+	if err != nil && len(actions) == 0 {
+		// The exit code alone says nothing about why the call failed, so the
+		// agent's own last words go into the log and the history, where the
+		// next round's escalation reads them (issue #793).
+		tail := lastLines(output, unblockOutputLines)
+		if tail == "" {
+			w.logf("stuck-job watchdog unblock agent failed: %v, and the agent produced no output", err)
+			for _, item := range stuck {
+				history[item.Key] = append(history[item.Key], fmt.Sprintf("%s: the unblock agent failed (%v) with no output before acting", stamp, err))
+			}
+			return
+		}
+		w.logf("stuck-job watchdog unblock agent failed: %v; its last output:\n%s", err, indentLines(tail, "  "))
+		reason := strings.Join(strings.Split(lastLines(output, unblockHistoryLines), "\n"), " / ")
 		for _, item := range stuck {
-			history[item.Key] = append(history[item.Key], fmt.Sprintf("%s: the unblock agent failed (%v) before acting", stamp, err))
+			history[item.Key] = append(history[item.Key], fmt.Sprintf("%s: the unblock agent failed (%v) before acting, saying: %s", stamp, err, reason))
 		}
 		return
 	}
-	actions := parseUnblockActions(output)
+	if err != nil {
+		// The agent reported its outcome before exiting non-zero, such as
+		// when it could not unblock a job, so the round reads as that report.
+		w.logf("stuck-job watchdog unblock agent exited with %v after reporting its actions", err)
+	}
 	for _, item := range stuck {
 		action, ok := actions[item.Key]
 		if !ok {
 			w.logf("stuck-job watchdog: the unblock agent reported no action for %s", item.Key)
+			if err != nil {
+				history[item.Key] = append(history[item.Key], fmt.Sprintf("%s: the unblock agent exited with %v and reported no action", stamp, err))
+				continue
+			}
 			history[item.Key] = append(history[item.Key], fmt.Sprintf("%s: the unblock agent ran but reported no action", stamp))
 			continue
 		}
@@ -405,6 +431,11 @@ func lastLines(text string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// indentLines prefixes every line of text with indent.
+func indentLines(text, indent string) string {
+	return indent + strings.ReplaceAll(text, "\n", "\n"+indent)
 }
 
 // runUnblock runs the unblock call as a one-shot agent invocation outside any
