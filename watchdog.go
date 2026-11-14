@@ -17,8 +17,8 @@ import (
 )
 
 // defaultUnblockInterval is how often the stuck-job watchdog looks for stuck
-// jobs unless --unblock-interval says otherwise (issue #779).
-const defaultUnblockInterval = 5 * time.Minute
+// jobs unless --unblock-interval says otherwise (issues #779 and #795).
+const defaultUnblockInterval = 15 * time.Minute
 
 // minUnblockInterval is the shortest interval the watchdog accepts, so a typo
 // cannot start an agent call every few seconds. Zero turns the watchdog off.
