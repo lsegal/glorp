@@ -51,8 +51,12 @@ type Server struct {
 	action   func(context.Context, core.JobAction) error
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 	agents   func(context.Context) ([]core.AgentStatus, error)
-	refresh  func(context.Context) error
-	restart  func(context.Context) ([]core.CheckpointResult, error)
+	// unblock and issueUpdate back the MCP tools that run a watchdog round
+	// and post an update comment (issue #806).
+	unblock     func(context.Context, core.UnblockRequest) (core.UnblockResult, error)
+	issueUpdate func(context.Context, core.IssueUpdate) (core.IssueUpdateResult, error)
+	refresh     func(context.Context) error
+	restart     func(context.Context) ([]core.CheckpointResult, error)
 	// restartProgress reports the shutdown checkpoint while a restart is
 	// taking it (issue #749).
 	restartProgress func() []core.CheckpointResult
@@ -209,6 +213,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/agents" {
 		ui.serveAgents(w, r)
+		return
+	}
+	if r.URL.Path == MCPPath {
+		ui.serveMCP(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
