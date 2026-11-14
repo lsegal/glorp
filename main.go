@@ -410,6 +410,8 @@ func runWatch(args []string) (code int) {
 		}
 		webUI.SetRestartProgressHandler(checkpointer.Progress)
 		webUI.SetPromptHandler(promptHandler)
+		webUI.SetUnblockHandler(w.TriggerUnblock)
+		webUI.SetIssueUpdateHandler(w.PostIssueUpdate)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {

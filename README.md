@@ -155,6 +155,12 @@ glorp ui
 glorp ui --port 9000
 ```
 
+The browser dashboard also serves MCP at `/mcp` on the same port, so an MCP client can drive the running instance: read its status, list jobs and read one job's state and scrollback, ask why a job is paused or stuck, retry, pause, resume, or stop a job as the dashboard buttons do, run a stuck-job watchdog round now, and post an update comment that mentions an issue's author. Point a client that speaks MCP's Streamable HTTP transport at the dashboard URL with `/mcp` added:
+
+```sh
+claude mcp add --transport http glorp http://localhost:8765/mcp
+```
+
 Use Claude Code and run up to three agent jobs concurrently:
 
 ```sh
