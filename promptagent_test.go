@@ -314,7 +314,7 @@ func TestGlorpApplySettingsChangesThePromptAgent(t *testing.T) {
 	if snapshot.PromptAgent != "codex" || snapshot.PromptModel != "gpt-5.5" {
 		t.Fatalf("prompt settings after update = %+v", snapshot)
 	}
-	if spec, _ := w.promptSpec(); spec.String() != "codex/gpt-5.5" {
+	if spec, _ := w.promptSpec(""); spec.String() != "codex/gpt-5.5" {
 		t.Fatalf("prompt spec after update = %s", spec)
 	}
 	unknown := "nope"
