@@ -140,7 +140,12 @@ func (w *Glorp) SetUnblockAgent(config unblockConfig) {
 // override when one is set, otherwise the coding agent glorp dispatches jobs
 // to and its model.
 func (w *Glorp) unblockSpec() (agentSpec, error) {
-	config := w.unblockSettings()
+	return w.oneShotSpec(w.unblockSettings())
+}
+
+// oneShotSpec resolves an out-of-band agent call's override, falling back to
+// the coding agent and its model for whatever the override leaves empty.
+func (w *Glorp) oneShotSpec(config unblockConfig) (agentSpec, error) {
 	registry := w.registry()
 	var spec agentSpec
 	if config.Agent != "" {
@@ -178,6 +183,7 @@ func (w *Glorp) watchStuckJobs(ctx context.Context, jobs func() []JobSnapshot) {
 		w.logf("checking for stuck jobs every %s", formatInterval(interval))
 	}
 	baseline := map[string]string{}
+	baselineAt := time.Now()
 	history := map[string][]string{}
 	for {
 		interval := w.UnblockInterval()
@@ -199,7 +205,27 @@ func (w *Glorp) watchStuckJobs(ctx context.Context, jobs func() []JobSnapshot) {
 			if timer != nil {
 				timer.Stop()
 			}
-			baseline = scrollbacks(jobs())
+			baseline, baselineAt = scrollbacks(jobs()), time.Now()
+			continue
+		case key := <-w.unblockTriggers():
+			// A round asked for from the prompt area runs now, through the
+			// same round and history as a timed one (issue #801).
+			if timer != nil {
+				timer.Stop()
+			}
+			current := jobs()
+			since := time.Since(baselineAt).Truncate(time.Second)
+			stuck, err := requestedStuckJobs(current, baseline, history, since, key)
+			if err != nil {
+				w.logf("stuck-job watchdog: %v", err)
+				continue
+			}
+			if len(stuck) == 0 {
+				w.logf("stuck-job watchdog: the unblock round requested from the prompt area found no stuck jobs")
+				continue
+			}
+			w.runUnblockRound(ctx, stuck, history, since)
+			baseline, baselineAt = scrollbacks(jobs()), time.Now()
 			continue
 		case <-due:
 		}
@@ -213,6 +239,57 @@ func (w *Glorp) watchStuckJobs(ctx context.Context, jobs func() []JobSnapshot) {
 		// Every job gets a full interval after the round to show progress.
 		baseline = scrollbacks(jobs())
 	}
+}
+
+func (w *Glorp) unblockTriggers() chan string {
+	w.unblockTriggerOnce.Do(func() { w.unblockTrigger = make(chan string, 1) })
+	return w.unblockTrigger
+}
+
+// TriggerUnblock asks the watchdog for an unblock round now, over every stuck
+// job or, given a job key, over that job alone (issue #801). It never waits:
+// the round runs on the watchdog's goroutine and logs what it finds and does,
+// as a timed round does.
+func (w *Glorp) TriggerUnblock(key string) error {
+	select {
+	case w.unblockTriggers() <- strings.TrimSpace(key):
+		return nil
+	default:
+		return fmt.Errorf("an unblock round is already requested and has not started yet")
+	}
+}
+
+// requestedStuckJobs lists the jobs a requested round covers. With no key it
+// is the jobs a timed round would cover, judged against the last look. With a
+// key it is that job alone, stuck or not, since the owner named it. A running
+// job silent for less than the shortest watchdog interval is not stuck yet.
+func requestedStuckJobs(jobs []JobSnapshot, baseline map[string]string, history map[string][]string, since time.Duration, key string) ([]stuckJob, error) {
+	if since < minUnblockInterval {
+		baseline = nil
+	}
+	stuck := detectStuckJobs(jobs, baseline, history, since)
+	if key == "" {
+		return stuck, nil
+	}
+	for _, item := range stuck {
+		if item.Key == key {
+			return []stuckJob{item}, nil
+		}
+	}
+	for _, job := range jobs {
+		if stuckJobKey(job) != key {
+			continue
+		}
+		if isDiscussionTarget(job.Target) {
+			return nil, fmt.Errorf("the unblock round requested for %s cannot run: it is a discussion, not an issue job", key)
+		}
+		why := "named from the prompt area while " + job.Status
+		if job.WaitReason != "" {
+			why += ": " + job.WaitReason
+		}
+		return []stuckJob{{Key: key, Job: job, Why: why}}, nil
+	}
+	return nil, fmt.Errorf("the unblock round requested for %s cannot run: glorp has no such job", key)
 }
 
 // scrollbacks records each job's scrollback, to compare a later look with.
