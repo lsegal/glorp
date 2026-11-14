@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lsegal/glorp/process"
 )
@@ -33,7 +34,9 @@ const bundledSkillsRoot = ".agents/skills"
 var glorpSkills = []string{"gh-fix", "gh-discuss", "gh-create"}
 
 // installedSkillsDir is where `npx skills add --global` keeps the copy of
-// each skill that every agent's skills directory links to.
+// each skill that every agent's skills directory links to. The registry's
+// "universal" target installs there, so the installers and the refresh both
+// write it.
 func installedSkillsDir(home string) string {
 	return filepath.Join(home, ".agents", "skills")
 }
@@ -141,6 +144,9 @@ func releaseTag(version string) string {
 	return "v" + normalizedReleaseVersion(version)
 }
 
+// skillsRefreshTimeout bounds one startup refresh of the skills.
+const skillsRefreshTimeout = 5 * time.Minute
+
 // skillsCheck is the startup currency check (issue #797): it compares the
 // installed skills with the ones the running release expects and reinstalls
 // them when they are stale.
@@ -167,6 +173,10 @@ func (c skillsCheck) Run(ctx context.Context) []string {
 		return nil
 	}
 	tag := releaseTag(c.Version)
+	// npx that hangs, such as on a network that drops the clone, cannot
+	// hold the check open for the life of the watch.
+	ctx, cancel := context.WithTimeout(ctx, skillsRefreshTimeout)
+	defer cancel()
 	c.Logf("installed skills %s do not match glorp %s; reinstalling them", strings.Join(stale, ", "), tag)
 	if err := c.Refresh(ctx, tag, c.Targets); err != nil {
 		c.Logf("WARNING: could not reinstall skills %s for glorp %s, so agents run with stale instructions: %v. %s", strings.Join(stale, ", "), tag, err, skillsFixHint(c.Repo, tag))

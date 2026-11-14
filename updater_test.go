@@ -578,3 +578,40 @@ func TestLatestReleaseTagVia(t *testing.T) {
 		t.Fatalf("no gh: tag=%q err=%v public calls=%d", tag, err, publicCalls)
 	}
 }
+
+// Applying an update reinstalls the skills for the new release after the
+// binary is swapped in and before glorp restarts (issue #797). A failed
+// refresh is logged and does not hold the restart back, since the restarted
+// glorp checks its skills again.
+func TestUpdaterRefreshesSkillsAfterInstall(t *testing.T) {
+	for _, refreshErr := range []error{nil, errors.New("npx is not installed")} {
+		f := &fakeUpdater{latest: "v1.5.23"}
+		u := f.updater()
+		var order []string
+		install := u.Install
+		u.Install = func(staged string) error {
+			order = append(order, "install")
+			return install(staged)
+		}
+		u.RefreshSkills = func(_ context.Context, tag string) error {
+			order = append(order, "skills "+tag)
+			return refreshErr
+		}
+		restart := u.Restart
+		u.Restart = func(ctx context.Context) ([]core.CheckpointResult, error) {
+			order = append(order, "restart")
+			return restart(ctx)
+		}
+		u.check(context.Background())
+		if want := []string{"install", "skills v1.5.23", "restart"}; strings.Join(order, ",") != strings.Join(want, ",") {
+			t.Fatalf("refreshErr=%v: order = %v, want %v", refreshErr, order, want)
+		}
+		logs := strings.Join(f.logs, "\n")
+		if refreshErr != nil && !strings.Contains(logs, "WARNING: could not update skills for glorp v1.5.23: npx is not installed") {
+			t.Fatalf("logs = %q, want the refresh failure", logs)
+		}
+		if refreshErr == nil && !strings.Contains(logs, "updated skills for glorp v1.5.23") {
+			t.Fatalf("logs = %q, want the refresh reported", logs)
+		}
+	}
+}

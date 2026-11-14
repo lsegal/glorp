@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the installed gh-fix, gh-discuss, and gh-create skills current when glorp updates itself (issue #797). The updater replaced only the binary, so agents kept loading the skills from the last install. That meant pull requests opened by glorp runs had no `/glorp:<ID>` in their `**Agents:**` footer, and issues filed by agents had no `**Created by Glorp:**` marker. After it installs a new release, the updater now reinstalls the skills for that release, for every agent the installers target, before glorp restarts. At startup, glorp also checks the installed skills against the ones its release ships with and reinstalls any that differ. When it cannot, such as when `npx` is not installed, it logs a warning naming the stale skills, and `glorp agents` and the web dashboard's agents tab mark each agent with a `skills` warning until they are reinstalled. Development builds skip the check.
+
 ## v1.5.25 - 2026-11-14
 
 - Log why the stuck-job watchdog's unblock agent failed (issue #793). When the unblock agent exited with an error, the log said only `unblock agent failed: exit status 1`, and that bare exit code was all the next round had to go on. The log now shows the last 20 lines of what the agent wrote, and each stuck job's history records its last few lines, so the next round escalates on what actually happened. An agent that prints its closing report and then exits with an error, such as when it could not unblock a job, is logged with the outcome it reported. A failed call that wrote nothing says the agent produced no output.
