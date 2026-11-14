@@ -381,6 +381,14 @@ func runWatch(args []string) (code int) {
 	// The updater (issue #783) restarts through the same checkpoint and
 	// shutdown as the restart button, after swapping in the new binary.
 	updates := newWatchUpdater(updateInterval, activeRuns, newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf, "restarting onto the updated glorp"), w.logf, ui, webUI)
+	// Installed skills older than this release are reinstalled, or reported
+	// when they cannot be, rather than left to steer agents with stale
+	// instructions (issue #797).
+	if home, err := os.UserHomeDir(); err == nil {
+		check := skillsCheck{Version: version, Repo: upgradeRepo(os.Getenv), Dir: installedSkillsDir(home), Bundle: bundledSkills, Targets: registry.SkillsTargets(), Logf: w.logf}
+		check.Refresh = skillsRefresher{Repo: check.Repo, Run: npxCommand}.Refresh
+		go check.Run(ctx)
+	}
 	if webUI != nil {
 		agentsHandler := func(ctx context.Context) ([]core.AgentStatus, error) {
 			return agentStatuses(ctx, w.registry())

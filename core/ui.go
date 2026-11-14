@@ -323,6 +323,9 @@ type AgentStatus struct {
 	// none, empty for an agent whose definition leaves the choice to its own
 	// CLI (issue #612).
 	DefaultModel string `json:"defaultModel,omitempty"`
+	// SkillsNote says which of glorp's installed skills are stale for the
+	// running release, empty when they are current (issue #797).
+	SkillsNote string `json:"skillsNote,omitempty"`
 	// Status is one of "ok", "warn", or "missing", matching the marker
 	// `glorp agents` prefixes each block with.
 	Status string `json:"status"`

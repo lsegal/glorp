@@ -32,6 +32,7 @@ func testDoctorRegistry(t *testing.T) *agents.Registry {
 		Models: []string{"{binary}", "models"},
 	}
 	probed.Quota = agents.Quota{Reader: agents.QuotaClaude}
+	probed.Skills = agents.Skills{Target: "probed"}
 	declared := base("declared")
 	declared.Models = agents.NewAllowList("opus", "sonnet")
 	silent := base("silent")
@@ -599,5 +600,32 @@ func TestAgentStatusCarriesTheDefaultModel(t *testing.T) {
 	status := agentStatus(agentReport{name: "codex", path: "/opt/codex", defaultModel: "gpt-5.6-terra"})
 	if status.DefaultModel != "gpt-5.6-terra" {
 		t.Fatalf("DefaultModel = %q, want the report's", status.DefaultModel)
+	}
+}
+
+// TestAgentDoctorFlagsStaleSkills checks stale installed skills (issue #797)
+// warn on every installed agent that installs them, and are printed on the
+// report and carried to the dashboard, while an agent with no skills target is
+// left alone.
+func TestAgentDoctorFlagsStaleSkills(t *testing.T) {
+	installed := map[string]bool{"probed": true, "silent": true}
+	signedIn := func(string) (string, bool) { return "logged in", true }
+	doctor := stubDoctor(t, installed, noProbe, signedIn, noProbe, nil)
+	doctor.skillsNote = func() string { return "gh-fix stale for glorp v1.5.25; restart glorp to reinstall" }
+	reports := doctor.Report(context.Background())
+	probed := reportFor(t, reports, "probed")
+	if probed.skillsNote == "" || probed.status() != statusWarn {
+		t.Fatalf("probed skillsNote = %q, status = %q, want a warning", probed.skillsNote, probed.status())
+	}
+	if silent := reportFor(t, reports, "silent"); silent.skillsNote != "" {
+		t.Fatalf("silent skillsNote = %q, want none for an agent with no skills target", silent.skillsNote)
+	}
+	var out strings.Builder
+	writeAgentReports(&out, []agentReport{probed})
+	if !strings.Contains(out.String(), "gh-fix stale for glorp v1.5.25") {
+		t.Fatalf("report = %q, want the skills line", out.String())
+	}
+	if status := agentStatus(probed); status.SkillsNote != probed.skillsNote || status.Status != "warn" {
+		t.Fatalf("status = %+v, want the skills note and a warning", status)
 	}
 }
