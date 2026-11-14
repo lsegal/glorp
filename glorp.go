@@ -334,6 +334,12 @@ type Glorp struct {
 	unblockResetOnce sync.Once
 	unblockReset     chan struct{}
 	unblockOverride  atomic.Pointer[unblockConfig]
+	// unblockTriggers carries on-demand round requests into the watchdog's
+	// goroutine, so they share its history and never overlap its rounds, and
+	// unblockBusy is set while a round's agent call runs (issue #806).
+	unblockTriggerOnce sync.Once
+	unblockTriggers    chan unblockTrigger
+	unblockBusy        atomic.Bool
 	// unblockRun replaces the unblock agent call in tests.
 	unblockRun func(context.Context, agentSpec, string) (string, error)
 }

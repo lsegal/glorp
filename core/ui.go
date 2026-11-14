@@ -341,3 +341,34 @@ type CheckpointResult struct {
 	Outcome string
 	Detail  string `json:",omitempty"`
 }
+
+// UnblockRequest asks the stuck-job watchdog for a round now instead of at
+// its next interval (issue #806): over every stuck job, or over the one job
+// Number names, in Target when more than one target has that number.
+type UnblockRequest struct {
+	Target string `json:"target,omitempty"`
+	Number int    `json:"number,omitempty"`
+}
+
+// UnblockResult reports the jobs an on-demand watchdog round covers, by their
+// TARGET#NUMBER keys. The round's agent call runs after this is reported, and
+// its findings and actions are logged as a scheduled round's are.
+type UnblockResult struct {
+	Jobs    []string `json:"jobs"`
+	Message string   `json:"message"`
+}
+
+// IssueUpdate is an update to post as a comment on Repository's issue or pull
+// request Number, mentioning its author so the owning job hears it through
+// glorp's mention path (issue #806).
+type IssueUpdate struct {
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
+	Text       string `json:"text"`
+}
+
+// IssueUpdateResult is the comment an IssueUpdate posted.
+type IssueUpdateResult struct {
+	URL    string `json:"url"`
+	Author string `json:"author"`
+}
