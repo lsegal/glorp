@@ -364,7 +364,7 @@ func (ui *Server) mcpStatus(ctx context.Context, _ mcpArguments) (any, error) {
 	case !hasAgents:
 		status["agentsError"] = "agents unavailable"
 	case !probed:
-		ui.refreshAgentStatuses()
+		ui.refreshStaleAgentStatuses()
 		status["agentsError"] = "agents are still being probed; ask again shortly"
 	default:
 		status["agents"] = statuses
