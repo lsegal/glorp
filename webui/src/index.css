@@ -935,3 +935,113 @@ h1 .version {
 		font-size: 14px;
 	}
 }
+.prompt-card {
+	min-width: 0;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: #18181be6;
+	box-shadow: 0 12px 32px #0003;
+	padding: 14px 16px 16px;
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr) auto;
+	gap: 9px;
+	max-height: min(48vh, 460px);
+}
+.prompt-scope {
+	font-weight: 400;
+	opacity: 0.8;
+}
+.prompt-conversation {
+	min-height: 60px;
+	overflow: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	font-size: 12px;
+}
+.prompt-empty {
+	margin: 0;
+	color: var(--muted);
+}
+.prompt-entry {
+	display: grid;
+	gap: 4px;
+}
+.prompt-request {
+	justify-self: end;
+	max-width: 85%;
+	padding: 6px 10px;
+	border-radius: 8px;
+	background: #27272a;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.prompt-agent {
+	color: var(--muted);
+	font-size: 11px;
+}
+.prompt-entry.pending .prompt-agent {
+	color: var(--green);
+}
+.prompt-entry.failed .prompt-agent {
+	color: #f87171;
+}
+.prompt-response {
+	margin: 0;
+	padding: 8px 10px;
+	border-radius: 6px;
+	background: #09090b;
+	color: #d4d4d8;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font:
+		11px / 17px ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+}
+.prompt-action {
+	color: var(--green);
+	font-size: 11px;
+}
+.prompt-form {
+	display: flex;
+	gap: 8px;
+	align-items: stretch;
+}
+.prompt-form textarea {
+	flex: 1 1 auto;
+	resize: vertical;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: #09090b;
+	color: #fafafa;
+	font: inherit;
+	font-size: 13px;
+	padding: 8px 10px;
+}
+.prompt-form button {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid var(--green);
+	border-radius: 8px;
+	background: var(--green);
+	color: #052e16;
+	font-weight: 600;
+	padding: 6px 14px;
+	cursor: pointer;
+}
+.prompt-form button svg {
+	width: 14px;
+}
+.prompt-form button:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+.prompt-error {
+	margin: 0;
+	color: #f87171;
+	font-size: 12px;
+}

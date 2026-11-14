@@ -397,6 +397,9 @@ func runWatch(args []string) (code int) {
 		check.Refresh = skillsRefresher{Repo: check.Repo, Run: npxCommand}.Refresh
 		go check.Run(ctx)
 	}
+	promptHandler := func(request string) (core.PromptEntry, error) {
+		return w.SubmitPrompt(ctx, request)
+	}
 	if webUI != nil {
 		agentsHandler := func(ctx context.Context) ([]core.AgentStatus, error) {
 			return agentStatuses(ctx, w.registry())
@@ -406,11 +409,13 @@ func runWatch(args []string) (code int) {
 			return nil
 		}
 		webUI.SetRestartProgressHandler(checkpointer.Progress)
+		webUI.SetPromptHandler(promptHandler)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
 		ui.SetRefreshHandler(w.nudgePoll)
 		ui.SetJobActionHandler(w.handleJobAction)
+		ui.SetPromptHandler(promptHandler)
 	}
 	if updates != nil {
 		if webUI != nil {

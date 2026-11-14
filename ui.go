@@ -188,6 +188,8 @@ type dashboard struct {
 	// set once its button was pressed (issue #783).
 	update   string
 	updating bool
+	// prompt is the prompt area, opened with "p" (issue #801).
+	prompt promptArea
 }
 
 var (
@@ -250,6 +252,9 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if followLogs {
 			m.viewport.GotoBottom()
 		}
+		m.refreshPromptView()
+	case promptsMsg:
+		return m.updatePrompts(msg)
 	case snapshotMsg:
 		m.snapshot = GlorpSnapshot(msg)
 		sortJobSnapshots(m.snapshot.Jobs)
@@ -289,6 +294,10 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 	case tea.KeyMsg:
+		if m.prompt.open {
+			// Every key types into the open prompt area, "q" included.
+			return m.updatePromptKey(msg)
+		}
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -309,6 +318,9 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "u" {
 			return m.startUpdate()
+		}
+		if msg.String() == promptKey {
+			return m.openPrompt()
 		}
 		if _, page, pages := m.visibleJobs(); pages > 1 {
 			switch msg.String() {
@@ -331,6 +343,9 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case tea.MouseMsg:
+		if m.prompt.open {
+			return m.updatePromptMouse(msg)
+		}
 		return m.updateMouse(msg)
 	}
 	return m, nil
@@ -466,6 +481,7 @@ var helpLines = []string{
 	"r           refresh now (repoll GitHub)",
 	"u, click    install an available glorp update",
 	"h/l, ←/→    switch job page",
+	"p           open the prompt agent (Esc closes)",
 	"click       a job card's [retry] [stop] [pause]",
 	"?           toggle this help",
 }
@@ -600,6 +616,9 @@ func (m dashboard) View() string {
 	}
 	if m.showHelp {
 		return m.helpView()
+	}
+	if m.prompt.open {
+		return m.promptView()
 	}
 	visible, page, pages := m.visibleJobs()
 	jobs := make([]string, 0, len(visible))
@@ -1019,6 +1038,7 @@ type TerminalUI struct {
 	refresh func()
 	action  func(context.Context, core.JobAction) error
 	update  func(context.Context) ([]core.CheckpointResult, error)
+	prompt  func(string) (core.PromptEntry, error)
 }
 
 func NewTerminalUI() *TerminalUI {

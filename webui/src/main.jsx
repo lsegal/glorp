@@ -17,6 +17,8 @@ import {
 	Cpu,
 	FolderGit2,
 	Radio,
+	Send,
+	Sparkles,
 	Terminal,
 	X,
 } from "lucide-react";
@@ -36,8 +38,10 @@ import {
 	jobWaitLabel,
 	modelGroupsFrom,
 	modelOptionsFrom,
+	promptAgentLabel,
 	stateURL,
 	submitJobAction,
+	submitPrompt,
 	submitRefresh,
 	submitRestart,
 	submitSettings,
@@ -228,6 +232,85 @@ function JobCard({ job }) {
 	);
 }
 
+// PromptArea sends requests to the prompt agent, which answers questions about
+// this glorp instance and its jobs and acts on them (issue #801). Sending only
+// starts the agent call; its answer arrives with the next state poll.
+function PromptArea({ entries }) {
+	const [request, setRequest] = useState("");
+	const [sending, setSending] = useState(false);
+	const [error, setError] = useState("");
+	const conversation = useRef(null);
+	const latest = entries.length
+		? `${entries[entries.length - 1].id}:${entries[entries.length - 1].status}`
+		: "";
+	useEffect(() => {
+		const node = conversation.current;
+		if (node && latest) node.scrollTop = node.scrollHeight;
+	}, [latest]);
+	const send = async (event) => {
+		event.preventDefault();
+		const text = request.trim();
+		if (!text) return;
+		setSending(true);
+		setError("");
+		try {
+			await submitPrompt(text);
+			setRequest("");
+		} catch (failure) {
+			setError(failure.message);
+		} finally {
+			setSending(false);
+		}
+	};
+	return (
+		<section className="prompt-card" aria-label="Prompt agent">
+			<div className="log-title">
+				<Sparkles /> Prompt agent
+				<span className="prompt-scope">this glorp instance and its jobs</span>
+			</div>
+			<div className="prompt-conversation" ref={conversation}>
+				{entries.length === 0 && (
+					<p className="prompt-empty">
+						Ask about this instance and its jobs, or ask it to retry, pause,
+						resume, or stop a job, run an unblock round, update an issue or pull
+						request, or file an issue.
+					</p>
+				)}
+				{entries.map((entry) => (
+					<div key={entry.id} className={`prompt-entry ${entry.status}`}>
+						<div className="prompt-request">{entry.request}</div>
+						<div className="prompt-agent">{promptAgentLabel(entry)}</div>
+						{entry.response && (
+							<pre className="prompt-response">{entry.response}</pre>
+						)}
+						{(entry.actions || []).map((action) => (
+							<div key={action} className="prompt-action">
+								→ {action}
+							</div>
+						))}
+					</div>
+				))}
+			</div>
+			<form className="prompt-form" onSubmit={send}>
+				<textarea
+					aria-label="Request for the prompt agent"
+					value={request}
+					rows={2}
+					placeholder="Why is a job paused? Retry it. File an issue about..."
+					onChange={(event) => setRequest(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" && !event.shiftKey) send(event);
+					}}
+				/>
+				<button type="submit" disabled={sending || !request.trim()}>
+					<Send /> {sending ? "Sending..." : "Send"}
+				</button>
+			</form>
+			{error && <p className="prompt-error">{error}</p>}
+		</section>
+	);
+}
+
 // JobPager steps through the pages of jobs when they do not all fit on one
 // (issue #739), wrapping around at either end as the terminal dashboard does.
 function JobPager({ page, pages, onPage }) {
@@ -377,6 +460,8 @@ function SettingsModal({ onClose }) {
 					unblockInterval: snapshot.unblockInterval ?? "",
 					unblockAgent: snapshot.unblockAgent ?? "",
 					unblockModel: snapshot.unblockModel ?? "",
+					promptAgent: snapshot.promptAgent ?? "",
+					promptModel: snapshot.promptModel ?? "",
 					activeAgents: snapshot.configuredAgents ?? [],
 				});
 			})
@@ -565,6 +650,35 @@ function SettingsModal({ onClose }) {
 										value={form.unblockModel}
 										onChange={update("unblockModel")}
 										placeholder="the unblock agent's model"
+									/>
+								</label>
+								<label htmlFor="settings-prompt-agent">
+									Prompt agent
+									<select
+										id="settings-prompt-agent"
+										value={form.promptAgent}
+										onChange={update("promptAgent")}
+									>
+										<option value="">
+											{settings?.promptDefault
+												? `Coding agent (${settings.promptDefault})`
+												: "Coding agent"}
+										</option>
+										{(settings?.agents || []).map((agent) => (
+											<option key={agent} value={agent}>
+												{agent}
+											</option>
+										))}
+									</select>
+								</label>
+								<label htmlFor="settings-prompt-model">
+									Prompt model
+									<input
+										id="settings-prompt-model"
+										type="text"
+										value={form.promptModel}
+										onChange={update("promptModel")}
+										placeholder="the prompt agent's model"
 									/>
 								</label>
 							</>
@@ -825,6 +939,7 @@ function App() {
 					</div>
 				)}
 			</section>
+			<PromptArea entries={state.prompts || []} />
 			<section className="log-card">
 				<div className="log-title">
 					<Terminal /> Logs

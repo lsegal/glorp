@@ -39,6 +39,9 @@ type State struct {
 	// dashboard offers to install (issue #783), or empty when glorp is
 	// current.
 	Update string `json:"update,omitempty"`
+	// Prompts is the prompt area's conversation with the prompt agent, oldest
+	// first (issue #801).
+	Prompts []core.PromptEntry `json:"prompts,omitempty"`
 }
 
 // Server keeps the browser dashboard's state and serves its frontend.
@@ -60,6 +63,10 @@ type Server struct {
 	// updateVersion names that release (issue #783).
 	update        func(context.Context) ([]core.CheckpointResult, error)
 	updateVersion string
+	// prompt starts answering a prompt area request, and prompts is the
+	// conversation it reported last (issue #801).
+	prompt  func(string) (core.PromptEntry, error)
+	prompts []core.PromptEntry
 	// agentStatuses is the most recent completed probe. Probing starts as soon
 	// as the handler is wired, rather than making the first settings modal wait
 	// for every installed CLI to answer (issue #595).
@@ -122,6 +129,22 @@ func (ui *Server) SetRestartProgressHandler(handler func() []core.CheckpointResu
 func (ui *Server) SetUpdateHandler(handler func(context.Context) ([]core.CheckpointResult, error)) {
 	ui.mu.Lock()
 	ui.update = handler
+	ui.mu.Unlock()
+}
+
+// SetPromptHandler wires the prompt area (issue #801) to a function that
+// starts answering a request and returns its pending entry without waiting
+// for the answer.
+func (ui *Server) SetPromptHandler(handler func(string) (core.PromptEntry, error)) {
+	ui.mu.Lock()
+	ui.prompt = handler
+	ui.mu.Unlock()
+}
+
+// Prompts records the prompt area's conversation, which /api/state publishes.
+func (ui *Server) Prompts(entries []core.PromptEntry) {
+	ui.mu.Lock()
+	ui.prompts = entries
 	ui.mu.Unlock()
 }
 
@@ -211,6 +234,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ui.serveAgents(w, r)
 		return
 	}
+	if r.URL.Path == "/api/prompt" {
+		ui.servePrompt(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -247,6 +274,41 @@ func (ui *Server) serveJobAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// servePrompt backs the prompt area (issue #801). It only starts the agent
+// call and answers 202 with the request's pending entry; the answer arrives
+// later through /api/state, so no request ever waits on the agent or on the
+// run loop.
+func (ui *Server) servePrompt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Request string `json:"request"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || strings.TrimSpace(body.Request) == "" {
+		http.Error(w, "invalid prompt request", http.StatusBadRequest)
+		return
+	}
+	ui.mu.RLock()
+	handler := ui.prompt
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "prompt unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	entry, err := handler(body.Request)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(entry)
 }
 
 // serveRefresh backs the dashboard's refresh button (issue #646). It carries
@@ -429,7 +491,7 @@ func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	ui.mu.RLock()
-	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion}
+	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion, Prompts: ui.prompts}
 	ui.mu.RUnlock()
 	state.Snapshot.Jobs = pageLogs(state.Snapshot.Jobs, state.Snapshot.VisibleJobs, page)
 	w.Header().Set("Content-Type", "application/json")
