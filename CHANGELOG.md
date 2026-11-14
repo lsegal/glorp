@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run the stuck-job watchdog every 15 minutes by default instead of every 5 (issue #795). A glorp started without `--unblock-interval`, and with no interval saved in the web dashboard's settings, now checks for stuck jobs every 15 minutes, and the web dashboard shows `15m` for it. An interval set with `--unblock-interval` or in the web dashboard is still used as before, and `0` still turns the watchdog off.
+
 ## v1.5.24 - 2026-11-13
 
 

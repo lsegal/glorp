@@ -323,7 +323,7 @@ func TestGlorpApplySettingsChangesTheWatchdog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.UnblockInterval != "5m" || snapshot.UnblockAgent != "" || snapshot.UnblockDefault != "claude/opus" {
+	if snapshot.UnblockInterval != "15m" || snapshot.UnblockAgent != "" || snapshot.UnblockDefault != "claude/opus" {
 		t.Fatalf("default watchdog settings = %+v", snapshot)
 	}
 	interval, agent, model := "10m", "codex", "gpt-5.5"
@@ -349,7 +349,7 @@ func TestGlorpApplySettingsChangesTheWatchdog(t *testing.T) {
 
 func TestWatchFlagsConfigureTheWatchdog(t *testing.T) {
 	flags := commandFlags("watch")
-	for name, want := range map[string]string{"unblock-interval": "5m0s", "unblock-agent": "", "unblock-model": ""} {
+	for name, want := range map[string]string{"unblock-interval": "15m0s", "unblock-agent": "", "unblock-model": ""} {
 		flag := flags.Lookup(name)
 		if flag == nil {
 			t.Fatalf("watch has no --%s switch", name)
