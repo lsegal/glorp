@@ -259,3 +259,84 @@ func TestBuiltinQuotaReadersTimeOut(t *testing.T) {
 		}
 	}
 }
+
+// claudeWeekOnlyUsage is what current Claude CLIs print for `/usage` when no
+// session window is open: a week line and no session line at all. Requiring
+// the session line made this report no reading, which the status bar then
+// showed as "not tracked" (issue #791).
+const claudeWeekOnlyUsage = `{"type":"result","subtype":"success","local_command":"usage","result":"You are currently using your subscription to power your Claude Code usage\n\nCurrent week (all models): 22% used · resets Nov 18, 5:59am (America/Los_Angeles)\nCurrent week (Fable): 0% used · resets Nov 18, 6am (America/Los_Angeles)\n"}`
+
+// TestClaudeQuotaReadsAWeekOnlyReport checks a `/usage` report without a
+// session line still yields the week reading it does carry.
+func TestClaudeQuotaReadsAWeekOnlyReport(t *testing.T) {
+	if got := formatClaudeQuota(claudeUsageText([]byte(claudeWeekOnlyUsage))); got != "week 78% left" {
+		t.Fatalf("quota = %q, want %q", got, "week 78% left")
+	}
+}
+
+// TestClaudeQuotaReaderReadsTheCLIReport runs the Claude reader against a
+// fake CLI printing the week-only report, and against one printing a report
+// with neither percentage, which must fail with the reason rather than read
+// as nothing.
+func TestClaudeQuotaReaderReadsTheCLIReport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.json")
+	if err := os.WriteFile(path, []byte(claudeWeekOnlyUsage), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binary := fakeQuotaBinary(t, fmt.Sprintf("cat %q", path))
+	if got, err := readClaudeQuota(context.Background(), binary); got != "week 78% left" || err != nil {
+		t.Fatalf("quota = %q (err %v), want %q", got, err, "week 78% left")
+	}
+	broken := fakeQuotaBinary(t, `printf '{"type":"result","result":"no usage data available"}'`)
+	got, err := readClaudeQuota(context.Background(), broken)
+	if err == nil || !strings.Contains(err.Error(), "missing session and week percentages") {
+		t.Fatalf("quota = %q (err %v), want the missing-percentage reason", got, err)
+	}
+}
+
+// TestCombinedQuotaReaderSaysWhyATrackedReadFailed pins the rule from issue
+// #791: an agent with a built-in or command reader whose read fails shows
+// "unavailable" and the reason, and only an agent with no reader at all shows
+// "not tracked". The failed Claude read used to come back as an empty reading
+// and render exactly like an agent glorp has no reader for.
+func TestCombinedQuotaReaderSaysWhyATrackedReadFailed(t *testing.T) {
+	registry := registryWith(t,
+		definitionWithQuota(t, "claude", agents.Quota{Reader: agents.QuotaClaude}),
+		definitionWithQuota(t, "codex", agents.Quota{Reader: agents.QuotaCodex}),
+		definitionWithQuota(t, "quiet", agents.Quota{}),
+	)
+	missing := filepath.Join(t.TempDir(), "definitely-not-installed")
+	read := combinedQuotaReader(namedQuotaReaders(registry, []string{"claude", "codex", "quiet", "stranger"}, func(string) string { return missing }))
+	quotas := read(context.Background())
+	for _, name := range []string{"claude", "codex"} {
+		if got := quotas[name]; !strings.HasPrefix(got, "unavailable: ") {
+			t.Fatalf("%s quota = %q, want unavailable with the reason", name, got)
+		}
+	}
+	for _, name := range []string{"quiet", "stranger"} {
+		if got := quotas[name]; got != "" {
+			t.Fatalf("%s quota = %q, want empty so it renders as not tracked", name, got)
+		}
+	}
+	formatted := formatNamedQuotas(quotas)
+	if strings.Contains(formatted, "claude: not tracked") || strings.Contains(formatted, "codex: not tracked") {
+		t.Fatalf("formatted = %q, want failed reads shown as unavailable, not not tracked", formatted)
+	}
+	if !strings.Contains(formatted, "quiet: not tracked") || !strings.Contains(formatted, "stranger: not tracked") {
+		t.Fatalf("formatted = %q, want agents without a reader shown as not tracked", formatted)
+	}
+}
+
+// TestQuotaReadingKeepsAGoodReading checks a reading wins over the error a
+// later failed read reports, since the readers keep their last good value.
+func TestQuotaReadingKeepsAGoodReading(t *testing.T) {
+	if got := quotaReading("week 78% left", true, fmt.Errorf("boom")); got != "week 78% left" {
+		t.Fatalf("reading = %q", got)
+	}
+	if got := quotaReading("", true, nil); got != "unavailable" {
+		t.Fatalf("reading = %q, want unavailable", got)
+	}
+	if got := quotaReading("", false, fmt.Errorf("boom")); got != "" {
+		t.Fatalf("reading = %q, want empty for an agent with no reader", got)
+	}
+}

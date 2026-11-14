@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Run the stuck-job watchdog every 15 minutes by default instead of every 5 (issue #795). A glorp started without `--unblock-interval`, and with no interval saved in the web dashboard's settings, now checks for stuck jobs every 15 minutes, and the web dashboard shows `15m` for it. An interval set with `--unblock-interval` or in the web dashboard is still used as before, and `0` still turns the watchdog off.
+- Fix Claude's quota showing as "not tracked" (issue #791). Current Claude CLIs leave the session line out of the `/usage` report when no session window is open, and glorp needed that line, so it read no quota at all. Glorp now shows the week percentage on its own, such as `claude: week 78% left`. A quota that glorp has a reader for but could not read now shows as `unavailable` with the reason in the web and terminal dashboards, as `glorp agents` already did. Only an agent with no quota reader shows as "not tracked".
 
 ## v1.5.24 - 2026-11-13
 
