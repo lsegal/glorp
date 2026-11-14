@@ -459,3 +459,130 @@ func TestWatchdogLogsAFailedUnblockCallsOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestTriggerUnblockRunsARoundOverEveryStuckJobNow(t *testing.T) {
+	calls := newUnblockCalls("UNBLOCK o/r#1 none: its blocker is still open")
+	logs := &syncBuffer{}
+	w := watchdogGlorp(calls, logs)
+	// A scheduled round would not come for an hour.
+	w.SetUnblockInterval(time.Hour)
+	list := &jobList{}
+	list.set(
+		JobSnapshot{Target: "o/r", Number: 1, Status: "paused", WaitReason: "waits on #9"},
+		JobSnapshot{Target: "o/r", Number: 2, Status: "paused", WaitReason: core.ManualPauseReason},
+		JobSnapshot{Target: "o/r", Number: 3, Status: "active", Log: "busy"},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.watchStuckJobs(ctx, list.get)
+	result, err := w.TriggerUnblock(ctx, core.UnblockRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Jobs) != 1 || result.Jobs[0] != "o/r#1" {
+		t.Errorf("round covers %v, want only the stuck job", result.Jobs)
+	}
+	calls.await(t, 1)
+	awaitLog(t, logs, "o/r#1 needed no action: its blocker is still open")
+	for _, want := range []string{
+		"running an on-demand unblock round",
+		"stuck-job watchdog found 1 stuck job(s): o/r#1 (paused: waits on #9)",
+		"running one unblock agent call (claude/opus) for 1 job(s)",
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log is missing %q:\n%s", want, logs.String())
+		}
+	}
+}
+
+func TestTriggerUnblockCoversANamedJobWithItsHistory(t *testing.T) {
+	calls := newUnblockCalls("UNBLOCK o/r#1 comment: https://github.com/o/r/issues/1#issuecomment-1 rebase", "UNBLOCK o/r#3 local: retried it")
+	logs := &syncBuffer{}
+	w := watchdogGlorp(calls, logs)
+	list := &jobList{}
+	list.set(JobSnapshot{Target: "o/r", Number: 1, Status: "paused", WaitReason: "waits on #9"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.watchStuckJobs(ctx, list.get)
+	// A scheduled round records history for job 1.
+	calls.await(t, 1)
+	// The round is still running, so its next wait already uses the hour.
+	w.SetUnblockInterval(time.Hour)
+	awaitLog(t, logs, "o/r#1 got a comment")
+	list.set(
+		JobSnapshot{Target: "o/r", Number: 1, Status: "paused", WaitReason: "waits on #9"},
+		JobSnapshot{Target: "o/r", Number: 3, Status: "queued"},
+	)
+	for _, bad := range []core.UnblockRequest{{Number: 99}, {Target: "o/r"}, {Target: "x/y", Number: 3}} {
+		if _, err := w.TriggerUnblock(ctx, bad); err == nil {
+			t.Errorf("%+v started a round", bad)
+		}
+	}
+	// A healthy job named on purpose is still covered.
+	result, err := w.TriggerUnblock(ctx, core.UnblockRequest{Target: "o/r", Number: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Jobs) != 1 || result.Jobs[0] != "o/r#3" {
+		t.Errorf("round covers %v", result.Jobs)
+	}
+	calls.await(t, 1)
+	prompt := calls.prompt(1)
+	if !strings.Contains(prompt, "key: o/r#3") || strings.Contains(prompt, "key: o/r#1") || !strings.Contains(prompt, "the owner asked for an unblock round") {
+		t.Errorf("named round prompt:\n%s", prompt)
+	}
+	awaitLog(t, logs, "o/r#3 got a local task: retried it")
+	// The named round kept job 1's history for the next round.
+	result, err = w.TriggerUnblock(ctx, core.UnblockRequest{Number: 1})
+	if err != nil || len(result.Jobs) != 1 {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	calls.await(t, 1)
+	if !strings.Contains(calls.prompt(2), "comment: https://github.com/o/r/issues/1#issuecomment-1 rebase") {
+		t.Errorf("job 1's history was lost:\n%s", calls.prompt(2))
+	}
+}
+
+func TestTriggerUnblockNeverOverlapsARound(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	logs := &syncBuffer{}
+	w := watchdogGlorp(newUnblockCalls(), logs)
+	w.unblockRun = func(ctx context.Context, _ agentSpec, _ string) (string, error) {
+		started <- struct{}{}
+		<-release
+		return "", nil
+	}
+	w.SetUnblockInterval(time.Hour)
+	list := &jobList{}
+	list.set(JobSnapshot{Target: "o/r", Number: 1, Status: "paused", WaitReason: "x"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.watchStuckJobs(ctx, list.get)
+	if _, err := w.TriggerUnblock(ctx, core.UnblockRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if _, err := w.TriggerUnblock(ctx, core.UnblockRequest{}); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Errorf("a second round during the first returned %v", err)
+	}
+	close(release)
+}
+
+func TestTriggerUnblockWithNoStuckJobsRunsNothing(t *testing.T) {
+	calls := newUnblockCalls()
+	w := watchdogGlorp(calls, &syncBuffer{})
+	w.SetUnblockInterval(0)
+	list := &jobList{}
+	list.set(JobSnapshot{Target: "o/r", Number: 1, Status: "queued"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.watchStuckJobs(ctx, list.get)
+	result, err := w.TriggerUnblock(ctx, core.UnblockRequest{})
+	if err != nil || len(result.Jobs) != 0 || result.Message != "no jobs are stuck" {
+		t.Errorf("result = %+v, %v", result, err)
+	}
+	if calls.count() != 0 {
+		t.Error("an empty round made an agent call")
+	}
+}
