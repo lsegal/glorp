@@ -440,12 +440,9 @@ function SettingsModal({ onClose }) {
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
 	useEffect(() => {
-		// The dashboard can start serving before glorp's run loop is ready to
-		// answer a settings request -- in webhook mode, ngrok startup and
-		// per-target webhook configuration can take several seconds. Retrying
-		// with backoff here keeps the modal on its loading state through that
-		// window instead of surfacing it as an error the user can't act on
-		// (issue #579).
+		// Settings are read from the run's stored configuration, so this
+		// answers at once (issue #803); the retry only covers a server whose
+		// settings handler is not wired yet (issue #579).
 		const controller = new AbortController();
 		fetchSettingsWithRetry(controller.signal)
 			.then((snapshot) => {
@@ -466,10 +463,15 @@ function SettingsModal({ onClose }) {
 				});
 			})
 			.catch((err) => err.name !== "AbortError" && setError(err.message));
-		fetchAgentStatusesWithRetry(controller.signal)
-			.then(
-				(statuses) => !controller.signal.aborted && setAgentStatuses(statuses),
-			)
+		const showStatuses = (statuses) =>
+			!controller.signal.aborted && setAgentStatuses(statuses);
+		// A stale probe the server is refreshing still shows at once, and is
+		// replaced in place when the fresh one arrives (issue #803).
+		fetchAgentStatusesWithRetry(controller.signal, undefined, (statuses) => {
+			showStatuses(statuses);
+			!controller.signal.aborted && setProbed(true);
+		})
+			.then(showStatuses)
 			.catch(() => {
 				// The agents tab's status column is a diagnostic on top of the
 				// settings it lets you edit; a probe failure leaves it showing

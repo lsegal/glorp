@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lsegal/glorp/core"
 )
@@ -73,11 +74,25 @@ type Server struct {
 	agentStatuses    []core.AgentStatus
 	agentsProbed     bool
 	agentsRefreshing bool
+	// agentsProbedAt is when agentStatuses was probed. A report older than
+	// agentsMaxAge is still served at once, and refreshed in the background
+	// for the next read (issue #803).
+	agentsProbedAt time.Time
+	agentsMaxAge   time.Duration
 }
+
+// AgentsRefreshingHeader marks an /api/agents response served from the cache
+// while a fresh probe runs, so the settings modal knows to read it again and
+// update the probed fields in place (issue #803).
+const AgentsRefreshingHeader = "X-Glorp-Agents-Refreshing"
+
+// agentStatusesMaxAge is how long an agent probe stays current. Probing runs
+// every installed CLI and reads quotas, so it is not repeated on every read.
+const agentStatusesMaxAge = 5 * time.Minute
 
 // New builds a dashboard server that reports version.
 func New(version string) (*Server, error) {
-	return &Server{version: version, assets: newAssets()}, nil
+	return &Server{version: version, assets: newAssets(), agentsMaxAge: agentStatusesMaxAge}, nil
 }
 
 // SetJobActionHandler wires the dashboard's retry, stop, and pause buttons to a
@@ -186,6 +201,7 @@ func (ui *Server) refreshAgentStatuses() {
 		if err == nil {
 			ui.agentStatuses = statuses
 			ui.agentsProbed = true
+			ui.agentsProbedAt = time.Now()
 		}
 	}()
 }
@@ -455,9 +471,11 @@ func (ui *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(snapshot)
 }
 
-// serveAgents backs the settings modal's agents tab (issue #572). It probes
-// every registered agent and reports its install, sign-in, and quota state,
-// the same information `glorp agents` prints to the terminal.
+// serveAgents backs the settings modal's agents tab (issue #572). It reports
+// every registered agent's install, sign-in, and quota state, the same
+// information `glorp agents` prints to the terminal. It never probes while
+// answering: it serves the last background probe, starting a new one when
+// that is missing or stale (issue #803).
 func (ui *Server) serveAgents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -473,11 +491,21 @@ func (ui *Server) serveAgents(w http.ResponseWriter, r *http.Request) {
 	ui.mu.RLock()
 	statuses := append([]core.AgentStatus(nil), ui.agentStatuses...)
 	probed := ui.agentsProbed
+	stale := time.Since(ui.agentsProbedAt) > ui.agentsMaxAge
 	ui.mu.RUnlock()
 	if !probed {
 		ui.refreshAgentStatuses()
 		http.Error(w, "agents are still being probed", http.StatusServiceUnavailable)
 		return
+	}
+	if stale {
+		ui.refreshAgentStatuses()
+	}
+	ui.mu.RLock()
+	refreshing := ui.agentsRefreshing
+	ui.mu.RUnlock()
+	if refreshing {
+		w.Header().Set(AgentsRefreshingHeader, "true")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

@@ -105,8 +105,13 @@ func (w *Glorp) settingsRequestsChan() chan settingsRequest {
 
 // ApplySettings validates and applies update, returning the resulting
 // settings snapshot. It hands the update to the running Run loop, which
-// owns the mutated fields, so it only takes effect once Run is looping.
+// owns the mutated fields, so it only takes effect once Run is looping. An
+// update that changes nothing is a read, answered from CurrentSettings
+// without waiting on the loop at all (issue #803).
 func (w *Glorp) ApplySettings(ctx context.Context, update SettingsUpdate) (SettingsSnapshot, error) {
+	if update == (SettingsUpdate{}) {
+		return w.CurrentSettings(ctx)
+	}
 	if err := w.checkReady(ctx); err != nil {
 		return SettingsSnapshot{}, err
 	}
@@ -125,9 +130,27 @@ func (w *Glorp) ApplySettings(ctx context.Context, update SettingsUpdate) (Setti
 }
 
 // CurrentSettings reports the live settings snapshot without changing
-// anything.
+// anything. It reads the snapshot the Run loop last published rather than
+// asking the loop, which may be in the middle of a poll, so the settings
+// modal renders immediately (issue #803). Before Run has published one,
+// nothing has changed the settings yet, so they are read as configured.
 func (w *Glorp) CurrentSettings(ctx context.Context) (SettingsSnapshot, error) {
-	return w.ApplySettings(ctx, SettingsUpdate{})
+	if err := ctx.Err(); err != nil {
+		return SettingsSnapshot{}, err
+	}
+	if snapshot := w.settingsView.Load(); snapshot != nil {
+		return *snapshot, nil
+	}
+	return w.settingsSnapshot(), nil
+}
+
+// publishSettings records the current settings for CurrentSettings and
+// returns them. Like settingsSnapshot, it must only be called from the Run
+// loop's goroutine.
+func (w *Glorp) publishSettings() SettingsSnapshot {
+	snapshot := w.settingsSnapshot()
+	w.settingsView.Store(&snapshot)
+	return snapshot
 }
 
 // validateSettingsUpdate checks update in isolation, before it reaches the
@@ -228,7 +251,7 @@ func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySema
 		}
 		w.agentOverride.Store(&trimmed)
 	}
-	return settingsResult{snapshot: w.settingsSnapshot()}
+	return settingsResult{snapshot: w.publishSettings()}
 }
 
 // registry returns the agent registry this run was configured with, falling
