@@ -31,6 +31,9 @@ func copySkills(dir string, crlf bool) error {
 		if err != nil {
 			return err
 		}
+		// A Windows checkout may already embed CRLF, so the copy starts
+		// from LF either way.
+		data = normalizeNewlines(data)
 		if crlf {
 			data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
 		}
