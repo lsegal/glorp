@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -460,12 +461,18 @@ func TestUpdaterRedownloadsMissingStagedBinary(t *testing.T) {
 }
 
 // TestUpdaterHelperProcess is not a real test: replaceExecutable's test runs a
-// copy of the test binary as a stand-in for a running glorp.
+// copy of the test binary as a stand-in for a running glorp. It exits once
+// its stdin closes, which happens when the test ends or its process dies, so
+// it cannot outlive the test (issue #799).
 func TestUpdaterHelperProcess(t *testing.T) {
 	if os.Getenv("GLORP_UPDATER_HELPER") != "1" {
 		t.Skip("helper process")
 	}
-	time.Sleep(time.Minute)
+	go func() {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}()
+	_, _ = io.Copy(io.Discard, os.Stdin)
 	os.Exit(0)
 }
 
@@ -488,14 +495,23 @@ func TestReplaceExecutableWhileRunning(t *testing.T) {
 	}
 	cmd := exec.Command(target, "-test.run=^TestUpdaterHelperProcess$")
 	cmd.Env = append(os.Environ(), "GLORP_UPDATER_HELPER=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
+		stdin.Close()
 		_ = cmd.Process.Kill()
-		<-exited
+		select {
+		case <-exited:
+		case <-time.After(10 * time.Second):
+			t.Errorf("helper process %d did not exit", cmd.Process.Pid)
+		}
 	})
 	windows := runtime.GOOS == "windows"
 	for i, content := range []string{"glorp v2", "glorp v3"} {
