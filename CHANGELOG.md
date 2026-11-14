@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Open the web dashboard's settings at once (issue #803). Reading the settings waited for glorp's run loop, so while a poll was talking to GitHub, or glorp was still starting, the settings dialog sat on "loading settings..." until that work finished. The settings are now read straight from the stored configuration, with no wait. The agents and models tab shows the last agent probe at once, or "probing..." before the first one finishes. Probes older than 5 minutes are refreshed in the background, and the tab updates in place when the fresh results arrive. Saving a change still goes through the run loop as before.
+
 ## v1.5.26 - 2026-11-14
 
 - Fix glorp's self-update on Windows sometimes failing with `The process cannot access the file because it is being used by another process` (issue #799). Right after a new `glorp.exe` is written, antivirus or the search indexer can hold it open for a moment, and moving it aside during the next update then failed. The updater now keeps retrying the move for up to 5 seconds before it gives up.
