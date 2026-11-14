@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.25 - 2026-11-14
+
 - Log why the stuck-job watchdog's unblock agent failed (issue #793). When the unblock agent exited with an error, the log said only `unblock agent failed: exit status 1`, and that bare exit code was all the next round had to go on. The log now shows the last 20 lines of what the agent wrote, and each stuck job's history records its last few lines, so the next round escalates on what actually happened. An agent that prints its closing report and then exits with an error, such as when it could not unblock a job, is logged with the outcome it reported. A failed call that wrote nothing says the agent produced no output.
 - Run the stuck-job watchdog every 15 minutes by default instead of every 5 (issue #795). A glorp started without `--unblock-interval`, and with no interval saved in the web dashboard's settings, now checks for stuck jobs every 15 minutes, and the web dashboard shows `15m` for it. An interval set with `--unblock-interval` or in the web dashboard is still used as before, and `0` still turns the watchdog off.
 - Fix Claude's quota showing as "not tracked" (issue #791). Current Claude CLIs leave the session line out of the `/usage` report when no session window is open, and glorp needed that line, so it read no quota at all. Glorp now shows the week percentage on its own, such as `claude: week 78% left`. A quota that glorp has a reader for but could not read now shows as `unavailable` with the reason in the web and terminal dashboards, as `glorp agents` already did. Only an agent with no quota reader shows as "not tracked".
