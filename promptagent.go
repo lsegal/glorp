@@ -68,9 +68,15 @@ func (w *Glorp) SetPromptAgent(config unblockConfig) {
 }
 
 // promptSpec resolves the agent and model a prompt request runs with: the
-// override when one is set, otherwise the coding agent and its model.
-func (w *Glorp) promptSpec() (agentSpec, error) {
-	return w.oneShotSpec(w.promptSettings())
+// override when one is set, otherwise the coding agent and its model. A model
+// given for one call, as the MCP ask tool takes (issue #807), replaces the
+// configured model for that call only.
+func (w *Glorp) promptSpec(model string) (agentSpec, error) {
+	config := w.promptSettings()
+	if model = strings.TrimSpace(model); model != "" {
+		config.Model = model
+	}
+	return w.oneShotSpec(config)
 }
 
 // Prompts returns the prompt area's conversation, oldest first.
@@ -102,12 +108,38 @@ func (w *Glorp) reportPrompts() {
 // dashboards nor the loop ever wait on it; its answer lands in the prompt area
 // when it is ready.
 func (w *Glorp) SubmitPrompt(ctx context.Context, request string) (core.PromptEntry, error) {
+	entry, earlier, err := w.startPrompt(request)
+	if err != nil {
+		return core.PromptEntry{}, err
+	}
+	go w.answerPrompt(ctx, entry, earlier, "")
+	return entry, nil
+}
+
+// AskPrompt answers a request from the MCP ask tool (issue #807) with the
+// same prompt agent, conversation, and actions as the prompt area, and waits
+// for the answer. The request and its answer show in the prompt area too. A
+// non-empty model overrides the configured prompt-agent model for this call.
+func (w *Glorp) AskPrompt(ctx context.Context, request, model string) (core.PromptEntry, error) {
+	if _, err := w.promptSpec(model); err != nil {
+		return core.PromptEntry{}, fmt.Errorf("the prompt agent cannot run: %w", err)
+	}
+	entry, earlier, err := w.startPrompt(request)
+	if err != nil {
+		return core.PromptEntry{}, err
+	}
+	return w.answerPrompt(ctx, entry, earlier, model), nil
+}
+
+// startPrompt adds a pending entry for request to the prompt area and returns
+// it with the entries before it.
+func (w *Glorp) startPrompt(request string) (core.PromptEntry, []core.PromptEntry, error) {
 	request = strings.TrimSpace(request)
 	if request == "" {
-		return core.PromptEntry{}, fmt.Errorf("the request is empty")
+		return core.PromptEntry{}, nil, fmt.Errorf("the request is empty")
 	}
 	if len(request) > maxPromptRequest {
-		return core.PromptEntry{}, fmt.Errorf("the request is longer than %d characters", maxPromptRequest)
+		return core.PromptEntry{}, nil, fmt.Errorf("the request is longer than %d characters", maxPromptRequest)
 	}
 	w.promptMu.Lock()
 	w.promptNext++
@@ -119,12 +151,11 @@ func (w *Glorp) SubmitPrompt(ctx context.Context, request string) (core.PromptEn
 	}
 	w.promptMu.Unlock()
 	w.reportPrompts()
-	go w.answerPrompt(ctx, entry, earlier)
-	return entry, nil
+	return entry, earlier, nil
 }
 
-// finishPrompt records an entry's answer and shows it.
-func (w *Glorp) finishPrompt(entry core.PromptEntry) {
+// finishPrompt records an entry's answer, shows it, and returns it.
+func (w *Glorp) finishPrompt(entry core.PromptEntry) core.PromptEntry {
 	entry.Finished = time.Now()
 	w.promptMu.Lock()
 	for i := range w.prompts {
@@ -134,27 +165,36 @@ func (w *Glorp) finishPrompt(entry core.PromptEntry) {
 	}
 	w.promptMu.Unlock()
 	w.reportPrompts()
+	return entry
+}
+
+// promptRunner is how a prompt agent call runs: the test stub when one is
+// set, otherwise the coding agent's runner.
+func (w *Glorp) promptRunner() (func(context.Context, agentSpec, string) (string, error), error) {
+	if w.promptRun != nil {
+		return w.promptRun, nil
+	}
+	runner, ok := w.runner().(CommandRunner)
+	if !ok {
+		return nil, fmt.Errorf("no coding agent is configured")
+	}
+	return runner.runUnblock, nil
 }
 
 // answerPrompt runs the prompt agent for one request, then performs the job
-// actions and unblock rounds its answer asks for through glorp's own paths.
-func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlier []core.PromptEntry) {
-	spec, err := w.promptSpec()
+// actions and unblock rounds its answer asks for through glorp's own paths,
+// and returns the answered entry.
+func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlier []core.PromptEntry, model string) core.PromptEntry {
+	spec, err := w.promptSpec(model)
 	if err != nil {
 		entry.Status, entry.Response = "failed", fmt.Sprintf("the prompt agent cannot run: %v", err)
-		w.finishPrompt(entry)
-		return
+		return w.finishPrompt(entry)
 	}
 	entry.Agent = spec.String()
-	run := w.promptRun
-	if run == nil {
-		runner, ok := w.runner().(CommandRunner)
-		if !ok {
-			entry.Status, entry.Response = "failed", "the prompt agent cannot run: no coding agent is configured"
-			w.finishPrompt(entry)
-			return
-		}
-		run = runner.runUnblock
+	run, err := w.promptRunner()
+	if err != nil {
+		entry.Status, entry.Response = "failed", fmt.Sprintf("the prompt agent cannot run: %v", err)
+		return w.finishPrompt(entry)
 	}
 	w.logf("prompt agent (%s) answering request %d: %s", spec, entry.ID, truncate(entry.Request, 120))
 	callCtx, cancel := context.WithTimeout(ctx, promptCallTimeout)
@@ -162,8 +202,7 @@ func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlie
 	output, err := run(callCtx, spec, w.promptText(ctx, entry.Request, earlier))
 	if ctx.Err() != nil {
 		entry.Status, entry.Response = "failed", "glorp stopped before the prompt agent answered"
-		w.finishPrompt(entry)
-		return
+		return w.finishPrompt(entry)
 	}
 	actions := parsePromptActions(output)
 	entry.Response = promptResponse(output)
@@ -180,7 +219,7 @@ func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlie
 		entry.Actions = append(entry.Actions, w.applyPromptAction(ctx, action))
 	}
 	w.logf("prompt agent answered request %d (%s)", entry.ID, entry.Status)
-	w.finishPrompt(entry)
+	return w.finishPrompt(entry)
 }
 
 // applyPromptAction performs one action from the prompt agent's answer with

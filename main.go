@@ -412,6 +412,8 @@ func runWatch(args []string) (code int) {
 		webUI.SetPromptHandler(promptHandler)
 		webUI.SetUnblockHandler(w.TriggerUnblock)
 		webUI.SetIssueUpdateHandler(w.PostIssueUpdate)
+		webUI.SetAskHandler(w.AskPrompt)
+		webUI.SetCreateIssueHandler(w.CreateIssue)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {

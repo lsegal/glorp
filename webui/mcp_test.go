@@ -22,6 +22,8 @@ type stubInstance struct {
 	actions  []core.JobAction
 	unblocks []string
 	updates  []core.IssueUpdate
+	asks     [][2]string
+	creates  []core.IssueCreate
 }
 
 func newStubInstance(t *testing.T) *stubInstance {
@@ -63,6 +65,24 @@ func newStubInstance(t *testing.T) *stubInstance {
 	server.SetIssueUpdateHandler(func(_ context.Context, update core.IssueUpdate) (core.IssueUpdateResult, error) {
 		stub.updates = append(stub.updates, update)
 		return core.IssueUpdateResult{URL: "https://github.com/o/r/issues/2#issuecomment-9", Author: "octo"}, nil
+	})
+	server.SetAskHandler(func(_ context.Context, request, model string) (core.PromptEntry, error) {
+		stub.asks = append(stub.asks, [2]string{request, model})
+		agent := "claude/opus"
+		if model != "" {
+			agent = "claude/" + model
+		}
+		if strings.Contains(request, "edit") {
+			return core.PromptEntry{Status: "done", Agent: agent, Response: "I only answer about this glorp instance and its jobs."}, nil
+		}
+		if strings.Contains(request, "fail") {
+			return core.PromptEntry{Status: "failed", Agent: agent, Response: "the prompt agent failed: exit status 1"}, nil
+		}
+		return core.PromptEntry{Status: "done", Agent: agent, Response: "o/r#3 is paused by owner.", Actions: []string{"resume o/r#3: done"}}, nil
+	})
+	server.SetCreateIssueHandler(func(_ context.Context, request core.IssueCreate) (core.IssueCreateResult, error) {
+		stub.creates = append(stub.creates, request)
+		return core.IssueCreateResult{URL: "https://github.com/" + request.Repository + "/issues/40", Agent: "claude/opus"}, nil
 	})
 	stub.http = httptest.NewServer(server)
 	t.Cleanup(stub.http.Close)
@@ -223,7 +243,7 @@ func TestMCPListsEveryTool(t *testing.T) {
 			t.Errorf("tool %s is listed but has no handler", tool.Name)
 		}
 	}
-	for _, want := range []string{"get_status", "list_jobs", "get_job", "explain_job", "retry_job", "pause_job", "resume_job", "stop_job", "trigger_unblock", "update_issue"} {
+	for _, want := range []string{"get_status", "list_jobs", "get_job", "explain_job", "retry_job", "pause_job", "resume_job", "stop_job", "trigger_unblock", "update_issue", "ask", "create_issue"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("tools/list is missing %s: %v", want, names)
 		}
@@ -408,4 +428,56 @@ func TestMCPUpdateIssuePostsAComment(t *testing.T) {
 	if text, isError := stub.call(t, "update_issue", map[string]any{"number": 5, "text": "x"}); !isError || !strings.Contains(text, "name the repository") {
 		t.Errorf("an ambiguous repository returned %q", text)
 	}
+}
+
+func TestMCPAskRunsThePromptAgent(t *testing.T) {
+	stub := newStubInstance(t)
+	result := stub.callJSON(t, "ask", map[string]any{"request": "why is 3 paused? resume it"})
+	if result["answer"] != "o/r#3 is paused by owner." || result["agent"] != "claude/opus" || !slices.Equal(stringList(result["actions"]), []string{"resume o/r#3: done"}) {
+		t.Errorf("ask = %v", result)
+	}
+	if result := stub.callJSON(t, "ask", map[string]any{"request": "status?", "model": "sonnet"}); result["agent"] != "claude/sonnet" {
+		t.Errorf("ask with a model override = %v", result)
+	}
+	if result := stub.callJSON(t, "ask", map[string]any{"request": "edit main.go"}); !strings.Contains(result["answer"].(string), "only answer about this glorp instance") {
+		t.Errorf("an out-of-scope request answered %v", result)
+	}
+	want := [][2]string{{"why is 3 paused? resume it", ""}, {"status?", "sonnet"}, {"edit main.go", ""}}
+	if !slices.Equal(stub.asks, want) {
+		t.Errorf("asks = %q, want %q", stub.asks, want)
+	}
+	if text, isError := stub.call(t, "ask", map[string]any{"request": "fail"}); !isError || !strings.Contains(text, "exit status 1") {
+		t.Errorf("a failed answer returned %q", text)
+	}
+	if text, isError := stub.call(t, "ask", map[string]any{"request": " "}); !isError || !strings.Contains(text, "empty") {
+		t.Errorf("an empty request returned %q", text)
+	}
+}
+
+func TestMCPCreateIssueFilesThroughGhCreate(t *testing.T) {
+	stub := newStubInstance(t)
+	result := stub.callJSON(t, "create_issue", map[string]any{"text": "Add a dark mode"})
+	if result["url"] != "https://github.com/o/r/issues/40" || result["repository"] != "o/r" || result["agent"] != "claude/opus" {
+		t.Errorf("create_issue = %v", result)
+	}
+	stub.callJSON(t, "create_issue", map[string]any{"repository": "a/b", "text": "Fix it", "model": "sonnet"})
+	want := []core.IssueCreate{{Repository: "o/r", Text: "Add a dark mode"}, {Repository: "a/b", Text: "Fix it", Model: "sonnet"}}
+	if !slices.Equal(stub.creates, want) {
+		t.Errorf("creates = %+v, want %+v", stub.creates, want)
+	}
+	if text, isError := stub.call(t, "create_issue", map[string]any{"text": ""}); !isError || !strings.Contains(text, "empty") {
+		t.Errorf("an empty description returned %q", text)
+	}
+	stub.server.Snapshot(core.Snapshot{Targets: []string{"a/b", "c/d"}})
+	if text, isError := stub.call(t, "create_issue", map[string]any{"text": "x"}); !isError || !strings.Contains(text, "name the repository") {
+		t.Errorf("an ambiguous repository returned %q", text)
+	}
+}
+
+func stringList(value any) []string {
+	var list []string
+	for _, item := range value.([]any) {
+		list = append(list, item.(string))
+	}
+	return list
 }
