@@ -35,8 +35,9 @@ const (
 )
 
 // SetUnblockHandler wires the MCP trigger_unblock tool to the stuck-job
-// watchdog's on-demand round (issue #806).
-func (ui *Server) SetUnblockHandler(handler func(context.Context, core.UnblockRequest) (core.UnblockResult, error)) {
+// watchdog's requested round, over every stuck job or the one job key
+// names (issue #806).
+func (ui *Server) SetUnblockHandler(handler func(key string) error) {
 	ui.mu.Lock()
 	ui.unblock = handler
 	ui.mu.Unlock()
@@ -251,7 +252,7 @@ var mcpTools = []mcpTool{
 	{Name: "pause_job", Title: "Pause a job", Description: "The dashboard's Pause button: holds an active, waiting, or queued job back as paused by owner. A running agent is stopped and its work pushed; nothing but a retry or resume picks it back up.", InputSchema: mcpJobSchema},
 	{Name: "resume_job", Title: "Resume a paused job", Description: "Resumes a paused job, which is the dashboard's Retry button on a paused job: the pause is cleared and the job is requeued.", InputSchema: mcpJobSchema},
 	{Name: "stop_job", Title: "Stop a job", Description: "The dashboard's Stop button: stops an active or waiting job's agent, or clears a paused job and releases its claim on the issue.", InputSchema: mcpJobSchema, Annotations: map[string]any{"destructiveHint": true}},
-	{Name: "trigger_unblock", Title: "Run an unblock round", Description: "Runs a stuck-job watchdog round now, over every stuck job or the one job named, with the same agent call, history, and logging as a scheduled round. It reports the jobs the round covers once the round starts.", InputSchema: mcpSchema(nil, map[string]any{"number": map[string]any{"type": "integer", "minimum": 1, "description": "One job's issue number to run the round for; leave it out to cover every stuck job."}, "target": mcpTargetProperty})},
+	{Name: "trigger_unblock", Title: "Run an unblock round", Description: "Runs a stuck-job watchdog round now, over every stuck job or the one job named, with the same agent call, history, and logging as a scheduled round. A named job is covered even when it is not stuck. It returns once the round is requested; the round runs on the watchdog and never overlaps another.", InputSchema: mcpSchema(nil, map[string]any{"number": map[string]any{"type": "integer", "minimum": 1, "description": "One job's issue number to run the round for; leave it out to cover every stuck job."}, "target": mcpTargetProperty})},
 	{Name: "update_issue", Title: "Post an update on an issue", Description: "Posts a comment on an issue or pull request that mentions its author and this instance and carries the update text, so the owning job hears it through glorp's mention path. It returns the comment's URL and never edits the issue or pull request body.", InputSchema: mcpSchema([]string{"number", "text"}, map[string]any{"number": map[string]any{"type": "integer", "minimum": 1, "description": "The issue or pull request number."}, "repository": map[string]any{"type": "string", "description": "OWNER/REPO hosting it. Defaults to the repository of the instance's job with this number, or the instance's only watched repository."}, "text": map[string]any{"type": "string", "description": "The update to post."}})},
 }
 
@@ -480,7 +481,7 @@ func (ui *Server) mcpJobAction(ctx context.Context, args mcpArguments, action st
 	return result, nil
 }
 
-func (ui *Server) mcpTriggerUnblock(ctx context.Context, args mcpArguments) (any, error) {
+func (ui *Server) mcpTriggerUnblock(_ context.Context, args mcpArguments) (any, error) {
 	ui.mu.RLock()
 	handler := ui.unblock
 	ui.mu.RUnlock()
@@ -490,17 +491,22 @@ func (ui *Server) mcpTriggerUnblock(ctx context.Context, args mcpArguments) (any
 	if args.Target != "" && args.Number <= 0 {
 		return nil, errors.New("a target needs a job number")
 	}
-	result, err := handler(ctx, core.UnblockRequest{Target: args.Target, Number: args.Number})
-	if err != nil {
-		if errors.Is(err, core.ErrNotReady) {
-			return nil, errors.New("unblock rounds unavailable: the run is still starting; try again")
+	key := ""
+	if args.Number > 0 {
+		job, err := ui.mcpFindJob(args)
+		if err != nil {
+			return nil, err
 		}
+		key = fmt.Sprintf("%s#%d", job.Target, job.Number)
+	}
+	if err := handler(key); err != nil {
 		return nil, err
 	}
-	if result.Jobs == nil {
-		result.Jobs = []string{}
+	message := "requested an unblock round over every stuck job; the watchdog logs what it finds and does"
+	if key != "" {
+		message = fmt.Sprintf("requested an unblock round for %s; the watchdog logs what it finds and does", key)
 	}
-	return map[string]any{"jobs": result.Jobs, "message": result.Message}, nil
+	return map[string]any{"requested": true, "job": key, "message": message}, nil
 }
 
 func (ui *Server) mcpUpdateIssue(ctx context.Context, args mcpArguments) (any, error) {

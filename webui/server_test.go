@@ -677,3 +677,53 @@ func TestServerUpdate(t *testing.T) {
 		t.Fatalf("GET update = %d", response.Code)
 	}
 }
+
+// The prompt area's endpoint only starts the request and answers 202 with its
+// pending entry; the conversation is published with the rest of the state
+// (issue #801).
+func TestServerHandlesPromptRequests(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/prompt", strings.NewReader(`{"request":"why is #7 paused?"}`))
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST prompt without a handler = %d", response.Code)
+	}
+	var got string
+	ui.SetPromptHandler(func(text string) (core.PromptEntry, error) {
+		got = text
+		if text == "boom" {
+			return core.PromptEntry{}, errors.New("the request is too long")
+		}
+		return core.PromptEntry{ID: 1, Request: text, Status: "pending"}, nil
+	})
+	request = httptest.NewRequest(http.MethodPost, "/api/prompt", strings.NewReader(`{"request":"why is #7 paused?"}`))
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	var entry core.PromptEntry
+	if response.Code != http.StatusAccepted || json.Unmarshal(response.Body.Bytes(), &entry) != nil || entry.Status != "pending" || got != "why is #7 paused?" {
+		t.Fatalf("POST prompt = %d %q, handler got %q", response.Code, response.Body.String(), got)
+	}
+	for body, want := range map[string]int{`{"request":"  "}`: http.StatusBadRequest, `{"text":"hi"}`: http.StatusBadRequest, `{"request":"boom"}`: http.StatusBadRequest} {
+		response = httptest.NewRecorder()
+		ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/prompt", strings.NewReader(body)))
+		if response.Code != want {
+			t.Errorf("POST prompt %s = %d, want %d", body, response.Code, want)
+		}
+	}
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/prompt", nil))
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET prompt = %d", response.Code)
+	}
+	ui.Prompts([]core.PromptEntry{{ID: 1, Request: "why is #7 paused?", Status: "done", Response: "its blocker #12 is open"}})
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	var state State
+	if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil || len(state.Prompts) != 1 || state.Prompts[0].Response != "its blocker #12 is open" {
+		t.Fatalf("state prompts = %+v, %v", state.Prompts, err)
+	}
+}

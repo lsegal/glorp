@@ -140,7 +140,12 @@ func (w *Glorp) SetUnblockAgent(config unblockConfig) {
 // override when one is set, otherwise the coding agent glorp dispatches jobs
 // to and its model.
 func (w *Glorp) unblockSpec() (agentSpec, error) {
-	config := w.unblockSettings()
+	return w.oneShotSpec(w.unblockSettings())
+}
+
+// oneShotSpec resolves an out-of-band agent call's override, falling back to
+// the coding agent and its model for whatever the override leaves empty.
+func (w *Glorp) oneShotSpec(config unblockConfig) (agentSpec, error) {
 	registry := w.registry()
 	var spec agentSpec
 	if config.Agent != "" {
@@ -202,141 +207,89 @@ func (w *Glorp) watchStuckJobs(ctx context.Context, jobs func() []JobSnapshot) {
 			}
 			baseline, baselineAt = scrollbacks(jobs()), time.Now()
 			continue
-		case trigger := <-w.unblockTriggerRequests():
+		case key := <-w.unblockTriggers():
+			// A round asked for from the prompt area runs now, through the
+			// same round and history as a timed one (issue #801).
 			if timer != nil {
 				timer.Stop()
 			}
-			// A running job counts as silent when its scrollback has not
-			// changed since the last look, as long as that look was at least
-			// the shortest watchdog interval ago: an agent can be quiet for a
-			// few seconds without being stuck.
+			current := jobs()
 			since := time.Since(baselineAt).Truncate(time.Second)
-			looked := baseline
-			if since < minUnblockInterval {
-				looked = nil
+			stuck, err := requestedStuckJobs(current, baseline, history, since, key)
+			if err != nil {
+				w.logf("stuck-job watchdog: %v", err)
+				continue
 			}
-			stuck, err := onDemandStuckJobs(jobs(), looked, history, trigger.request, since)
-			result := core.UnblockResult{Jobs: make([]string, len(stuck))}
-			for i, item := range stuck {
-				result.Jobs[i] = item.Key
+			if len(stuck) == 0 {
+				w.logf("stuck-job watchdog: the unblock round requested from the prompt area found no stuck jobs")
+				continue
 			}
-			if err == nil && len(stuck) == 0 {
-				result.Message = "no jobs are stuck"
-			} else if err == nil {
-				result.Message = fmt.Sprintf("running an unblock round for %d job(s); its findings and actions are logged", len(stuck))
-				w.unblockBusy.Store(true)
-			}
-			trigger.reply <- unblockTriggerReply{result: result, err: err}
-			if err == nil && len(stuck) > 0 {
-				w.logf("stuck-job watchdog running an on-demand unblock round")
-				w.runUnblockRound(ctx, stuck, history, since)
-				w.unblockBusy.Store(false)
-				baseline, baselineAt = scrollbacks(jobs()), time.Now()
-			}
+			w.runUnblockRound(ctx, stuck, history, since)
+			baseline, baselineAt = scrollbacks(jobs()), time.Now()
 			continue
 		case <-due:
 		}
 		current := jobs()
 		stuck := detectStuckJobs(current, baseline, history, interval)
 		if len(stuck) == 0 {
-			baseline, baselineAt = scrollbacks(current), time.Now()
+			baseline = scrollbacks(current)
 			continue
 		}
-		w.unblockBusy.Store(true)
 		w.runUnblockRound(ctx, stuck, history, interval)
-		w.unblockBusy.Store(false)
 		// Every job gets a full interval after the round to show progress.
-		baseline, baselineAt = scrollbacks(jobs()), time.Now()
+		baseline = scrollbacks(jobs())
 	}
 }
 
-// unblockTrigger is one on-demand round request and where to send its answer.
-type unblockTrigger struct {
-	request core.UnblockRequest
-	reply   chan unblockTriggerReply
+func (w *Glorp) unblockTriggers() chan string {
+	w.unblockTriggerOnce.Do(func() { w.unblockTrigger = make(chan string, 1) })
+	return w.unblockTrigger
 }
 
-type unblockTriggerReply struct {
-	result core.UnblockResult
-	err    error
-}
-
-func (w *Glorp) unblockTriggerRequests() chan unblockTrigger {
-	w.unblockTriggerOnce.Do(func() { w.unblockTriggers = make(chan unblockTrigger) })
-	return w.unblockTriggers
-}
-
-// TriggerUnblock runs a watchdog round now (issue #806), over every stuck job
-// or the one job request names. It reports the jobs the round covers once the
-// round starts, without waiting for its agent call, which can take up to
-// unblockCallTimeout; the round logs its findings and actions as a scheduled
-// round does. A round already running is not overlapped.
-func (w *Glorp) TriggerUnblock(ctx context.Context, request core.UnblockRequest) (core.UnblockResult, error) {
-	if w.unblockBusy.Load() {
-		return core.UnblockResult{}, fmt.Errorf("an unblock round is already running; try again once it finishes")
-	}
-	trigger := unblockTrigger{request: request, reply: make(chan unblockTriggerReply, 1)}
-	wait := notReadyTimeout
-	if w.notReadyWait > 0 {
-		wait = w.notReadyWait
-	}
+// TriggerUnblock asks the watchdog for an unblock round now, over every stuck
+// job or, given a job key, over that job alone (issue #801). It never waits:
+// the round runs on the watchdog's goroutine and logs what it finds and does,
+// as a timed round does.
+func (w *Glorp) TriggerUnblock(key string) error {
 	select {
-	case w.unblockTriggerRequests() <- trigger:
-	case <-ctx.Done():
-		return core.UnblockResult{}, ctx.Err()
-	case <-time.After(wait):
-		if w.unblockBusy.Load() {
-			return core.UnblockResult{}, fmt.Errorf("an unblock round is already running; try again once it finishes")
-		}
-		return core.UnblockResult{}, core.ErrNotReady
-	}
-	select {
-	case reply := <-trigger.reply:
-		return reply.result, reply.err
-	case <-ctx.Done():
-		return core.UnblockResult{}, ctx.Err()
+	case w.unblockTriggers() <- strings.TrimSpace(key):
+		return nil
+	default:
+		return fmt.Errorf("an unblock round is already requested and has not started yet")
 	}
 }
 
-// onDemandStuckJobs lists the jobs an on-demand round covers. With no job
-// named it is every stuck job, as a scheduled round finds them. A named job
-// is covered whatever its state, since asking for it says it needs help, but
-// its reason still says when the watchdog would have found it stuck anyway.
-func onDemandStuckJobs(jobs []JobSnapshot, baseline map[string]string, history map[string][]string, request core.UnblockRequest, since time.Duration) ([]stuckJob, error) {
-	if request.Number <= 0 {
-		if request.Target != "" {
-			return nil, fmt.Errorf("a target needs a job number")
-		}
-		return detectStuckJobs(jobs, baseline, history, since), nil
+// requestedStuckJobs lists the jobs a requested round covers. With no key it
+// is the jobs a timed round would cover, judged against the last look. With a
+// key it is that job alone, stuck or not, since the owner named it. A running
+// job silent for less than the shortest watchdog interval is not stuck yet.
+func requestedStuckJobs(jobs []JobSnapshot, baseline map[string]string, history map[string][]string, since time.Duration, key string) ([]stuckJob, error) {
+	if since < minUnblockInterval {
+		baseline = nil
 	}
-	var matches []JobSnapshot
+	stuck := detectStuckJobs(jobs, baseline, history, since)
+	if key == "" {
+		return stuck, nil
+	}
+	for _, item := range stuck {
+		if item.Key == key {
+			return []stuckJob{item}, nil
+		}
+	}
 	for _, job := range jobs {
-		if job.Number == request.Number && (request.Target == "" || job.Target == request.Target) {
-			matches = append(matches, job)
+		if stuckJobKey(job) != key {
+			continue
 		}
-	}
-	switch {
-	case len(matches) == 0 && request.Target != "":
-		return nil, fmt.Errorf("no job %s#%d", request.Target, request.Number)
-	case len(matches) == 0:
-		return nil, fmt.Errorf("no job #%d", request.Number)
-	case len(matches) > 1:
-		return nil, fmt.Errorf("more than one target has job #%d; name its target", request.Number)
-	}
-	job := matches[0]
-	if isDiscussionTarget(job.Target) {
-		return nil, fmt.Errorf("%s is a discussion job, which the watchdog does not cover", stuckJobKey(job))
-	}
-	why, ok := stuckReason(job, baseline, since)
-	if !ok {
-		why = job.Status
+		if isDiscussionTarget(job.Target) {
+			return nil, fmt.Errorf("the unblock round requested for %s cannot run: it is a discussion, not an issue job", key)
+		}
+		why := "named from the prompt area while " + job.Status
 		if job.WaitReason != "" {
 			why += ": " + job.WaitReason
 		}
+		return []stuckJob{{Key: key, Job: job, Why: why}}, nil
 	}
-	why += "; the owner asked for an unblock round for it"
-	key := stuckJobKey(job)
-	return []stuckJob{{Key: key, Job: job, Why: why, Tried: append([]string(nil), history[key]...)}}, nil
+	return nil, fmt.Errorf("the unblock round requested for %s cannot run: glorp has no such job", key)
 }
 
 // scrollbacks records each job's scrollback, to compare a later look with.
@@ -360,11 +313,29 @@ func stuckJobKey(job JobSnapshot) string {
 func detectStuckJobs(jobs []JobSnapshot, baseline map[string]string, history map[string][]string, interval time.Duration) []stuckJob {
 	var stuck []stuckJob
 	for _, job := range jobs {
-		why, ok := stuckReason(job, baseline, interval)
-		if !ok {
+		if isDiscussionTarget(job.Target) {
 			continue
 		}
 		key := stuckJobKey(job)
+		why := ""
+		switch job.Status {
+		case "paused":
+			if job.WaitReason == core.ManualPauseReason {
+				continue
+			}
+			why = "paused"
+			if job.WaitReason != "" {
+				why += ": " + job.WaitReason
+			}
+		case "active":
+			previous, seen := baseline[key]
+			if !seen || previous != job.Log {
+				continue
+			}
+			why = fmt.Sprintf("active, but its agent has written no output for at least %s", formatInterval(interval))
+		default:
+			continue
+		}
 		stuck = append(stuck, stuckJob{Key: key, Job: job, Why: why, Tried: append([]string(nil), history[key]...)})
 	}
 	slices.SortFunc(stuck, func(a, b stuckJob) int { return strings.Compare(a.Key, b.Key) })
@@ -374,31 +345,6 @@ func detectStuckJobs(jobs []JobSnapshot, baseline map[string]string, history map
 		}
 	}
 	return stuck
-}
-
-// stuckReason says why a round covers job, or false when it is not stuck.
-func stuckReason(job JobSnapshot, baseline map[string]string, interval time.Duration) (string, bool) {
-	if isDiscussionTarget(job.Target) {
-		return "", false
-	}
-	switch job.Status {
-	case "paused":
-		if job.WaitReason == core.ManualPauseReason {
-			return "", false
-		}
-		why := "paused"
-		if job.WaitReason != "" {
-			why += ": " + job.WaitReason
-		}
-		return why, true
-	case "active":
-		previous, seen := baseline[stuckJobKey(job)]
-		if !seen || previous != job.Log {
-			return "", false
-		}
-		return fmt.Sprintf("active, but its agent has written no output for at least %s", formatInterval(interval)), true
-	}
-	return "", false
 }
 
 // runUnblockRound makes the round's single unblock agent call, logs what it

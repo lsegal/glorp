@@ -257,6 +257,11 @@ type SettingsUpdate struct {
 	// watchdog's unblock call. Empty means the coding agent and its model.
 	UnblockAgent *string `json:"unblockAgent,omitempty"`
 	UnblockModel *string `json:"unblockModel,omitempty"`
+	// PromptAgent and PromptModel override the agent and model of the
+	// dashboards' prompt agent (issue #801). Empty means the coding agent and
+	// its model.
+	PromptAgent *string `json:"promptAgent,omitempty"`
+	PromptModel *string `json:"promptModel,omitempty"`
 }
 
 // AgentOption describes one agent the registry knows, so the dashboard's
@@ -296,6 +301,11 @@ type SettingsSnapshot struct {
 	UnblockAgent    string `json:"unblockAgent"`
 	UnblockModel    string `json:"unblockModel"`
 	UnblockDefault  string `json:"unblockDefault"`
+	// PromptAgent and PromptModel are the prompt agent's override (issue
+	// #801), and PromptDefault is the agent spec it runs when neither is set.
+	PromptAgent   string `json:"promptAgent"`
+	PromptModel   string `json:"promptModel"`
+	PromptDefault string `json:"promptDefault"`
 }
 
 // AgentStatus reports one registered agent's install, sign-in, and quota
@@ -342,20 +352,26 @@ type CheckpointResult struct {
 	Detail  string `json:",omitempty"`
 }
 
-// UnblockRequest asks the stuck-job watchdog for a round now instead of at
-// its next interval (issue #806): over every stuck job, or over the one job
-// Number names, in Target when more than one target has that number.
-type UnblockRequest struct {
-	Target string `json:"target,omitempty"`
-	Number int    `json:"number,omitempty"`
+// PromptEntry is one request made in the dashboards' prompt area and the
+// prompt agent's answer to it (issue #801). Status is "pending" while the
+// agent call runs, then "done" or "failed". Actions lists the outcome of each
+// job action or unblock round the answer asked glorp to perform.
+type PromptEntry struct {
+	ID       int       `json:"id"`
+	Request  string    `json:"request"`
+	Status   string    `json:"status"`
+	Agent    string    `json:"agent,omitempty"`
+	Response string    `json:"response,omitempty"`
+	Actions  []string  `json:"actions,omitempty"`
+	Started  time.Time `json:"started"`
+	Finished time.Time `json:"finished,omitzero"`
 }
 
-// UnblockResult reports the jobs an on-demand watchdog round covers, by their
-// TARGET#NUMBER keys. The round's agent call runs after this is reported, and
-// its findings and actions are logged as a scheduled round's are.
-type UnblockResult struct {
-	Jobs    []string `json:"jobs"`
-	Message string   `json:"message"`
+// PromptReporter receives the prompt area's conversation whenever an entry is
+// added or answered. A UIReporter that also implements it shows the prompt
+// area (issue #801).
+type PromptReporter interface {
+	Prompts([]PromptEntry)
 }
 
 // IssueUpdate is an update to post as a comment on Repository's issue or pull
