@@ -68,6 +68,9 @@ type agentReport struct {
 	// defaultModel is the model glorp runs the agent with when --agent names
 	// none, empty for a definition that leaves that to the CLI (issue #612).
 	defaultModel string
+	// skillsNote says which of glorp's installed skills are stale, empty when
+	// they match the running release or the agent installs none (issue #797).
+	skillsNote string
 }
 
 // installed reports whether the agent's CLI was found on PATH.
@@ -80,7 +83,7 @@ func (r agentReport) statusKey() string {
 	switch {
 	case !r.installed():
 		return "missing"
-	case r.versionNote != "" || r.auth == doctorSignedOut:
+	case r.versionNote != "" || r.auth == doctorSignedOut || r.skillsNote != "":
 		return "warn"
 	default:
 		return "ok"
@@ -113,6 +116,8 @@ type agentDoctor struct {
 	version  func(ctx context.Context, binary string) ([]byte, error)
 	run      func(ctx context.Context, argv []string, spec agents.Doctor, stdin []string) ([]byte, bool)
 	quotaFor func(ctx context.Context, name, binary string) (string, error)
+	// skillsNote reports which installed skills are stale.
+	skillsNote func() string
 }
 
 // newAgentDoctor builds the doctor that talks to the real machine.
@@ -125,6 +130,7 @@ func newAgentDoctor(registry *agents.Registry) *agentDoctor {
 		quotaFor: func(ctx context.Context, name, binary string) (string, error) {
 			return readAgentQuota(ctx, registry, name, binary)
 		},
+		skillsNote: installedSkillsNote,
 	}
 }
 
@@ -247,6 +253,7 @@ func agentStatus(report agentReport) core.AgentStatus {
 		Models:       report.models,
 		ModelNote:    report.modelNote,
 		DefaultModel: report.defaultModel,
+		SkillsNote:   report.skillsNote,
 		Status:       report.statusKey(),
 	}
 	if report.quotaErr != nil {
@@ -288,6 +295,9 @@ func (d *agentDoctor) reportAgent(ctx context.Context, name string) agentReport 
 	report.quota, report.quotaErr = d.quotaFor(ctx, name, path)
 	report.auth = d.reportAuth(ctx, definition, path, report.quota)
 	report.models, report.modelNote = d.reportModels(ctx, definition, path)
+	if definition.SkillsTarget() != "" && d.skillsNote != nil {
+		report.skillsNote = d.skillsNote()
+	}
 	return report
 }
 
@@ -423,6 +433,9 @@ func writeAgentReports(out io.Writer, reports []agentReport) {
 		writeAgentField(out, "quota", describeQuota(report))
 		if report.defaultModel != "" {
 			writeAgentField(out, "default", qualify(report.name, []string{report.defaultModel})[0])
+		}
+		if report.skillsNote != "" {
+			writeAgentField(out, "skills", report.skillsNote)
 		}
 		writeAgentModels(out, report)
 	}

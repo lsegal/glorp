@@ -376,6 +376,10 @@ type updater struct {
 	Download func(ctx context.Context, tag string) (string, error)
 	// Install swaps the downloaded binary in for the running one.
 	Install func(staged string) error
+	// RefreshSkills reinstalls the gh-fix, gh-discuss, and gh-create skills
+	// for the release tag Install swapped in (issue #797), so binary and
+	// skills match after an update as they do after the installers run.
+	RefreshSkills func(ctx context.Context, tag string) error
 	// Restart restarts glorp onto the binary Install swapped in, reporting
 	// each run's shutdown checkpoint.
 	Restart func(context.Context) ([]core.CheckpointResult, error)
@@ -481,6 +485,16 @@ func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 		u.mu.Lock()
 		u.installed = tag
 		u.mu.Unlock()
+		// A failed refresh does not hold the update back: the binary is
+		// already swapped in, and the restarted glorp's startup check
+		// tries the skills again and reports them if it cannot.
+		if u.RefreshSkills != nil {
+			if err := u.RefreshSkills(ctx, tag); err != nil {
+				u.Logf("WARNING: could not update skills for glorp %s: %v", tag, err)
+			} else {
+				u.Logf("updated skills for glorp %s", tag)
+			}
+		}
 		u.Logf("installed glorp %s; restarting", tag)
 	}
 	results, err := u.Restart(ctx)
@@ -528,6 +542,15 @@ func newWatchUpdater(interval time.Duration, active *activeAgents, restart func(
 		},
 		Install: func(staged string) error {
 			return installUpdate(target, staged, runtime.GOOS == "windows")
+		},
+		RefreshSkills: func(ctx context.Context, tag string) error {
+			// The agent list comes from the binary just swapped in, as the
+			// installers read it, so a new release's agents are included.
+			targets, err := binarySkillsTargets(ctx, target)
+			if err != nil {
+				return err
+			}
+			return skillsRefresher{Repo: repo, Run: npxCommand}.Refresh(ctx, tag, targets)
 		},
 		Restart: restart,
 		Active:  active.count,

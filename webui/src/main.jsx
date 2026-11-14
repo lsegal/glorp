@@ -590,7 +590,7 @@ function SettingsModal({ onClose }) {
 												<span>{group.agent}</span>
 												<span className="agent-model-status">
 													{group.status
-														? `auth: ${group.status.auth} · quota: ${group.status.quota}${group.status.installed ? "" : " · not installed"}`
+														? `auth: ${group.status.auth} · quota: ${group.status.quota}${group.status.installed ? "" : " · not installed"}${group.status.skillsNote ? ` · skills: ${group.status.skillsNote}` : ""}`
 														: probed
 															? "unavailable"
 															: "probing..."}
