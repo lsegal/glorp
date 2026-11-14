@@ -855,6 +855,33 @@ describe("fetchAgentStatusesWithRetry", () => {
 	});
 });
 
+describe("fetchAgentStatusesWithRetry refresh", () => {
+	it("shows a stale report at once and returns the refreshed one", async () => {
+		const stale = [{ name: "codex", auth: "signed out" }];
+		const fresh = [{ name: "codex", auth: "signed in" }];
+		const report = (statuses, refreshing) => ({
+			ok: true,
+			headers: {
+				get: (name) =>
+					refreshing && name === "X-Glorp-Agents-Refreshing" ? "true" : null,
+			},
+			json: () => Promise.resolve(statuses),
+		});
+		const fetch = vi
+			.fn()
+			.mockResolvedValueOnce(report(stale, true))
+			.mockResolvedValueOnce(report(fresh, false));
+		const wait = vi.fn().mockResolvedValue();
+		const onStatuses = vi.fn();
+		vi.stubGlobal("fetch", fetch);
+		await expect(
+			fetchAgentStatusesWithRetry(undefined, wait, onStatuses),
+		).resolves.toEqual(fresh);
+		expect(onStatuses).toHaveBeenCalledExactlyOnceWith(stale);
+		expect(wait).toHaveBeenCalledOnce();
+	});
+});
+
 describe("agentStatusFor", () => {
 	const statuses = [
 		{ name: "codex", auth: "signed in" },
