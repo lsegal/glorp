@@ -23,8 +23,10 @@ import {
 	modelOptionsFrom,
 	parseAllowedCommenters,
 	probedModelsByAgent,
+	promptAgentLabel,
 	stateURL,
 	submitJobAction,
+	submitPrompt,
 	submitRefresh,
 	submitRestart,
 	submitSettings,
@@ -412,6 +414,43 @@ describe("submitRestart", () => {
 	});
 });
 
+describe("submitPrompt", () => {
+	it("posts the request and returns its pending entry", async () => {
+		const entry = { id: 1, request: "why is #5 paused?", status: "pending" };
+		const fetch = vi
+			.fn()
+			.mockResolvedValue({ ok: true, json: () => Promise.resolve(entry) });
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitPrompt("why is #5 paused?")).resolves.toEqual(entry);
+		expect(fetch).toHaveBeenCalledWith("/api/prompt", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ request: "why is #5 paused?" }),
+		});
+	});
+
+	it("throws with the response body when the request fails", async () => {
+		const fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			text: () => Promise.resolve("prompt unavailable"),
+		});
+		vi.stubGlobal("fetch", fetch);
+		await expect(submitPrompt("hi")).rejects.toThrow("prompt unavailable");
+	});
+});
+
+describe("promptAgentLabel", () => {
+	it("names the agent and how its answer stands", () => {
+		expect(promptAgentLabel({ status: "pending", agent: "claude/opus" })).toBe(
+			"agent (claude/opus) is working on it...",
+		);
+		expect(promptAgentLabel({ status: "failed" })).toBe("agent failed");
+		expect(promptAgentLabel({ status: "done", agent: "codex" })).toBe(
+			"agent (codex)",
+		);
+	});
+});
+
 describe("submitRefresh", () => {
 	it("posts to /api/refresh", async () => {
 		const fetch = vi.fn().mockResolvedValue({ ok: true });
@@ -455,6 +494,8 @@ describe("buildSettingsUpdate", () => {
 				unblockInterval: " 10m ",
 				unblockAgent: "claude",
 				unblockModel: "opus",
+				promptAgent: "codex",
+				promptModel: " gpt-5 ",
 				activeAgents: ["codex", "muse"],
 			}),
 		).toEqual({
@@ -466,6 +507,8 @@ describe("buildSettingsUpdate", () => {
 			unblockInterval: "10m",
 			unblockAgent: "claude",
 			unblockModel: "opus",
+			promptAgent: "codex",
+			promptModel: "gpt-5",
 			activeAgents: ["codex", "muse"],
 		});
 	});
@@ -489,6 +532,8 @@ describe("buildSettingsUpdate", () => {
 			unblockInterval: "0",
 			unblockAgent: "",
 			unblockModel: "",
+			promptAgent: "",
+			promptModel: "",
 		});
 	});
 });

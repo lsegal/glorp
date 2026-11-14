@@ -20,7 +20,7 @@ type stubInstance struct {
 	server   *Server
 	http     *httptest.Server
 	actions  []core.JobAction
-	unblocks []core.UnblockRequest
+	unblocks []string
 	updates  []core.IssueUpdate
 }
 
@@ -56,9 +56,9 @@ func newStubInstance(t *testing.T) *stubInstance {
 	server.SetSettingsHandler(func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error) {
 		return core.SettingsSnapshot{Concurrency: 2, UnblockInterval: "15m"}, nil
 	})
-	server.SetUnblockHandler(func(_ context.Context, request core.UnblockRequest) (core.UnblockResult, error) {
-		stub.unblocks = append(stub.unblocks, request)
-		return core.UnblockResult{Jobs: []string{"o/r#2"}, Message: "running an unblock round for 1 job(s)"}, nil
+	server.SetUnblockHandler(func(key string) error {
+		stub.unblocks = append(stub.unblocks, key)
+		return nil
 	})
 	server.SetIssueUpdateHandler(func(_ context.Context, update core.IssueUpdate) (core.IssueUpdateResult, error) {
 		stub.updates = append(stub.updates, update)
@@ -370,19 +370,23 @@ func TestMCPJobActionsMatchTheDashboardButtons(t *testing.T) {
 func TestMCPTriggerUnblockRunsARound(t *testing.T) {
 	stub := newStubInstance(t)
 	result := stub.callJSON(t, "trigger_unblock", nil)
-	if jobs, _ := result["jobs"].([]any); len(jobs) != 1 || jobs[0] != "o/r#2" {
+	if result["requested"] != true || result["job"] != "" || !strings.Contains(result["message"].(string), "every stuck job") {
 		t.Errorf("result = %v", result)
 	}
-	stub.callJSON(t, "trigger_unblock", map[string]any{"number": 2, "target": "o/r"})
-	want := []core.UnblockRequest{{}, {Target: "o/r", Number: 2}}
-	if !slices.Equal(stub.unblocks, want) {
-		t.Errorf("unblock requests = %+v, want %+v", stub.unblocks, want)
+	if named := stub.callJSON(t, "trigger_unblock", map[string]any{"number": 2}); named["job"] != "o/r#2" {
+		t.Errorf("named result = %v", named)
 	}
-	stub.server.SetUnblockHandler(func(context.Context, core.UnblockRequest) (core.UnblockResult, error) {
-		return core.UnblockResult{}, core.ErrNotReady
+	if text, isError := stub.call(t, "trigger_unblock", map[string]any{"number": 99}); !isError || !strings.Contains(text, "no job #99") {
+		t.Errorf("a missing job returned %q", text)
+	}
+	if want := []string{"", "o/r#2"}; !slices.Equal(stub.unblocks, want) {
+		t.Errorf("unblock requests = %q, want %q", stub.unblocks, want)
+	}
+	stub.server.SetUnblockHandler(func(string) error {
+		return errors.New("an unblock round is already requested and has not started yet")
 	})
-	if text, isError := stub.call(t, "trigger_unblock", nil); !isError || !strings.Contains(text, "still starting") {
-		t.Errorf("a run still starting returned %q", text)
+	if text, isError := stub.call(t, "trigger_unblock", nil); !isError || !strings.Contains(text, "already requested") {
+		t.Errorf("a pending round returned %q", text)
 	}
 }
 

@@ -180,6 +180,29 @@ export async function submitJobAction(job, action) {
 
 // submitRefresh asks the daemon to repoll GitHub immediately instead of
 // waiting out its normal poll interval (issue #646).
+// submitPrompt hands a request to the prompt agent (issue #801). The daemon
+// answers at once with the request's pending entry; the answer itself arrives
+// in /api/state's prompts once the agent call finishes.
+export async function submitPrompt(request) {
+	const response = await fetch("/api/prompt", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ request }),
+	});
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+	return response.json();
+}
+
+// promptAgentLabel names who answered a prompt entry and how it stands.
+export function promptAgentLabel(entry) {
+	const agent = entry.agent ? `agent (${entry.agent})` : "agent";
+	if (entry.status === "pending") return `${agent} is working on it...`;
+	if (entry.status === "failed") return `${agent} failed`;
+	return agent;
+}
+
 export async function submitRefresh() {
 	const response = await fetch("/api/refresh", { method: "POST" });
 	if (!response.ok) {
@@ -256,6 +279,8 @@ export function buildSettingsUpdate(form) {
 		unblockInterval: String(form.unblockInterval ?? "").trim() || "0",
 		unblockAgent: form.unblockAgent ?? "",
 		unblockModel: String(form.unblockModel ?? "").trim(),
+		promptAgent: form.promptAgent ?? "",
+		promptModel: String(form.promptModel ?? "").trim(),
 	};
 	const activeAgents = (form.activeAgents || []).filter(Boolean);
 	if (activeAgents.length) update.activeAgents = activeAgents;
