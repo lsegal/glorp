@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a prompt area to the terminal and web dashboards, where the owner can ask an agent about this glorp instance and its jobs (issue #801). Press `p` in the terminal dashboard, or use the prompt panel above the web dashboard's logs. The agent answers from the instance's live state, such as its version, agents, quotas, settings, and each job's status, wait reason, and latest output, and checks a job's issue and pull request on GitHub before explaining why it is paused or stuck. It can retry, pause, resume, or stop a job with the same effect as the dashboard buttons, run a stuck-job watchdog round now over every stuck job or one named job, update an issue or pull request by posting a comment that mentions its author and this instance, and file an issue with gh-create, marked as created by this instance. It refuses anything else, such as editing code, and it never claims a job. Requests run in the background, so neither dashboard waits on them, and each answer appears in the prompt area when it is ready. The agent and model default to the coding agent and its model. Set them with `--prompt-agent` and `--prompt-model`, or in the web dashboard's settings, and the next request uses the change.
+
 ## v1.5.26 - 2026-11-14
 
 - Fix glorp's self-update on Windows sometimes failing with `The process cannot access the file because it is being used by another process` (issue #799). Right after a new `glorp.exe` is written, antivirus or the search indexer can hold it open for a moment, and moving it aside during the next update then failed. The updater now keeps retrying the move for up to 5 seconds before it gives up.

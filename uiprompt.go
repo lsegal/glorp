@@ -170,7 +170,7 @@ func renderPromptEntries(entries []core.PromptEntry, width int) string {
 	wrap := lipgloss.NewStyle().Width(max(1, width))
 	var blocks []string
 	for _, entry := range entries {
-		block := []string{barStyle.Render("you: ") + wrap.Render(entry.Request)}
+		block := []string{barStyle.Render("you: ") + wrap.Width(max(1, width-5)).Render(entry.Request)}
 		agent := "agent"
 		if entry.Agent != "" {
 			agent += " (" + entry.Agent + ")"
@@ -184,7 +184,7 @@ func renderPromptEntries(entries []core.PromptEntry, width int) string {
 			block = append(block, active.Render(agent+":"), wrap.Render(entry.Response))
 		}
 		for _, action := range entry.Actions {
-			block = append(block, done.Render("-> ")+wrap.Render(action))
+			block = append(block, done.Render("-> ")+wrap.Width(max(1, width-3)).Render(action))
 		}
 		blocks = append(blocks, strings.Join(block, "\n"))
 	}
