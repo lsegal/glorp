@@ -2121,7 +2121,13 @@ func (r CommandRunner) RunSessionWithOutput(ctx context.Context, issue Issue, se
 const agentCommandWaitDelay = 5 * time.Second
 
 func newAgentCommand(ctx context.Context, binary string, args ...string) *exec.Cmd {
+	binary, args, shimErr := agentShimArgv(binary, args)
 	cmd := exec.CommandContext(ctx, binary, args...)
+	if shimErr != nil {
+		// Start reports it, so every caller fails the call loudly instead of
+		// the agent answering a truncated prompt (issue #809).
+		cmd.Err = shimErr
+	}
 	// Cancelling the run ends the agent's whole process tree, not just the
 	// agent, and Wait stops waiting on its output pipes soon after. A tree the
 	// shutdown checkpoint paused cannot exit by itself, so killing only the
