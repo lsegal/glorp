@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Log why the stuck-job watchdog's unblock agent failed (issue #793). When the unblock agent exited with an error, the log said only `unblock agent failed: exit status 1`, and that bare exit code was all the next round had to go on. The log now shows the last 20 lines of what the agent wrote, and each stuck job's history records its last few lines, so the next round escalates on what actually happened. An agent that prints its closing report and then exits with an error, such as when it could not unblock a job, is logged with the outcome it reported. A failed call that wrote nothing says the agent produced no output.
+
 ## v1.5.24 - 2026-11-13
 
 
