@@ -350,14 +350,36 @@ func replaceExecutable(target, staged string, windows bool) error {
 		_, _ = rand.Read(suffix)
 		backup = target + "." + hex.EncodeToString(suffix) + ".bak"
 	}
-	if err := os.Rename(target, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := renameRetry(target, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("move %s aside: %w", target, err)
 	}
-	if err := os.Rename(tmpPath, target); err != nil {
-		_ = os.Rename(backup, target)
+	if err := renameRetry(tmpPath, target); err != nil {
+		_ = renameRetry(backup, target)
 		return err
 	}
 	return nil
+}
+
+// renameRetryTimeout bounds how long renameRetry keeps trying.
+const renameRetryTimeout = 5 * time.Second
+
+// renameRetry renames from to to, retrying briefly while it fails. On Windows
+// a file that was just written or renamed is often held open for a moment by
+// antivirus or the search indexer, and renaming it then fails with a sharing
+// violation (issue #799). A missing source fails at once.
+func renameRetry(from, to string) error {
+	deadline := time.Now().Add(renameRetryTimeout)
+	delay := 10 * time.Millisecond
+	for {
+		err := os.Rename(from, to)
+		if err == nil || errors.Is(err, os.ErrNotExist) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(delay)
+		if delay < 250*time.Millisecond {
+			delay *= 2
+		}
+	}
 }
 
 // updater keeps a watch on the newest glorp release (issue #783). Each round
