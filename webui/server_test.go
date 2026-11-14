@@ -528,6 +528,75 @@ func TestServerWarmsAndCachesAgents(t *testing.T) {
 	}
 }
 
+// TestServerServesStaleAgentsWhileRefreshing checks that a stale agent probe
+// is still served at once, marked as refreshing, while a fresh probe runs in
+// the background, and that the fresh values replace it once they arrive
+// (issue #803).
+func TestServerServesStaleAgentsWhileRefreshing(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes := make(chan []core.AgentStatus, 2)
+	probes <- []core.AgentStatus{{Name: "codex", Auth: "signed out"}}
+	ui.SetAgentsHandler(func(context.Context) ([]core.AgentStatus, error) {
+		return <-probes, nil
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	read := func() (*httptest.ResponseRecorder, []core.AgentStatus) {
+		response := httptest.NewRecorder()
+		ui.ServeHTTP(response, request)
+		var got []core.AgentStatus
+		if response.Code == http.StatusOK {
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return response, got
+	}
+	deadline := time.Now().Add(time.Second)
+	response, got := read()
+	for response.Code != http.StatusOK && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		response, got = read()
+	}
+	if response.Code != http.StatusOK || response.Header().Get(AgentsRefreshingHeader) != "" {
+		t.Fatalf("fresh GET agents = %d, refreshing = %q", response.Code, response.Header().Get(AgentsRefreshingHeader))
+	}
+
+	ui.mu.Lock()
+	ui.agentsMaxAge = time.Nanosecond
+	ui.mu.Unlock()
+	time.Sleep(time.Millisecond)
+	start := time.Now()
+	response, got = read()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("stale GET agents took %s, want it immediate", elapsed)
+	}
+	if response.Code != http.StatusOK || len(got) != 1 || got[0].Auth != "signed out" {
+		t.Fatalf("stale GET agents = %d %#v, want the last probe", response.Code, got)
+	}
+	if response.Header().Get(AgentsRefreshingHeader) != "true" {
+		t.Fatal("stale GET agents is not marked as refreshing")
+	}
+
+	ui.mu.Lock()
+	ui.agentsMaxAge = time.Hour
+	ui.mu.Unlock()
+	probes <- []core.AgentStatus{{Name: "codex", Auth: "signed in"}}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response, got = read()
+		if response.Header().Get(AgentsRefreshingHeader) == "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(got) != 1 || got[0].Auth != "signed in" || response.Header().Get(AgentsRefreshingHeader) != "" {
+		t.Fatalf("refreshed GET agents = %#v, refreshing = %q, want the fresh probe", got, response.Header().Get(AgentsRefreshingHeader))
+	}
+}
+
 func TestServerRejectsUnavailableAgents(t *testing.T) {
 	ui, err := New("v1.2.3")
 	if err != nil {

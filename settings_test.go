@@ -13,6 +13,8 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -246,13 +248,13 @@ func TestGlorpApplySettingsReadyStateDefaultReflectsUnsetFallback(t *testing.T) 
 }
 
 // TestGlorpApplySettingsFailsFastBeforeRunIsReady checks that a settings
-// request made before Run starts fails with core.ErrNotReady, bounded by
+// change made before Run starts fails with core.ErrNotReady, bounded by
 // notReadyWait, instead of blocking forever on a channel Run isn't reading
 // yet -- the hang reported in issue #579.
 func TestGlorpApplySettingsFailsFastBeforeRunIsReady(t *testing.T) {
 	w := &Glorp{notReadyWait: 20 * time.Millisecond}
 	start := time.Now()
-	_, err := w.ApplySettings(context.Background(), SettingsUpdate{})
+	_, err := w.ApplySettings(context.Background(), SettingsUpdate{Concurrency: intPtr(2)})
 	if !errors.Is(err, core.ErrNotReady) {
 		t.Fatalf("ApplySettings error = %v, want core.ErrNotReady", err)
 	}
@@ -291,12 +293,133 @@ func TestGlorpApplySettingsSucceedsOnceRunBecomesReady(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	if _, err := w.ApplySettings(ctx, SettingsUpdate{}); err != nil {
+	if _, err := w.ApplySettings(ctx, SettingsUpdate{Concurrency: intPtr(2)}); err != nil {
 		t.Fatalf("ApplySettings = %v, want success once Run becomes ready", err)
 	}
 
 	cancel()
 	<-done
+}
+
+// TestGlorpReadsSettingsBeforeRunStarts checks that reading settings answers
+// at once from the configured values even before Run is looping, rather
+// than waiting for it the way a change must (issue #803).
+func TestGlorpReadsSettingsBeforeRunStarts(t *testing.T) {
+	w := &Glorp{Concurrency: 3, ReadyState: "Agent Ready", AllowedCommenters: []string{"octocat"}, notReadyWait: 5 * time.Second}
+	start := time.Now()
+	for _, read := range []func() (SettingsSnapshot, error){
+		func() (SettingsSnapshot, error) { return w.CurrentSettings(context.Background()) },
+		func() (SettingsSnapshot, error) { return w.ApplySettings(context.Background(), SettingsUpdate{}) },
+	} {
+		snapshot, err := read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Concurrency != 3 || snapshot.ReadyState != "Agent Ready" || len(snapshot.AllowedCommenters) != 1 {
+			t.Fatalf("snapshot = %#v, want the configured settings", snapshot)
+		}
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("reading settings took %s, want it immediate", elapsed)
+	}
+}
+
+// hungIssueSource blocks every listing until its context ends, standing in
+// for a poll stuck on GitHub or the network.
+type hungIssueSource struct {
+	once    sync.Once
+	started chan struct{}
+}
+
+func (s *hungIssueSource) ListIssues(ctx context.Context, _ string) ([]Issue, error) {
+	s.once.Do(func() { close(s.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestSettingsLoadNeverWaitsOnPollsOrProbes pins issue #803: with the Run loop
+// stuck in a poll and every agent probe hung, opening settings still answers
+// at once with the stored values, and the load starts no probe of its own.
+func TestSettingsLoadNeverWaitsOnPollsOrProbes(t *testing.T) {
+	dir := t.TempDir()
+	source := &hungIssueSource{started: make(chan struct{})}
+	r := &fakeRunner{release: make(chan struct{})}
+	defer close(r.release)
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 4, ReadyState: "Agent Ready", StatePath: filepath.Join(dir, "state"), Issues: source, Runner: r, Out: &syncBuffer{}, notReadyWait: time.Minute}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	select {
+	case <-source.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Run loop never started polling")
+	}
+
+	ui, err := webui.New("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probes atomic.Int32
+	probeRelease := make(chan struct{})
+	defer close(probeRelease)
+	ui.SetSettingsHandler(persistingSettingsHandler(w.ApplySettings, filepath.Join(dir, "config.json"), nil))
+	ui.SetAgentsHandler(func(context.Context) ([]core.AgentStatus, error) {
+		probes.Add(1)
+		<-probeRelease
+		return nil, nil
+	})
+
+	start := time.Now()
+	response := serveWithin(t, ui, http.MethodGet, "/api/settings")
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET settings = %d, body = %q", response.Code, response.Body.String())
+	}
+	var snapshot SettingsSnapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Concurrency != 4 || snapshot.ReadyState != "Agent Ready" {
+		t.Fatalf("settings = %#v, want the stored values", snapshot)
+	}
+	response = serveWithin(t, ui, http.MethodGet, "/api/agents")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET agents during a hung probe = %d, want %d (checking)", response.Code, http.StatusServiceUnavailable)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("loading settings took %s, want it immediate", elapsed)
+	}
+	if got := probes.Load(); got > 1 {
+		t.Fatalf("settings load started %d agent probes, want only the background one", got)
+	}
+	r.mu.Lock()
+	ran := len(r.got)
+	r.mu.Unlock()
+	if ran != 0 {
+		t.Fatalf("settings load ran %d agents, want none", ran)
+	}
+}
+
+// serveWithin answers one dashboard request, failing the test instead of
+// hanging when the server does not answer within a second.
+func serveWithin(t *testing.T, handler http.Handler, method, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	response := httptest.NewRecorder()
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		handler.ServeHTTP(response, httptest.NewRequest(method, path, nil))
+	}()
+	select {
+	case <-served:
+		return response
+	case <-time.After(time.Second):
+		t.Fatalf("%s %s did not answer within a second", method, path)
+		return nil
+	}
 }
 
 func TestGlorpRunnerAppliesLiveAgentOverride(t *testing.T) {
