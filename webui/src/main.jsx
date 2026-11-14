@@ -535,7 +535,7 @@ function SettingsModal({ onClose }) {
 										type="text"
 										value={form.unblockInterval}
 										onChange={update("unblockInterval")}
-										placeholder="5m"
+										placeholder="15m"
 									/>
 								</label>
 								<label htmlFor="settings-unblock-agent">
