@@ -597,6 +597,61 @@ func TestServerServesStaleAgentsWhileRefreshing(t *testing.T) {
 	}
 }
 
+// TestServerSkipsRefreshWhenProbeJustFinished covers issue #813. A request
+// that saw unprobed agents asks for a refresh, but the probe SetAgentsHandler
+// started can finish before that ask. The ask must then not start another
+// probe, or the fresh statuses are served marked as refreshing.
+func TestServerSkipsRefreshWhenProbeJustFinished(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes := make(chan struct{}, 2)
+	ui.SetAgentsHandler(func(context.Context) ([]core.AgentStatus, error) {
+		probes <- struct{}{}
+		return []core.AgentStatus{{Name: "codex", Auth: "signed in"}}, nil
+	})
+	<-probes
+	deadline := time.Now().Add(time.Second)
+	for {
+		ui.mu.RLock()
+		done := ui.agentsProbed && !ui.agentsRefreshing
+		ui.mu.RUnlock()
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first agents probe did not finish")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// The request path's refresh ask, arriving after the probe finished.
+	ui.refreshStaleAgentStatuses()
+	ui.mu.RLock()
+	refreshing := ui.agentsRefreshing
+	ui.mu.RUnlock()
+	if refreshing || len(probes) != 0 {
+		t.Fatal("refresh ask after a fresh probe started a redundant probe")
+	}
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+	if response.Code != http.StatusOK || response.Header().Get(AgentsRefreshingHeader) != "" {
+		t.Fatalf("GET agents = %d, refreshing = %q, want fresh statuses", response.Code, response.Header().Get(AgentsRefreshingHeader))
+	}
+
+	ui.mu.Lock()
+	ui.agentsMaxAge = time.Nanosecond
+	ui.mu.Unlock()
+	time.Sleep(time.Millisecond)
+	ui.refreshStaleAgentStatuses()
+	select {
+	case <-probes:
+	case <-time.After(time.Second):
+		t.Fatal("refresh ask for stale statuses did not probe")
+	}
+}
+
 func TestServerRejectsUnavailableAgents(t *testing.T) {
 	ui, err := New("v1.2.3")
 	if err != nil {

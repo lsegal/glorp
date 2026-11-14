@@ -193,8 +193,20 @@ func (ui *Server) SetAgentsHandler(handler func(context.Context) ([]core.AgentSt
 // running. A completed result is retained so later settings-modal opens do
 // not repeat the slow CLI probes.
 func (ui *Server) refreshAgentStatuses() {
+	ui.startAgentsRefresh(true)
+}
+
+// refreshStaleAgentStatuses starts a background refresh only when the last
+// probe is missing or stale. It rechecks that under the lock that marks the
+// refresh running, so a probe that finished after the caller looked does not
+// start a redundant one (issue #813).
+func (ui *Server) refreshStaleAgentStatuses() {
+	ui.startAgentsRefresh(false)
+}
+
+func (ui *Server) startAgentsRefresh(force bool) {
 	ui.mu.Lock()
-	if ui.agents == nil || ui.agentsRefreshing {
+	if ui.agents == nil || ui.agentsRefreshing || !force && !ui.agentsStaleLocked() {
 		ui.mu.Unlock()
 		return
 	}
@@ -212,6 +224,12 @@ func (ui *Server) refreshAgentStatuses() {
 			ui.agentsProbedAt = time.Now()
 		}
 	}()
+}
+
+// agentsStaleLocked reports whether the agent statuses were never probed or are
+// older than agentsMaxAge. The caller holds ui.mu.
+func (ui *Server) agentsStaleLocked() bool {
+	return !ui.agentsProbed || time.Since(ui.agentsProbedAt) > ui.agentsMaxAge
 }
 
 func (ui *Server) Snapshot(snapshot core.Snapshot) {
@@ -503,15 +521,11 @@ func (ui *Server) serveAgents(w http.ResponseWriter, r *http.Request) {
 	ui.mu.RLock()
 	statuses := append([]core.AgentStatus(nil), ui.agentStatuses...)
 	probed := ui.agentsProbed
-	stale := time.Since(ui.agentsProbedAt) > ui.agentsMaxAge
 	ui.mu.RUnlock()
+	ui.refreshStaleAgentStatuses()
 	if !probed {
-		ui.refreshAgentStatuses()
 		http.Error(w, "agents are still being probed", http.StatusServiceUnavailable)
 		return
-	}
-	if stale {
-		ui.refreshAgentStatuses()
 	}
 	ui.mu.RLock()
 	refreshing := ui.agentsRefreshing
