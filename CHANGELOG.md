@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.26 - 2026-11-14
+
 - Fix glorp's self-update on Windows sometimes failing with `The process cannot access the file because it is being used by another process` (issue #799). Right after a new `glorp.exe` is written, antivirus or the search indexer can hold it open for a moment, and moving it aside during the next update then failed. The updater now keeps retrying the move for up to 5 seconds before it gives up.
 - Keep the installed gh-fix, gh-discuss, and gh-create skills current when glorp updates itself (issue #797). The updater replaced only the binary, so agents kept loading the skills from the last install. That meant pull requests opened by glorp runs had no `/glorp:<ID>` in their `**Agents:**` footer, and issues filed by agents had no `**Created by Glorp:**` marker. After it installs a new release, the updater now reinstalls the skills for that release, for every agent the installers target, before glorp restarts. At startup, glorp also checks the installed skills against the ones its release ships with and reinstalls any that differ. When it cannot, such as when `npx` is not installed, it logs a warning naming the stale skills, and `glorp agents` and the web dashboard's agents tab mark each agent with a `skills` warning until they are reinstalled. Development builds skip the check.
 
