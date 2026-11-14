@@ -433,14 +433,8 @@ func writeAgentReports(out io.Writer, reports []agentReport) {
 // source and could not be read is unavailable, which is a problem worth
 // telling apart from the default.
 func describeQuota(report agentReport) string {
-	if text := strings.TrimSpace(report.quota); text != "" {
+	if text := quotaReading(report.quota, report.tracksQuota, report.quotaErr); text != "" {
 		return text
-	}
-	if report.tracksQuota {
-		if report.quotaErr != nil {
-			return "unavailable: " + firstLine(strings.TrimSpace(report.quotaErr.Error()))
-		}
-		return "unavailable"
 	}
 	return "not tracked"
 }
