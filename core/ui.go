@@ -388,3 +388,19 @@ type IssueUpdateResult struct {
 	URL    string `json:"url"`
 	Author string `json:"author"`
 }
+
+// IssueCreate asks for an issue to be filed on Repository through the
+// gh-create skill (issue #807), described by Text. Model, when set, overrides
+// the configured prompt-agent model for this request.
+type IssueCreate struct {
+	Repository string `json:"repository"`
+	Text       string `json:"text"`
+	Model      string `json:"model,omitempty"`
+}
+
+// IssueCreateResult is the issue an IssueCreate filed and the agent that
+// filed it.
+type IssueCreateResult struct {
+	URL   string `json:"url"`
+	Agent string `json:"agent"`
+}

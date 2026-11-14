@@ -59,6 +59,10 @@ type Server struct {
 	// and post an update comment (issue #806).
 	unblock     func(key string) error
 	issueUpdate func(context.Context, core.IssueUpdate) (core.IssueUpdateResult, error)
+	// ask and createIssue back the MCP tools that run the prompt agent and
+	// file an issue through gh-create (issue #807).
+	ask         func(ctx context.Context, request, model string) (core.PromptEntry, error)
+	createIssue func(context.Context, core.IssueCreate) (core.IssueCreateResult, error)
 	refresh     func(context.Context) error
 	restart     func(context.Context) ([]core.CheckpointResult, error)
 	// restartProgress reports the shutdown checkpoint while a restart is

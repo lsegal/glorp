@@ -51,6 +51,22 @@ func (ui *Server) SetIssueUpdateHandler(handler func(context.Context, core.Issue
 	ui.mu.Unlock()
 }
 
+// SetAskHandler wires the MCP ask tool to the prompt agent (issue #807): it
+// answers a request and its optional model override, and waits for the answer.
+func (ui *Server) SetAskHandler(handler func(ctx context.Context, request, model string) (core.PromptEntry, error)) {
+	ui.mu.Lock()
+	ui.ask = handler
+	ui.mu.Unlock()
+}
+
+// SetCreateIssueHandler wires the MCP create_issue tool to a function that
+// files an issue through the gh-create skill (issue #807).
+func (ui *Server) SetCreateIssueHandler(handler func(context.Context, core.IssueCreate) (core.IssueCreateResult, error)) {
+	ui.mu.Lock()
+	ui.createIssue = handler
+	ui.mu.Unlock()
+}
+
 type mcpRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -160,7 +176,7 @@ func (ui *Server) handleMCP(ctx context.Context, request mcpRequest) (any, *mcpE
 			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "glorp", "version": glorpVersion},
-			"instructions":    "Tools for the running glorp instance whose dashboard serves this endpoint: read its status and jobs, retry, pause, resume, or stop a job as the dashboard buttons do, run a stuck-job watchdog round now, and post an update comment on an issue or pull request.",
+			"instructions":    "Tools for the running glorp instance whose dashboard serves this endpoint: read its status and jobs, retry, pause, resume, or stop a job as the dashboard buttons do, run a stuck-job watchdog round now, post an update comment on an issue or pull request, ask the instance's prompt agent about it, and file an issue through gh-create.",
 		}, nil
 	case "ping":
 		return map[string]any{}, nil
@@ -204,6 +220,8 @@ type mcpArguments struct {
 	Lines      *int   `json:"lines,omitempty"`
 	Repository string `json:"repository,omitempty"`
 	Text       string `json:"text,omitempty"`
+	Request    string `json:"request,omitempty"`
+	Model      string `json:"model,omitempty"`
 }
 
 func mcpToolResult(value any) map[string]any {
@@ -241,6 +259,7 @@ var (
 	mcpTargetProperty = map[string]any{"type": "string", "description": "The job's target, such as OWNER/REPO, needed only when more than one target has a job with this number."}
 	mcpJobSchema      = mcpSchema([]string{"number"}, map[string]any{"number": mcpNumberProperty, "target": mcpTargetProperty})
 	mcpReadOnly       = map[string]any{"readOnlyHint": true}
+	mcpModelProperty  = map[string]any{"type": "string", "description": "A model for this call only, such as opus. Leave it out to use the prompt agent's configured model, the one the --prompt-model flag and the web dashboard's settings set."}
 )
 
 var mcpTools = []mcpTool{
@@ -254,6 +273,8 @@ var mcpTools = []mcpTool{
 	{Name: "stop_job", Title: "Stop a job", Description: "The dashboard's Stop button: stops an active or waiting job's agent, or clears a paused job and releases its claim on the issue.", InputSchema: mcpJobSchema, Annotations: map[string]any{"destructiveHint": true}},
 	{Name: "trigger_unblock", Title: "Run an unblock round", Description: "Runs a stuck-job watchdog round now, over every stuck job or the one job named, with the same agent call, history, and logging as a scheduled round. A named job is covered even when it is not stuck. It returns once the round is requested; the round runs on the watchdog and never overlaps another.", InputSchema: mcpSchema(nil, map[string]any{"number": map[string]any{"type": "integer", "minimum": 1, "description": "One job's issue number to run the round for; leave it out to cover every stuck job."}, "target": mcpTargetProperty})},
 	{Name: "update_issue", Title: "Post an update on an issue", Description: "Posts a comment on an issue or pull request that mentions its author and this instance and carries the update text, so the owning job hears it through glorp's mention path. It returns the comment's URL and never edits the issue or pull request body.", InputSchema: mcpSchema([]string{"number", "text"}, map[string]any{"number": map[string]any{"type": "integer", "minimum": 1, "description": "The issue or pull request number."}, "repository": map[string]any{"type": "string", "description": "OWNER/REPO hosting it. Defaults to the repository of the instance's job with this number, or the instance's only watched repository."}, "text": map[string]any{"type": "string", "description": "The update to post."}})},
+	{Name: "ask", Title: "Ask the prompt agent", Description: "Asks the instance's prompt agent, the one behind the dashboards' prompt area, about this glorp instance and its jobs, and waits for its answer. It answers from the live state, can retry, pause, resume, or stop a job or run an unblock round when asked, and refuses anything outside the instance, such as editing code. The request and answer also show in the prompt area.", InputSchema: mcpSchema([]string{"request"}, map[string]any{"request": map[string]any{"type": "string", "description": "The question or request, as the owner would type it into the prompt area."}, "model": mcpModelProperty})},
+	{Name: "create_issue", Title: "File an issue", Description: "Files an issue on a repository through the gh-create skill, run by the prompt agent with this instance's identity, so the issue carries gh-create's created-by marker. It waits for the skill and returns the new issue's URL.", InputSchema: mcpSchema([]string{"text"}, map[string]any{"repository": map[string]any{"type": "string", "description": "OWNER/REPO to file the issue on. Defaults to the instance's only watched repository."}, "text": map[string]any{"type": "string", "description": "What the issue is about, as the owner would describe it to gh-create."}, "model": mcpModelProperty})},
 }
 
 var mcpToolHandlers = map[string]func(*Server, context.Context, mcpArguments) (any, error){
@@ -275,6 +296,8 @@ var mcpToolHandlers = map[string]func(*Server, context.Context, mcpArguments) (a
 	},
 	"trigger_unblock": (*Server).mcpTriggerUnblock,
 	"update_issue":    (*Server).mcpUpdateIssue,
+	"ask":             (*Server).mcpAsk,
+	"create_issue":    (*Server).mcpCreateIssue,
 }
 
 // mcpState is the dashboard state at the moment of a call, the same state
@@ -537,6 +560,55 @@ func (ui *Server) mcpUpdateIssue(ctx context.Context, args mcpArguments) (any, e
 	return map[string]any{"url": result.URL, "author": result.Author, "repository": repository, "number": args.Number}, nil
 }
 
+func (ui *Server) mcpAsk(ctx context.Context, args mcpArguments) (any, error) {
+	ui.mu.RLock()
+	handler := ui.ask
+	ui.mu.RUnlock()
+	if handler == nil {
+		return nil, errors.New("the prompt agent is unavailable")
+	}
+	if strings.TrimSpace(args.Request) == "" {
+		return nil, errors.New("the request is empty")
+	}
+	entry, err := handler(ctx, args.Request, args.Model)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Status == "failed" {
+		return nil, errors.New(entry.Response)
+	}
+	actions := entry.Actions
+	if actions == nil {
+		actions = []string{}
+	}
+	return map[string]any{"answer": entry.Response, "agent": entry.Agent, "actions": actions}, nil
+}
+
+func (ui *Server) mcpCreateIssue(ctx context.Context, args mcpArguments) (any, error) {
+	ui.mu.RLock()
+	handler := ui.createIssue
+	ui.mu.RUnlock()
+	if handler == nil {
+		return nil, errors.New("filing issues is unavailable")
+	}
+	if strings.TrimSpace(args.Text) == "" {
+		return nil, errors.New("the issue description is empty")
+	}
+	repository := args.Repository
+	if repository == "" {
+		resolved, err := onlyRepository(ui.mcpState().Snapshot)
+		if err != nil {
+			return nil, errors.New("name the repository to file the issue on")
+		}
+		repository = resolved
+	}
+	result, err := handler(ctx, core.IssueCreate{Repository: repository, Text: args.Text, Model: args.Model})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"url": result.URL, "agent": result.Agent, "repository": repository}, nil
+}
+
 // updateRepository picks the repository an update without one goes to: that
 // of the one job with the number, or else the instance's only watched
 // repository.
@@ -560,16 +632,25 @@ func updateRepository(snapshot core.Snapshot, number int) (string, error) {
 	if len(found) > 1 {
 		return "", fmt.Errorf("jobs in %s all have #%d; name the repository", strings.Join(found, " and "), number)
 	}
+	if repository, err := onlyRepository(snapshot); err == nil {
+		return repository, nil
+	}
+	return "", fmt.Errorf("name the repository of #%d", number)
+}
+
+// onlyRepository is the instance's watched repository when it watches just
+// one.
+func onlyRepository(snapshot core.Snapshot) (string, error) {
 	var repositories []string
 	for _, target := range snapshot.Targets {
 		if core.ValidRepo(target) {
 			repositories = append(repositories, target)
 		}
 	}
-	if len(repositories) == 1 {
-		return repositories[0], nil
+	if len(repositories) != 1 {
+		return "", errors.New("the instance does not watch exactly one repository")
 	}
-	return "", fmt.Errorf("name the repository of #%d", number)
+	return repositories[0], nil
 }
 
 func (ui *Server) mcpFindJob(args mcpArguments) (core.JobSnapshot, error) {
