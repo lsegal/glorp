@@ -336,6 +336,25 @@ type Glorp struct {
 	unblockOverride  atomic.Pointer[unblockConfig]
 	// unblockRun replaces the unblock agent call in tests.
 	unblockRun func(context.Context, agentSpec, string) (string, error)
+	// unblockTrigger carries unblock rounds the prompt agent asks for into
+	// the watchdog's own loop, so they reuse its round and history and never
+	// overlap a timed round (issue #801). An empty key means every stuck job.
+	unblockTriggerOnce sync.Once
+	unblockTrigger     chan string
+	// promptOverride holds the prompt agent's agent and model override, and
+	// promptRun replaces its agent call in tests (issue #801).
+	promptOverride atomic.Pointer[unblockConfig]
+	promptRun      func(context.Context, agentSpec, string) (string, error)
+	// promptMu guards prompts, the prompt area's conversation, and
+	// promptNext, the ID its next entry gets.
+	promptMu   sync.Mutex
+	prompts    []core.PromptEntry
+	promptNext int
+	// published is the run's most recently published snapshot, and
+	// recentLogs its last log lines, which the prompt agent answers from
+	// (issue #801).
+	published  atomic.Pointer[core.Snapshot]
+	recentLogs []string
 }
 
 // publishHandledIssues records which issues are no longer dispatch candidates:
@@ -1844,6 +1863,10 @@ func (w *Glorp) logf(format string, args ...interface{}) {
 	if w.Out != nil {
 		fmt.Fprintln(w.Out, line)
 	}
+	w.recentLogs = append(w.recentLogs, line)
+	if len(w.recentLogs) > promptLogLines {
+		w.recentLogs = w.recentLogs[len(w.recentLogs)-promptLogLines:]
+	}
 	if w.UI != nil {
 		w.UI.Log(line)
 	}
@@ -2078,7 +2101,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if online && w.WebhookOnline != nil {
 			online = w.WebhookOnline()
 		}
-		w.UI.Snapshot(GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Paused: paused, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list, VisibleJobs: maxVisibleJobs})
+		snapshot := GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Paused: paused, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list, VisibleJobs: maxVisibleJobs}
+		w.published.Store(&snapshot)
+		w.UI.Snapshot(snapshot)
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent

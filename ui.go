@@ -1209,6 +1209,16 @@ func (reporters multiUIReporter) Snapshot(snapshot GlorpSnapshot) {
 	}
 }
 
+// Prompts forwards the prompt area's conversation to the reporters that show
+// one (issue #801).
+func (reporters multiUIReporter) Prompts(entries []core.PromptEntry) {
+	for _, reporter := range reporters {
+		if prompts, ok := reporter.(core.PromptReporter); ok && !isNilUIReporter(reporter) {
+			prompts.Prompts(entries)
+		}
+	}
+}
+
 func (reporters multiUIReporter) Log(line string) {
 	for _, reporter := range reporters {
 		if !isNilUIReporter(reporter) {

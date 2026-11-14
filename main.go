@@ -68,6 +68,8 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.Duration("unblock-interval", defaultUnblockInterval, "how often the stuck-job watchdog checks for paused jobs and jobs with no new output, and runs one agent call to unblock them (0 turns it off)")
 	flags.String("unblock-agent", "", "agent the stuck-job watchdog's unblock call runs, as agent/model:level (default: the coding agent)")
 	flags.String("unblock-model", "", "model the stuck-job watchdog's unblock call runs (default: the unblock agent's model)")
+	flags.String("prompt-agent", "", "agent the dashboards' prompt area runs requests with, as agent/model:level (default: the coding agent)")
+	flags.String("prompt-model", "", "model the dashboards' prompt area runs requests with (default: the prompt agent's model)")
 	flags.Duration("update-interval", defaultUpdateInterval, "how often to check for a newer glorp release; an update is offered in the dashboards and applied automatically when no agents are active (0 turns it off)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
@@ -160,6 +162,11 @@ func runWatch(args []string) (code int) {
 		return 2
 	}
 	unblock := unblockConfig{Agent: strings.TrimSpace(flagValue[string](flags, "unblock-agent")), Model: strings.TrimSpace(flagValue[string](flags, "unblock-model"))}
+	prompt := unblockConfig{Agent: strings.TrimSpace(flagValue[string](flags, "prompt-agent")), Model: strings.TrimSpace(flagValue[string](flags, "prompt-model"))}
+	if err := validateUnblockAgent(registry, prompt); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	if err := validateUnblockAgent(registry, unblock); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
@@ -374,6 +381,7 @@ func runWatch(args []string) (code int) {
 	w.noChangelog.Store(noChangelog)
 	w.SetUnblockInterval(unblockInterval)
 	w.SetUnblockAgent(unblock)
+	w.SetPromptAgent(prompt)
 	// Browser mode reads issues and boards off GitHub's rendered pages instead
 	// of the API. A nil browser leaves the GHCLI sources above in place.
 	applyBrowserSources(w, driver, browserOptions, gh)
