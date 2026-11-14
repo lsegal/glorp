@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Serve MCP at `/mcp` on the web dashboard's port, so an MCP client can drive a running glorp (issue #806). Point a client that speaks MCP's Streamable HTTP transport at the dashboard URL with `/mcp` added, such as `http://localhost:8765/mcp`. Its tools read the instance's status, settings, agents, and quotas; list jobs; return one job's state, session, and scrollback; and explain why a job is paused, blocked, waiting, or looks stuck. `retry_job`, `pause_job`, `resume_job`, and `stop_job` do what the dashboard's buttons do and refuse what those buttons would be disabled for; resume is Retry on a paused job. `trigger_unblock` runs a stuck-job watchdog round now, over every stuck job or one named job, with the same agent call, history, and logging as a scheduled round, and never while another round is running. `update_issue` posts a comment on an issue or pull request that mentions its author and this instance, so the owning job hears it, and returns the comment's URL; it never edits an issue or pull request body. Requests from a web page on another site are refused.
+
 ## v1.5.26 - 2026-11-14
 
 - Fix glorp's self-update on Windows sometimes failing with `The process cannot access the file because it is being used by another process` (issue #799). Right after a new `glorp.exe` is written, antivirus or the search indexer can hold it open for a moment, and moving it aside during the next update then failed. The updater now keeps retrying the move for up to 5 seconds before it gives up.
