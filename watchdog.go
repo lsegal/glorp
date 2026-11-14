@@ -206,13 +206,16 @@ func (w *Glorp) watchStuckJobs(ctx context.Context, jobs func() []JobSnapshot) {
 			if timer != nil {
 				timer.Stop()
 			}
-			// A job counts as silent when its scrollback has not changed since
-			// the last look, however long ago that was.
+			// A running job counts as silent when its scrollback has not
+			// changed since the last look, as long as that look was at least
+			// the shortest watchdog interval ago: an agent can be quiet for a
+			// few seconds without being stuck.
 			since := time.Since(baselineAt).Truncate(time.Second)
-			if since < time.Second {
-				since = time.Second
+			looked := baseline
+			if since < minUnblockInterval {
+				looked = nil
 			}
-			stuck, err := onDemandStuckJobs(jobs(), baseline, history, trigger.request, since)
+			stuck, err := onDemandStuckJobs(jobs(), looked, history, trigger.request, since)
 			result := core.UnblockResult{Jobs: make([]string, len(stuck))}
 			for i, item := range stuck {
 				result.Jobs[i] = item.Key

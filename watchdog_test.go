@@ -514,12 +514,12 @@ func TestTriggerUnblockCoversANamedJobWithItsHistory(t *testing.T) {
 		JobSnapshot{Target: "o/r", Number: 3, Status: "queued"},
 	)
 	for _, bad := range []core.UnblockRequest{{Number: 99}, {Target: "o/r"}, {Target: "x/y", Number: 3}} {
-		if _, err := w.TriggerUnblock(ctx, bad); err == nil {
+		if _, err := triggerWhenIdle(t, w, bad); err == nil {
 			t.Errorf("%+v started a round", bad)
 		}
 	}
 	// A healthy job named on purpose is still covered.
-	result, err := w.TriggerUnblock(ctx, core.UnblockRequest{Target: "o/r", Number: 3})
+	result, err := triggerWhenIdle(t, w, core.UnblockRequest{Target: "o/r", Number: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ func TestTriggerUnblockCoversANamedJobWithItsHistory(t *testing.T) {
 	}
 	awaitLog(t, logs, "o/r#3 got a local task: retried it")
 	// The named round kept job 1's history for the next round.
-	result, err = w.TriggerUnblock(ctx, core.UnblockRequest{Number: 1})
+	result, err = triggerWhenIdle(t, w, core.UnblockRequest{Number: 1})
 	if err != nil || len(result.Jobs) != 1 {
 		t.Fatalf("result = %+v, %v", result, err)
 	}
@@ -584,5 +584,17 @@ func TestTriggerUnblockWithNoStuckJobsRunsNothing(t *testing.T) {
 	}
 	if calls.count() != 0 {
 		t.Error("an empty round made an agent call")
+	}
+}
+
+// triggerWhenIdle asks for an on-demand round, waiting out the end of a round
+// that has logged its actions but not yet finished.
+func triggerWhenIdle(t *testing.T, w *Glorp, request core.UnblockRequest) (core.UnblockResult, error) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		result, err := w.TriggerUnblock(context.Background(), request)
+		if err == nil || !strings.Contains(err.Error(), "already running") || time.Now().After(deadline) {
+			return result, err
+		}
 	}
 }
