@@ -373,3 +373,18 @@ type PromptEntry struct {
 type PromptReporter interface {
 	Prompts([]PromptEntry)
 }
+
+// IssueUpdate is an update to post as a comment on Repository's issue or pull
+// request Number, mentioning its author so the owning job hears it through
+// glorp's mention path (issue #806).
+type IssueUpdate struct {
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
+	Text       string `json:"text"`
+}
+
+// IssueUpdateResult is the comment an IssueUpdate posted.
+type IssueUpdateResult struct {
+	URL    string `json:"url"`
+	Author string `json:"author"`
+}
