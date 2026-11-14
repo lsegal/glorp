@@ -194,7 +194,7 @@ func readClaudeQuota(ctx context.Context, binary string) (string, error) {
 	}
 	quota := formatClaudeQuota(claudeUsageText(out))
 	if quota == "" {
-		return "", fmt.Errorf("claude usage response missing session percentage")
+		return "", fmt.Errorf("claude usage response missing session and week percentages")
 	}
 	return quota, nil
 }
@@ -235,19 +235,25 @@ var (
 	claudeWeekUsagePattern    = regexp.MustCompile(`Current week \(all models\):\s*(\d+)% used`)
 )
 
+// formatClaudeQuota renders whichever of the session and week lines the
+// report carries. Either one is a reading: the CLI leaves the session line out
+// entirely when no session window is open, and requiring it turned a report
+// with a perfectly good week percentage into no reading at all (issue #791).
 func formatClaudeQuota(usageText string) string {
-	session := claudeSessionUsagePattern.FindStringSubmatch(usageText)
-	if session == nil {
-		return ""
-	}
-	sessionUsed, err := strconv.Atoi(session[1])
-	if err != nil {
-		return ""
-	}
-	parts := []string{fmt.Sprintf("session %d%% left", max(0, 100-sessionUsed))}
-	if week := claudeWeekUsagePattern.FindStringSubmatch(usageText); week != nil {
-		if weekUsed, err := strconv.Atoi(week[1]); err == nil {
-			parts = append(parts, fmt.Sprintf("week %d%% left", max(0, 100-weekUsed)))
+	var parts []string
+	for _, window := range []struct {
+		label   string
+		pattern *regexp.Regexp
+	}{
+		{"session", claudeSessionUsagePattern},
+		{"week", claudeWeekUsagePattern},
+	} {
+		match := window.pattern.FindStringSubmatch(usageText)
+		if match == nil {
+			continue
+		}
+		if used, err := strconv.Atoi(match[1]); err == nil {
+			parts = append(parts, fmt.Sprintf("%s %d%% left", window.label, max(0, 100-used)))
 		}
 	}
 	return strings.Join(parts, ", ")
@@ -402,6 +408,9 @@ func quotaStringAt(document any, path string) (string, bool) {
 type namedQuotaReader struct {
 	name string
 	read func(context.Context) (string, error)
+	// tracked says the agent's definition names a quota source, so an empty
+	// reading is a failure to report rather than the not-tracked default.
+	tracked bool
 }
 
 // namedQuotaReaders builds one quota reader per configured agent, deduplicated
@@ -426,6 +435,7 @@ func namedQuotaReaders(registry *agents.Registry, names []string, binaryFor func
 			continue
 		}
 		var read func(context.Context) (string, error)
+		tracked := true
 		switch definition.Quota.ReaderName() {
 		case agents.QuotaCodex:
 			read = (&codexQuotaReader{Binary: binaryFor(name)}).Read
@@ -434,24 +444,41 @@ func namedQuotaReaders(registry *agents.Registry, names []string, binaryFor func
 		case agents.QuotaCommand:
 			read = (&commandQuotaReader{Binary: binaryFor(name), Spec: definition.Quota}).Read
 		default:
-			read = untracked
+			read, tracked = untracked, false
 		}
-		readers = append(readers, namedQuotaReader{name: name, read: read})
+		readers = append(readers, namedQuotaReader{name: name, read: read, tracked: tracked})
 	}
 	return readers
 }
 
 // combinedQuotaReader reads every named reader's quota and returns the
-// results keyed by agent name.
+// results keyed by agent name. A reader that has a source but no reading
+// reports itself unavailable, with the reason when it has one, so a broken
+// read is never shown as the "not tracked" of an agent with no source at all
+// (issue #791).
 func combinedQuotaReader(readers []namedQuotaReader) func(context.Context) map[string]string {
 	return func(ctx context.Context) map[string]string {
 		result := make(map[string]string, len(readers))
 		for _, reader := range readers {
-			quota, _ := reader.read(ctx)
-			result[reader.name] = quota
+			quota, err := reader.read(ctx)
+			result[reader.name] = quotaReading(quota, reader.tracked, err)
 		}
 		return result
 	}
+}
+
+// quotaReading is the text one agent's quota shows: the reading itself, or,
+// for an agent that has a quota source and no reading, "unavailable" and why.
+// It is empty only for an agent with no source, which every surface renders
+// as "not tracked".
+func quotaReading(quota string, tracked bool, err error) string {
+	if text := strings.TrimSpace(quota); text != "" || !tracked {
+		return text
+	}
+	if err != nil {
+		return "unavailable: " + firstLine(strings.TrimSpace(err.Error()))
+	}
+	return "unavailable"
 }
 
 func formatNamedQuotas(quotas map[string]string) string {
