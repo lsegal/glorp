@@ -1976,6 +1976,20 @@ func remoteControlSessionName(target string, issue Issue) string {
 	return fmt.Sprintf("glorp #%d", issue.Number)
 }
 
+// sessionRunDir is the directory a run's agent starts in, and whether that is
+// its checkout. Before a checkout directory exists, the agent runs outside
+// glorp's own working directory so it cannot mistake an ambient git repo (e.g.
+// the repo glorp itself was launched from) for the one it was asked to work on
+// (issue #279).
+func sessionRunDir(session AgentSession) (string, bool) {
+	if session.CheckoutDirectory != "" {
+		if info, err := os.Stat(session.CheckoutDirectory); err == nil && info.IsDir() {
+			return session.CheckoutDirectory, true
+		}
+	}
+	return os.TempDir(), false
+}
+
 func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) []string {
 	target := issue.Target
 	if target == "" {
@@ -2036,12 +2050,17 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 	// approvals are bypassed, how a session is named and resumed, whether the
 	// output is asked for as a JSON stream -- comes from the definition. The
 	// values below are what one dispatch substitutes into it.
+	// A run that starts in the temp directory rather than its checkout is
+	// outside any git repository, which Codex refuses without
+	// --skip-git-repo-check (issue #819).
+	_, inCheckout := sessionRunDir(session)
 	return definition.Render(mode, agents.Values{
-		Prompt:  prompt,
-		Session: session.ID,
-		Model:   spec.Model,
-		Level:   spec.Level,
-		Yolo:    r.Yolo,
+		Prompt:     prompt,
+		Session:    session.ID,
+		Model:      spec.Model,
+		Level:      spec.Level,
+		Yolo:       r.Yolo,
+		NoCheckout: !inCheckout,
 		// Claude only reads --remote-control on its interactive startup path,
 		// so under -p the flag alone does nothing. The bridge itself is not
 		// gated on interactive mode: it starts from remoteControlAtStartup,
@@ -2626,16 +2645,7 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	if env := definitionEnv(definition); len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
-	// Before a checkout directory exists, run outside glorp's own working
-	// directory so the agent cannot mistake an ambient git repo (e.g. the repo
-	// glorp itself was launched from) for the one it was asked to work on
-	// (issue #279).
-	cmd.Dir = os.TempDir()
-	if session.CheckoutDirectory != "" {
-		if info, err := os.Stat(session.CheckoutDirectory); err == nil && info.IsDir() {
-			cmd.Dir = session.CheckoutDirectory
-		}
-	}
+	cmd.Dir, _ = sessionRunDir(session)
 	// Record the run for the shutdown checkpoint, following the checkout the
 	// agent announces so the checkpoint commits the right directory.
 	active := r.Active.add(issue, session.CheckoutDirectory)

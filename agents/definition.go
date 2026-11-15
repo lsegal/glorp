@@ -724,8 +724,9 @@ var knownPlaceholders = []string{
 
 // knownConditions is every name a fragment's `when` may test. The value
 // placeholders test as present when non-empty; yolo and remoteControl test the
-// run's own settings, and oneShot tests for an out-of-band call.
-var knownConditions = append([]string{"yolo", "remoteControl", "oneShot"}, knownPlaceholders...)
+// run's own settings, oneShot tests for an out-of-band call, and noCheckout
+// tests for a call running outside any checkout.
+var knownConditions = append([]string{"yolo", "remoteControl", "oneShot", "noCheckout"}, knownPlaceholders...)
 
 // placeholderPattern finds {name} spans inside a template argument.
 var placeholderPattern = regexp.MustCompile(`\{([A-Za-z][A-Za-z0-9]*)\}`)

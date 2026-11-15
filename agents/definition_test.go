@@ -176,13 +176,13 @@ func TestRenderPromptStdinReplacesThePromptArgument(t *testing.T) {
 	}
 }
 
-// TestRenderCodexOneShotSkipsTheGitRepoCheck checks an out-of-band Codex call,
-// which runs in the temp directory, passes --skip-git-repo-check so Codex does
-// not refuse to run outside a trusted directory (issue #817), and that a
-// dispatched run, which works inside its clone, renders without it.
+// TestRenderCodexOneShotSkipsTheGitRepoCheck checks a Codex call outside any
+// checkout, which runs in the temp directory, passes --skip-git-repo-check so
+// Codex does not refuse to run outside a trusted directory (issues #817,
+// #819), and that a dispatched run inside its clone renders without it.
 func TestRenderCodexOneShotSkipsTheGitRepoCheck(t *testing.T) {
 	codex, _ := MustBuiltin().Lookup("codex")
-	values := Values{Prompt: "status?", Model: "gpt-5", PromptStdin: true, OneShot: true}
+	values := Values{Prompt: "status?", Model: "gpt-5", PromptStdin: true, OneShot: true, NoCheckout: true}
 	want := []string{"exec", "--skip-git-repo-check", "--model", "gpt-5", "-"}
 	if got := codex.Render(ModeRun, values); !reflect.DeepEqual(got, want) {
 		t.Errorf("one-shot argv = %#v, want %#v", got, want)
@@ -198,6 +198,10 @@ func TestRenderCodexOneShotSkipsTheGitRepoCheck(t *testing.T) {
 				t.Errorf("dispatched %s argv carries --skip-git-repo-check", mode)
 			}
 		}
+	}
+	want = []string{"exec", "resume", "--skip-git-repo-check", "abc", "fix it"}
+	if got := codex.Render(ModeResume, Values{Prompt: "fix it", Session: "abc", NoCheckout: true}); !reflect.DeepEqual(got, want) {
+		t.Errorf("resume argv outside a checkout = %#v, want %#v", got, want)
 	}
 }
 
