@@ -66,6 +66,7 @@ h1 .version {
 	align-items: center;
 	gap: 10px;
 }
+.prompt-toggle,
 .settings-button,
 .refresh-button,
 .restart-button {
@@ -80,6 +81,7 @@ h1 .version {
 	color: var(--muted);
 	cursor: pointer;
 }
+.prompt-toggle:hover,
 .settings-button:hover,
 .refresh-button:hover:not(:disabled),
 .restart-button:hover:not(:disabled) {
@@ -91,11 +93,16 @@ h1 .version {
 	cursor: default;
 	opacity: 0.7;
 }
+.prompt-toggle svg,
 .settings-button svg,
 .refresh-button svg,
 .restart-button svg {
 	width: 17px;
 	height: 17px;
+}
+.prompt-toggle.active {
+	border-color: var(--green);
+	color: var(--green);
 }
 .refresh-button svg.spinning {
 	animation: spin 0.8s linear infinite;
@@ -855,12 +862,14 @@ h1 .version {
 	.masthead-actions {
 		gap: 8px;
 	}
+	.prompt-toggle,
 	.settings-button,
 	.refresh-button,
 	.restart-button {
 		width: 40px;
 		height: 40px;
 	}
+	.prompt-toggle svg,
 	.settings-button svg,
 	.refresh-button svg,
 	.restart-button svg {
@@ -935,17 +944,57 @@ h1 .version {
 		font-size: 14px;
 	}
 }
+/* The prompt agent docks to the right edge as a resizable panel (issue
+   #828); the dashboard gives up the panel's width while it is open. */
+.app-shell.prompt-open {
+	padding-right: var(--prompt-panel-width);
+}
+.prompt-panel {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 5;
+	width: var(--prompt-panel-width);
+	display: flex;
+	border-left: 1px solid var(--border);
+	background: #18181bf5;
+	box-shadow: -12px 0 32px #0005;
+}
+.prompt-panel[hidden] {
+	display: none;
+}
+.prompt-panel.dragging {
+	user-select: none;
+}
+.prompt-panel-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -4px;
+	width: 8px;
+	cursor: col-resize;
+	touch-action: none;
+}
+.prompt-panel-resizer:hover,
+.prompt-panel-resizer:focus-visible,
+.prompt-panel.dragging .prompt-panel-resizer {
+	outline: none;
+	background: linear-gradient(
+		to right,
+		transparent 3px,
+		var(--green) 3px,
+		var(--green) 5px,
+		transparent 5px
+	);
+}
 .prompt-card {
+	flex: 1 1 auto;
 	min-width: 0;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	background: #18181be6;
-	box-shadow: 0 12px 32px #0003;
-	padding: 14px 16px 16px;
+	padding: 18px 16px 16px;
 	display: grid;
 	grid-template-rows: auto minmax(0, 1fr) auto;
 	gap: 9px;
-	max-height: min(48vh, 460px);
 }
 .prompt-scope {
 	font-weight: 400;
@@ -1044,4 +1093,17 @@ h1 .version {
 	margin: 0;
 	color: #f87171;
 	font-size: 12px;
+}
+/* On a phone the prompt panel covers the dashboard instead of squeezing it.
+   This follows the panel's own rules so it wins the cascade. */
+@media (max-width: 760px) {
+	.app-shell.prompt-open {
+		padding-right: 0;
+	}
+	.prompt-panel {
+		width: 100%;
+	}
+	.prompt-panel-resizer {
+		display: none;
+	}
 }

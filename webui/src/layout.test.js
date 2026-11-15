@@ -41,3 +41,29 @@ describe("mobile layout (issue #669)", () => {
 		expect(rule(".modal-body select", mobile)).toContain("font-size: 16px");
 	});
 });
+
+describe("prompt agent panel (issue #828)", () => {
+	const panelMobile = css.lastIndexOf("@media (max-width: 760px)");
+
+	it("docks the panel to the right edge of the window", () => {
+		const panel = rule(".prompt-panel");
+		expect(panel).toContain("position: fixed");
+		expect(panel).toContain("right: 0");
+		expect(panel).toContain("width: var(--prompt-panel-width)");
+	});
+
+	it("gives up the panel's width from the dashboard while open", () => {
+		expect(rule(".app-shell.prompt-open")).toContain(
+			"padding-right: var(--prompt-panel-width)",
+		);
+	});
+
+	it("covers the dashboard on phones instead of squeezing it", () => {
+		// The override has to follow the panel's own rules to win the cascade.
+		expect(panelMobile).toBeGreaterThan(css.indexOf(".prompt-panel {"));
+		expect(rule(".app-shell.prompt-open", panelMobile)).toContain(
+			"padding-right: 0",
+		);
+		expect(rule(".prompt-panel", panelMobile)).toContain("width: 100%");
+	});
+});

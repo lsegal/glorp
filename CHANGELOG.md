@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Move the web dashboard's prompt agent into a side panel on the right of the window (issue #828). A chat icon in the top bar opens and closes it, and dragging the panel's left edge, or focusing that edge and using the arrow keys, resizes it. The dashboard gives up the panel's width while it is open and always keeps enough room to stay usable. The browser remembers whether the panel was open and how wide it was, so the dashboard comes back the same way after a reload or a glorp restart. On a phone the panel covers the dashboard instead. The prompt agent itself works as before.
+
 ## v1.6.1 - 2026-11-15
 
 - Fix Codex job runs failing to start without `--yolo` with `Not inside a trusted directory and --skip-git-repo-check was not specified` (issue #819). A dispatched run starts in the temp directory until its checkout directory exists, which is outside any git repository, and Codex refuses that unless `--yolo` is set. Glorp now passes Codex `--skip-git-repo-check` for a run or resume that starts outside its checkout. Runs inside an existing checkout are unchanged. Agent definitions can add arguments for these runs with the new `noCheckout` condition, which also holds for every `oneShot` call.
