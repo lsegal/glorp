@@ -106,6 +106,27 @@ func (s *CommentSource) PostComment(ctx context.Context, repo string, number int
 	return s.api.PostComment(ctx, repo, number, body)
 }
 
+// IssueAuthor reads through the API client: the MCP update-issue tool and the
+// prompt agent's update action mention the author in the comment they post,
+// and that mention is what delivers the update to the owning job (issue #832).
+func (s *CommentSource) IssueAuthor(ctx context.Context, repo string, number int) (string, error) {
+	poster, ok := s.api.(core.IssueUpdatePoster)
+	if !ok {
+		return "", fmt.Errorf("the GitHub API client (%T) cannot read an issue's author", s.api)
+	}
+	return poster.IssueAuthor(ctx, repo, number)
+}
+
+// PostCommentURL posts through the API client, same as PostComment, and
+// reports the posted comment's URL (issue #832).
+func (s *CommentSource) PostCommentURL(ctx context.Context, repo string, number int, body string) (string, error) {
+	poster, ok := s.api.(core.IssueUpdatePoster)
+	if !ok {
+		return "", fmt.Errorf("the GitHub API client (%T) cannot report a posted comment's URL", s.api)
+	}
+	return poster.PostCommentURL(ctx, repo, number, body)
+}
+
 // AddReaction writes through the API client, same as PostComment: the
 // conversation page offers no affordance glorp could drive to react with. It
 // is a no-op when the wrapped client has no reaction capability.

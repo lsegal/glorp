@@ -53,3 +53,13 @@ type ReviewReactor interface {
 type ReviewCommentLister interface {
 	ListReviewComments(ctx context.Context, repo string, number int) ([]Comment, error)
 }
+
+// IssueUpdatePoster is the GitHub access the MCP update-issue tool and the
+// prompt agent's update action need (issues #806 and #832): the author of an
+// issue or pull request, and posting a comment that reports its URL. Every
+// comment client glorp wraps another in must pass it through, or updates stop
+// working in the mode that wraps it.
+type IssueUpdatePoster interface {
+	IssueAuthor(ctx context.Context, repo string, number int) (string, error)
+	PostCommentURL(ctx context.Context, repo string, number int, body string) (string, error)
+}

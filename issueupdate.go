@@ -9,13 +9,8 @@ import (
 	"github.com/lsegal/glorp/core"
 )
 
-// issueUpdateClient is the GitHub access the MCP update-issue tool needs
-// (issue #806): the author of an issue or pull request, and posting a comment
-// that reports its URL. It only ever adds a comment, never edits a body.
-type issueUpdateClient interface {
-	IssueAuthor(ctx context.Context, repo string, number int) (string, error)
-	PostCommentURL(ctx context.Context, repo string, number int, body string) (string, error)
-}
+// GHCLI posts updates directly; browser mode wraps it and passes them through.
+var _ core.IssueUpdatePoster = GHCLI{}
 
 // IssueAuthor reads who opened repo#number. The issues endpoint answers for
 // pull requests too, since every pull request is also an issue.
@@ -54,9 +49,12 @@ func (w *Glorp) PostIssueUpdate(ctx context.Context, update core.IssueUpdate) (c
 	case text == "":
 		return core.IssueUpdateResult{}, fmt.Errorf("the update text is empty")
 	}
-	client, ok := w.Comments.(issueUpdateClient)
+	if w.Comments == nil {
+		return core.IssueUpdateResult{}, fmt.Errorf("this instance has no GitHub comment client, so it cannot post updates; it needs gh installed and signed in (gh auth status)")
+	}
+	client, ok := w.Comments.(core.IssueUpdatePoster)
 	if !ok {
-		return core.IssueUpdateResult{}, fmt.Errorf("this instance cannot post comments")
+		return core.IssueUpdateResult{}, fmt.Errorf("this instance's comment client (%T) cannot read an issue's author or report a posted comment's URL, which posting an update needs", w.Comments)
 	}
 	author, err := client.IssueAuthor(ctx, update.Repository, update.Number)
 	if err != nil {
