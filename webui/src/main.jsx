@@ -454,6 +454,7 @@ function SettingsModal({ onClose }) {
 					allowedCommenters: (snapshot.allowedCommenters || []).join(", "),
 					noMerge: Boolean(snapshot.noMerge),
 					noChangelog: Boolean(snapshot.noChangelog),
+					autoUpdate: snapshot.autoUpdate !== false,
 					unblockInterval: snapshot.unblockInterval ?? "",
 					unblockAgent: snapshot.unblockAgent ?? "",
 					unblockModel: snapshot.unblockModel ?? "",
@@ -614,6 +615,20 @@ function SettingsModal({ onClose }) {
 										}
 									/>
 									Skip changelog entries in gh-fix pull requests
+								</label>
+								<label
+									htmlFor="settings-auto-update"
+									className="checkbox-label"
+								>
+									<input
+										id="settings-auto-update"
+										type="checkbox"
+										checked={form.autoUpdate}
+										onChange={(event) =>
+											setForm({ ...form, autoUpdate: event.target.checked })
+										}
+									/>
+									Restart onto glorp updates even when agents are busy
 								</label>
 								<label htmlFor="settings-unblock-interval">
 									Stuck-job check interval (0 turns it off)

@@ -276,6 +276,7 @@ export function buildSettingsUpdate(form) {
 		allowedCommenters: parseAllowedCommenters(form.allowedCommenters),
 		noMerge: Boolean(form.noMerge),
 		noChangelog: Boolean(form.noChangelog),
+		autoUpdate: Boolean(form.autoUpdate),
 		unblockInterval: String(form.unblockInterval ?? "").trim() || "0",
 		unblockAgent: form.unblockAgent ?? "",
 		unblockModel: String(form.unblockModel ?? "").trim(),

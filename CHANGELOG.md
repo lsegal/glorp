@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an auto-update setting, on by default, that lets glorp restart onto a new release even while agents are busy (issue #824). Until now an update was applied automatically only once no agents were active, so a busy instance could stay on an old release for hours. With the setting on, the updater applies the update at its next check and restarts the way the restart button does: each active run's work is committed and pushed first, and the runs resume on the new version. The log says how many runs were active and what happened to each run's checkpoint. Turn it off with `--auto-update=false`, `"auto-update": false` in the config file's settings, or the web dashboard's settings, and glorp waits until no agents are active before updating, as before. A change in the dashboard takes effect from the next update check.
+
 ## v1.6.1 - 2026-11-15
 
 - Fix Codex job runs failing to start without `--yolo` with `Not inside a trusted directory and --skip-git-repo-check was not specified` (issue #819). A dispatched run starts in the temp directory until its checkout directory exists, which is outside any git repository, and Codex refuses that unless `--yolo` is set. Glorp now passes Codex `--skip-git-repo-check` for a run or resume that starts outside its checkout. Runs inside an existing checkout are unchanged. Agent definitions can add arguments for these runs with the new `noCheckout` condition, which also holds for every `oneShot` call.
