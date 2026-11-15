@@ -157,6 +157,9 @@ type AgentSession struct {
 	Agent             string
 	CheckoutDirectory string
 	Resume            bool
+	// RunDir is the sanctioned temp directory a run without a checkout starts
+	// in and clones under, chosen once per run by CommandRunner (issue #830).
+	RunDir string
 	// Update carries a change made to the issue while the agent was working
 	// it (issue #469). A resumed session that has one is prompted with it
 	// instead of the generic "continue", so the closure, edited description,
@@ -188,6 +191,9 @@ type Glorp struct {
 	noChangelog atomic.Bool
 	// autoUpdate is read by the updater each round (issue #824).
 	autoUpdate atomic.Bool
+	// clones keeps the temp directories new clones go in and the record of
+	// every clone this instance has made (issue #830).
+	clones cloneState
 	Issues     IssueSource
 	// Discussions lists unanswered top-level Discussion threads for
 	// Discussions-board targets. When nil, Discussions-board targets are
@@ -2082,6 +2088,24 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// reads it from whichever goroutine reports a job change.
 	var lastPoll time.Time
 	var jobMu sync.Mutex
+	// Clearing unused clones reads the live work and jobs, so a clone a job
+	// still needs is never removed (issue #830).
+	w.setCloneView(func() (map[string]workState, map[string]JobSnapshot) {
+		workMu.Lock()
+		workCopy := make(map[string]workState, len(work))
+		for key, state := range work {
+			workCopy[key] = state
+		}
+		workMu.Unlock()
+		jobMu.Lock()
+		jobsCopy := make(map[string]JobSnapshot, len(jobs))
+		for key, job := range jobs {
+			jobsCopy[key] = job
+		}
+		jobMu.Unlock()
+		return workCopy, jobsCopy
+	})
+	defer w.setCloneView(nil)
 	publish := func() {
 		if w.UI == nil {
 			return
@@ -2728,6 +2752,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 					workMu.Unlock()
 					if saveErr != nil {
 						w.logf("issue #%d failed to save agent session: %v", i.Number, saveErr)
+					}
+					if update.CheckoutDirectory != "" {
+						w.recordClone(key, i.Target, i, update.CheckoutDirectory)
 					}
 					jobMu.Lock()
 					job := jobs[key]

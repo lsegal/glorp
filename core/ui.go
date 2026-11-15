@@ -248,6 +248,9 @@ type SettingsUpdate struct {
 	// AutoUpdate chooses whether the updater restarts onto a new release
 	// while agents are busy (issue #824); off waits until none are active.
 	AutoUpdate *bool `json:"autoUpdate,omitempty"`
+	// TempDirs replaces the ordered temp directories new clones are placed in
+	// (issue #830). An empty list means the system temp directory.
+	TempDirs *[]string `json:"tempDirs,omitempty"`
 	// ActiveAgents replaces the live set of agent specs new dispatches
 	// round-robin across (issue #572), overriding what --agent configured at
 	// startup. When given it must name at least one valid agent spec; the
@@ -290,6 +293,11 @@ type SettingsSnapshot struct {
 	// AutoUpdate reports whether updates restart glorp even while agents
 	// are busy (issue #824).
 	AutoUpdate bool `json:"autoUpdate"`
+	// TempDirs is the configured, ordered temp directories, empty for the
+	// system temp directory, and TempDirDefault is that system directory
+	// (issue #830).
+	TempDirs       []string `json:"tempDirs"`
+	TempDirDefault string   `json:"tempDirDefault"`
 	// Agents lists every agent the run's registry defines, built-in and
 	// config-defined alike, which is the set ActiveAgents may be set from.
 	Agents []string `json:"agents"`

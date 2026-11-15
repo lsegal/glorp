@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -176,6 +178,11 @@ func validateSettingsUpdate(registry *agents.Registry, update SettingsUpdate) er
 			}
 		}
 	}
+	if update.TempDirs != nil {
+		if _, err := normalizeTempDirs(*update.TempDirs); err != nil {
+			return err
+		}
+	}
 	if update.UnblockInterval != nil {
 		if _, err := parseUnblockInterval(*update.UnblockInterval); err != nil {
 			return err
@@ -247,6 +254,10 @@ func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySema
 	if update.AutoUpdate != nil {
 		w.autoUpdate.Store(*update.AutoUpdate)
 	}
+	if update.TempDirs != nil {
+		dirs, _ := normalizeTempDirs(*update.TempDirs)
+		w.SetTempDirs(dirs)
+	}
 	if update.ActiveAgents != nil {
 		trimmed := make([]string, len(*update.ActiveAgents))
 		for i, spec := range *update.ActiveAgents {
@@ -303,6 +314,8 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		NoMerge:           w.noMerge.Load(),
 		NoChangelog:       w.noChangelog.Load(),
 		AutoUpdate:        w.autoUpdate.Load(),
+		TempDirs:          w.TempDirs(),
+		TempDirDefault:    filepath.Clean(os.TempDir()),
 		Agents:            w.registry().Names(),
 		AgentOptions:      w.agentOptions(),
 		ConfiguredAgents:  w.configuredAgents(),
