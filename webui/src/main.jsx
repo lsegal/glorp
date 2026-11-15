@@ -16,6 +16,7 @@ import {
 	Clock,
 	Cpu,
 	FolderGit2,
+	MessageSquare,
 	Radio,
 	Send,
 	Sparkles,
@@ -50,6 +51,8 @@ import {
 	toggleActiveModel,
 } from "./dashboard";
 import { JobTitle } from "./jobtitle";
+import { PromptModal, PromptPanel, usePromptPanel } from "./promptpanel";
+import { ReleaseLink } from "./releaselink";
 import "./index.css";
 
 const emptyState = {
@@ -236,7 +239,7 @@ function JobCard({ job }) {
 // PromptArea sends requests to the prompt agent, which answers questions about
 // this glorp instance and its jobs and acts on them (issue #801). Sending only
 // starts the agent call; its answer arrives with the next state poll.
-function PromptArea({ entries }) {
+function PromptArea({ entries, open }) {
 	const [request, setRequest] = useState("");
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState("");
@@ -246,8 +249,8 @@ function PromptArea({ entries }) {
 		: "";
 	useEffect(() => {
 		const node = conversation.current;
-		if (node && latest) node.scrollTop = node.scrollHeight;
-	}, [latest]);
+		if (node && latest && open) node.scrollTop = node.scrollHeight;
+	}, [latest, open]);
 	const send = async (event) => {
 		event.preventDefault();
 		const text = request.trim();
@@ -821,6 +824,7 @@ function CheckpointReport({ checkpoints, onClose }) {
 function App() {
 	const [page, setPage] = useState(0);
 	const [state, connected] = useDashboardState(page);
+	const promptPanel = usePromptPanel();
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
 	// restarting is "requested" until the daemon drops off, then "down" until
@@ -896,94 +900,143 @@ function App() {
 			"Could not update glorp",
 		);
 	return (
-		<main>
-			<div className="masthead">
-				<div>
-					<p className="eyebrow">Git Loop fOr Robot Patchers</p>
-					<h1>
-						glorp <span>dashboard</span>
-						{state.version && <span className="version">{state.version}</span>}
-					</h1>
-				</div>
-				<div className="masthead-actions">
-					<button
-						type="button"
-						className="refresh-button"
-						onClick={refresh}
-						disabled={refreshing}
-						aria-label="Refresh now"
-						title="Repoll GitHub now"
-					>
-						<ArrowPathIcon className={refreshing ? "spinning" : ""} />
-					</button>
-					<button
-						type="button"
-						className="restart-button"
-						onClick={restart}
-						disabled={restarting !== ""}
-						aria-label="Restart glorp"
-						title={restarting ? "Restarting glorp..." : "Restart glorp"}
-					>
-						<PowerIcon className={restarting ? "pulsing" : ""} />
-					</button>
-					<button
-						type="button"
-						className="settings-button"
-						onClick={() => setSettingsOpen(true)}
-						aria-label="Open settings"
-						title="Settings"
-					>
-						<Cog6ToothIcon />
-					</button>
-					<div className={`connection ${connected ? "online" : "offline"}`}>
-						<i />
-						{connected ? "live" : "reconnecting"}
+		<div
+			className={`app-shell${promptPanel.panel.open ? " prompt-open" : ""}`}
+			style={{ "--prompt-panel-width": `${promptPanel.panel.width}px` }}
+		>
+			<main>
+				<div className="masthead">
+					<div>
+						<p className="eyebrow">Git Loop fOr Robot Patchers</p>
+						<h1>
+							glorp <span>dashboard</span>
+							{state.version && (
+								<span className="version">
+									<ReleaseLink href={state.versionURL}>
+										{state.version}
+									</ReleaseLink>
+								</span>
+							)}
+						</h1>
+					</div>
+					<div className="masthead-actions">
+						<button
+							type="button"
+							className="refresh-button"
+							onClick={refresh}
+							disabled={refreshing}
+							aria-label="Refresh now"
+							title="Repoll GitHub now"
+						>
+							<ArrowPathIcon className={refreshing ? "spinning" : ""} />
+						</button>
+						<button
+							type="button"
+							className="restart-button"
+							onClick={restart}
+							disabled={restarting !== ""}
+							aria-label="Restart glorp"
+							title={restarting ? "Restarting glorp..." : "Restart glorp"}
+						>
+							<PowerIcon className={restarting ? "pulsing" : ""} />
+						</button>
+						<button
+							type="button"
+							className={`prompt-toggle${promptPanel.panel.open ? " active" : ""}`}
+							onClick={promptPanel.toggle}
+							aria-label={
+								promptPanel.panel.open
+									? "Close prompt agent"
+									: "Open prompt agent"
+							}
+							aria-expanded={promptPanel.panel.open}
+							aria-controls="prompt-panel"
+							title="Prompt agent"
+						>
+							<MessageSquare />
+						</button>
+						<button
+							type="button"
+							className="settings-button"
+							onClick={() => setSettingsOpen(true)}
+							aria-label="Open settings"
+							title="Settings"
+						>
+							<Cog6ToothIcon />
+						</button>
+						<div className={`connection ${connected ? "online" : "offline"}`}>
+							<i />
+							{connected ? "live" : "reconnecting"}
+						</div>
 					</div>
 				</div>
-			</div>
-			{settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
-			{state.update && (
-				<section className="update-notice" aria-label="Update available">
-					<span>
-						glorp <strong>{state.update}</strong> is available. It installs on
-						its own once no agents are running.
-					</span>
-					<button type="button" onClick={update} disabled={restarting !== ""}>
-						{restarting ? "Updating..." : "Update now"}
-					</button>
-				</section>
-			)}
-			<StatusBar snapshot={snapshot} connected={connected} />
-			{checkpoints && (
-				<CheckpointReport
-					checkpoints={checkpoints}
-					onClose={() => setCheckpoints(null)}
-				/>
-			)}
-			<JobPager page={shown.page} pages={shown.pages} onPage={setPage} />
-			<section className="job-grid" aria-label="Agent jobs">
-				{shown.jobs.length ? (
-					shown.jobs.map((job) => (
-						<JobCard key={`${job.Target}#${job.Number}`} job={job} />
-					))
-				) : (
-					<div className="empty-jobs">
-						<Activity />
-						<span>Waiting for agent jobs</span>
-					</div>
+				{settingsOpen && (
+					<SettingsModal onClose={() => setSettingsOpen(false)} />
 				)}
-			</section>
-			<PromptArea entries={state.prompts || []} />
-			<section className="log-card">
-				<div className="log-title">
-					<Terminal /> Logs
-				</div>
-				<ScrollViewport
-					value={(state.logs || []).join("\n")}
-					empty="waiting for daemon logs..."
-				/>
-			</section>
-		</main>
+				{state.update && (
+					<section className="update-notice" aria-label="Update available">
+						<span>
+							glorp{" "}
+							<ReleaseLink href={state.updateURL}>
+								<strong>{state.update}</strong>
+							</ReleaseLink>{" "}
+							is available. It installs on its own once no agents are running.
+						</span>
+						<button type="button" onClick={update} disabled={restarting !== ""}>
+							{restarting ? "Updating..." : "Update now"}
+						</button>
+					</section>
+				)}
+				<StatusBar snapshot={snapshot} connected={connected} />
+				{checkpoints && (
+					<CheckpointReport
+						checkpoints={checkpoints}
+						onClose={() => setCheckpoints(null)}
+					/>
+				)}
+				<JobPager page={shown.page} pages={shown.pages} onPage={setPage} />
+				<section className="job-grid" aria-label="Agent jobs">
+					{shown.jobs.length ? (
+						shown.jobs.map((job) => (
+							<JobCard key={`${job.Target}#${job.Number}`} job={job} />
+						))
+					) : (
+						<div className="empty-jobs">
+							<Activity />
+							<span>Waiting for agent jobs</span>
+						</div>
+					)}
+				</section>
+				<section className="log-card">
+					<div className="log-title">
+						<Terminal /> Logs
+					</div>
+					<ScrollViewport
+						value={(state.logs || []).join("\n")}
+						empty="waiting for daemon logs..."
+					/>
+				</section>
+			</main>
+			{promptPanel.mobile ? (
+				<PromptModal open={promptPanel.panel.open} onClose={promptPanel.close}>
+					<PromptArea
+						entries={state.prompts || []}
+						open={promptPanel.panel.open}
+					/>
+				</PromptModal>
+			) : (
+				<PromptPanel
+					open={promptPanel.panel.open}
+					width={promptPanel.panel.width}
+					onResize={promptPanel.resize}
+				>
+					<PromptArea
+						entries={state.prompts || []}
+						open={promptPanel.panel.open}
+					/>
+				</PromptPanel>
+			)}
+		</div>
 	);
 }
 

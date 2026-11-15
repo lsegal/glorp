@@ -592,6 +592,64 @@ export function agentSummaries(snapshot, statuses) {
 	return summaries;
 }
 
+// The prompt agent's side panel (issue #828) is remembered per browser under
+// this key: whether it is open and how wide it was dragged.
+export const promptPanelKey = "glorp.promptPanel";
+export const promptPanelDefaults = { open: false, width: 420 };
+const promptPanelMin = 280;
+const promptPanelMax = 900;
+// promptPanelDashboardMin is how much of the window the panel always leaves to
+// the dashboard, so the jobs stay usable at the panel's widest.
+const promptPanelDashboardMin = 360;
+
+// promptPanelBounds gives the narrowest and widest the panel may be dragged in
+// a window viewportWidth pixels wide.
+export function promptPanelBounds(viewportWidth) {
+	const max = Math.min(
+		promptPanelMax,
+		Math.max(promptPanelMin, viewportWidth - promptPanelDashboardMin),
+	);
+	return { min: promptPanelMin, max };
+}
+
+// clampPromptPanelWidth keeps a dragged or stored width within the panel's
+// bounds, falling back to the default width for anything unusable.
+export function clampPromptPanelWidth(width, viewportWidth) {
+	const { min, max } = promptPanelBounds(viewportWidth);
+	const value = Number.isFinite(width) ? width : promptPanelDefaults.width;
+	return Math.round(Math.min(max, Math.max(min, value)));
+}
+
+// loadPromptPanel reads the remembered panel state from storage, ignoring a
+// missing, unreadable, or malformed entry.
+export function loadPromptPanel(storage) {
+	try {
+		const stored = JSON.parse(storage?.getItem(promptPanelKey) ?? "null");
+		if (!stored || typeof stored !== "object") return promptPanelDefaults;
+		return {
+			open: stored.open === true,
+			width: Number.isFinite(stored.width)
+				? stored.width
+				: promptPanelDefaults.width,
+		};
+	} catch {
+		return promptPanelDefaults;
+	}
+}
+
+// savePromptPanel remembers the panel state, quietly giving up when storage
+// is unavailable, such as in a private window that refuses writes.
+export function savePromptPanel(storage, panel) {
+	try {
+		storage?.setItem(
+			promptPanelKey,
+			JSON.stringify({ open: panel.open, width: panel.width }),
+		);
+	} catch {
+		// The panel still works; it just is not remembered.
+	}
+}
+
 // fetchClones lists every clone glorp has on record (issue #830).
 export async function fetchClones() {
 	const response = await fetch("/api/clones", { cache: "no-store" });

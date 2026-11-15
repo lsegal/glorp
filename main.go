@@ -299,7 +299,7 @@ func runWatch(args []string) (code int) {
 	output := io.Writer(os.Stdout)
 	var ui *TerminalUI
 	if shouldUseTerminalUI(noTui, os.Stdout) {
-		ui = NewTerminalUI()
+		ui = NewTerminalUI(version, upgradeRepo(os.Getenv))
 		output = ui.Writer()
 		uiDone = make(chan struct{})
 		go func() {
@@ -318,6 +318,7 @@ func runWatch(args []string) (code int) {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		webUI.SetReleaseRepo(upgradeRepo(os.Getenv))
 		webListener, webPort, err = webui.Listen(bind, webUIPort)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

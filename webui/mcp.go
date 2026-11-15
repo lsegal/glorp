@@ -305,7 +305,9 @@ var mcpToolHandlers = map[string]func(*Server, context.Context, mcpArguments) (a
 func (ui *Server) mcpState() State {
 	ui.mu.RLock()
 	defer ui.mu.RUnlock()
-	return State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion}
+	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion}
+	ui.setReleaseURLs(&state)
+	return state
 }
 
 func (ui *Server) mcpStatus(ctx context.Context, _ mcpArguments) (any, error) {

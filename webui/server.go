@@ -40,6 +40,11 @@ type State struct {
 	// dashboard offers to install (issue #783), or empty when glorp is
 	// current.
 	Update string `json:"update,omitempty"`
+	// VersionURL and UpdateURL are the GitHub release pages of the running
+	// version and of the available update, which the dashboard header and
+	// update notice link to (issue #825).
+	VersionURL string `json:"versionURL,omitempty"`
+	UpdateURL  string `json:"updateURL,omitempty"`
 	// Prompts is the prompt area's conversation with the prompt agent, oldest
 	// first (issue #801).
 	Prompts []core.PromptEntry `json:"prompts,omitempty"`
@@ -76,6 +81,9 @@ type Server struct {
 	// updateVersion names that release (issue #783).
 	update        func(context.Context) ([]core.CheckpointResult, error)
 	updateVersion string
+	// releaseRepo is the repository whose release pages the version and the
+	// update notice link to (issue #825).
+	releaseRepo string
 	// prompt starts answering a prompt area request, and prompts is the
 	// conversation it reported last (issue #801).
 	prompt  func(string) (core.PromptEntry, error)
@@ -181,6 +189,25 @@ func (ui *Server) SetUpdate(version string) {
 	ui.mu.Lock()
 	ui.updateVersion = version
 	ui.mu.Unlock()
+}
+
+// SetReleaseRepo sets the repository whose release pages the dashboard links
+// the running version and the update notice to (issue #825).
+func (ui *Server) SetReleaseRepo(repo string) {
+	ui.mu.Lock()
+	ui.releaseRepo = repo
+	ui.mu.Unlock()
+}
+
+// setReleaseURLs fills in the release pages state's version and update link
+// to. The caller holds ui.mu.
+func (ui *Server) setReleaseURLs(state *State) {
+	if state.Version != "" {
+		state.VersionURL = core.ReleasePageURL(ui.releaseRepo, state.Version)
+	}
+	if state.Update != "" {
+		state.UpdateURL = core.ReleasePageURL(ui.releaseRepo, state.Update)
+	}
 }
 
 // SetAgentsHandler wires the settings modal's agents tab (issue #572) to a
@@ -554,6 +581,7 @@ func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	ui.mu.RLock()
 	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion, Prompts: ui.prompts}
+	ui.setReleaseURLs(&state)
 	ui.mu.RUnlock()
 	state.Snapshot.Jobs = pageLogs(state.Snapshot.Jobs, state.Snapshot.VisibleJobs, page)
 	w.Header().Set("Content-Type", "application/json")

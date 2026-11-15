@@ -188,6 +188,10 @@ type dashboard struct {
 	// set once its button was pressed (issue #783).
 	update   string
 	updating bool
+	// version is the running glorp version, and releaseRepo the repository
+	// whose release pages it and the update link to (issue #825).
+	version     string
+	releaseRepo string
 	// prompt is the prompt area, opened with "p" (issue #801).
 	prompt promptArea
 }
@@ -286,6 +290,9 @@ func (m dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case updateMsg:
 		m.update = string(msg)
+		// The log keeps the release page as plain, copyable text for
+		// terminals that cannot follow the notice's link (issue #825).
+		return m.Update(logMsg(fmt.Sprintf("glorp %s is available: %s", m.update, core.ReleasePageURL(m.releaseRepo, m.update))))
 	case updateFailedMsg:
 		m.updating = false
 		return m.Update(logMsg(msg))
@@ -697,6 +704,10 @@ func (m dashboard) View() string {
 // #647). It returns "" when none of the three apply.
 func (m dashboard) renderStatusInfoLine(page, pages, startIndex int) string {
 	var items []string
+	if m.version != "" {
+		// The running version links to its release page (issue #825).
+		items = append(items, terminalLink("glorp "+m.version, core.ReleasePageURL(m.releaseRepo, m.version), m.hyperlinks))
+	}
 	if m.snapshot.Identity != "" {
 		items = append(items, "id: "+m.snapshot.Identity)
 	}
@@ -710,7 +721,10 @@ func (m dashboard) renderStatusInfoLine(page, pages, startIndex int) string {
 		if m.updating {
 			items = append(items, "updating to glorp "+m.update+"...")
 		} else {
-			items = append(items, "glorp "+m.update+" available "+updateButton)
+			// The new version links to the release it updates to (issue
+			// #825); the button stays plain text so a click still lands on it.
+			release := terminalLink("glorp "+m.update, core.ReleasePageURL(m.releaseRepo, m.update), m.hyperlinks)
+			items = append(items, release+" available "+updateButton)
 		}
 	}
 	if len(items) == 0 {
@@ -760,7 +774,7 @@ func jobsPerPage(height, hasInfoLine int) int {
 // index clamped to the pages that exist, and the total number of pages.
 func (m dashboard) visibleJobs() ([]JobSnapshot, int, int) {
 	hasInfoLine := 0
-	if m.snapshot.Identity != "" || m.snapshot.WebUIURL != "" {
+	if m.version != "" || m.snapshot.Identity != "" || m.snapshot.WebUIURL != "" || m.update != "" {
 		hasInfoLine = 1
 	}
 	perPage := jobsPerPage(m.height, hasInfoLine)
@@ -1041,9 +1055,16 @@ type TerminalUI struct {
 	prompt  func(string) (core.PromptEntry, error)
 }
 
-func NewTerminalUI() *TerminalUI {
+// NewTerminalUI builds the console dashboard for glorp version, whose status
+// bar links it and any update to their release pages in repo (issue #825).
+func NewTerminalUI(version, repo string) *TerminalUI {
 	ui := &TerminalUI{}
-	ui.program = tea.NewProgram(newDashboard(ui), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	m := newDashboard(ui)
+	m.version, m.releaseRepo = version, repo
+	// The log starts with the running release's page as plain, copyable text
+	// for terminals that cannot follow the status bar's link.
+	m.logs = []string{fmt.Sprintf("glorp %s: %s", version, core.ReleasePageURL(repo, version))}
+	ui.program = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	return ui
 }
 
@@ -1176,11 +1197,9 @@ func truncate(s string, width int) string {
 		}
 		return string(result)
 	}
-	runes := []rune(s)
-	for len(runes) > 0 && lipgloss.Width(string(runes[:len(runes)]))+3 > width {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "..."
+	// ansi.Truncate keeps escape sequences whole, so a truncated OSC 8 link
+	// is still closed instead of turning the rest of the screen into a link.
+	return ansi.Truncate(s, width, "...")
 }
 
 func jobCardWidth(width int) int {
