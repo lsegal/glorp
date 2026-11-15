@@ -5,6 +5,7 @@ import {
 	agentSummaries,
 	buildSettingsUpdate,
 	checkpointLines,
+	clampPromptPanelWidth,
 	deliveryLabel,
 	fetchAgentStatuses,
 	fetchAgentStatusesWithRetry,
@@ -19,11 +20,16 @@ import {
 	jobPullRequestLabel,
 	jobWaitLabel,
 	lastPollLabel,
+	loadPromptPanel,
 	modelGroupsFrom,
 	modelOptionsFrom,
 	parseAllowedCommenters,
 	probedModelsByAgent,
 	promptAgentLabel,
+	promptPanelBounds,
+	promptPanelDefaults,
+	promptPanelKey,
+	savePromptPanel,
 	stateURL,
 	submitJobAction,
 	submitPrompt,
@@ -491,6 +497,7 @@ describe("buildSettingsUpdate", () => {
 				allowedCommenters: "alice, bob",
 				noMerge: true,
 				noChangelog: true,
+				autoUpdate: true,
 				unblockInterval: " 10m ",
 				unblockAgent: "claude",
 				unblockModel: "opus",
@@ -504,6 +511,7 @@ describe("buildSettingsUpdate", () => {
 			allowedCommenters: ["alice", "bob"],
 			noMerge: true,
 			noChangelog: true,
+			autoUpdate: true,
 			unblockInterval: "10m",
 			unblockAgent: "claude",
 			unblockModel: "opus",
@@ -521,6 +529,7 @@ describe("buildSettingsUpdate", () => {
 				allowedCommenters: "",
 				noMerge: false,
 				noChangelog: false,
+				autoUpdate: false,
 				activeAgents: [],
 			}),
 		).toEqual({
@@ -529,6 +538,7 @@ describe("buildSettingsUpdate", () => {
 			allowedCommenters: [],
 			noMerge: false,
 			noChangelog: false,
+			autoUpdate: false,
 			unblockInterval: "0",
 			unblockAgent: "",
 			unblockModel: "",
@@ -1028,5 +1038,72 @@ describe("checkpointLines", () => {
 
 	it("is empty without checkpoints", () => {
 		expect(checkpointLines(undefined)).toEqual([]);
+	});
+});
+
+describe("prompt panel (issue #828)", () => {
+	const memory = (initial = {}) => {
+		const items = { ...initial };
+		return {
+			items,
+			getItem: (key) => (key in items ? items[key] : null),
+			setItem: (key, value) => {
+				items[key] = value;
+			},
+		};
+	};
+
+	it("starts closed at the default width with nothing stored", () => {
+		expect(loadPromptPanel(memory())).toEqual(promptPanelDefaults);
+		expect(loadPromptPanel(null)).toEqual(promptPanelDefaults);
+	});
+
+	it("remembers the open state and width across a reload", () => {
+		const storage = memory();
+		savePromptPanel(storage, { open: true, width: 512 });
+		expect(loadPromptPanel(storage)).toEqual({ open: true, width: 512 });
+		savePromptPanel(storage, { open: false, width: 512 });
+		expect(loadPromptPanel(storage)).toEqual({ open: false, width: 512 });
+	});
+
+	it("ignores a malformed stored entry", () => {
+		expect(loadPromptPanel(memory({ [promptPanelKey]: "{oops" }))).toEqual(
+			promptPanelDefaults,
+		);
+		expect(
+			loadPromptPanel(
+				memory({ [promptPanelKey]: '{"open":"yes","width":"wide"}' }),
+			),
+		).toEqual(promptPanelDefaults);
+	});
+
+	it("keeps working when storage refuses reads or writes", () => {
+		const broken = {
+			getItem: () => {
+				throw new Error("denied");
+			},
+			setItem: () => {
+				throw new Error("denied");
+			},
+		};
+		expect(loadPromptPanel(broken)).toEqual(promptPanelDefaults);
+		expect(() => savePromptPanel(broken, promptPanelDefaults)).not.toThrow();
+	});
+
+	it("clamps the width so the dashboard stays usable", () => {
+		expect(promptPanelBounds(1920)).toEqual({ min: 280, max: 900 });
+		expect(promptPanelBounds(1000)).toEqual({ min: 280, max: 640 });
+		expect(clampPromptPanelWidth(100, 1920)).toBe(280);
+		expect(clampPromptPanelWidth(5000, 1920)).toBe(900);
+		expect(clampPromptPanelWidth(800, 1000)).toBe(640);
+		expect(clampPromptPanelWidth(Number.NaN, 1920)).toBe(
+			promptPanelDefaults.width,
+		);
+	});
+
+	it("never lets the bounds cross on a narrow window", () => {
+		const { min, max } = promptPanelBounds(400);
+		expect(max).toBe(min);
+		expect(clampPromptPanelWidth(600, 400)).toBe(min);
 	});
 });

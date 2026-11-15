@@ -70,7 +70,8 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.String("unblock-model", "", "model the stuck-job watchdog's unblock call runs (default: the unblock agent's model)")
 	flags.String("prompt-agent", "", "agent the dashboards' prompt area runs requests with, as agent/model:level (default: the coding agent)")
 	flags.String("prompt-model", "", "model the dashboards' prompt area runs requests with (default: the prompt agent's model)")
-	flags.Duration("update-interval", defaultUpdateInterval, "how often to check for a newer glorp release; an update is offered in the dashboards and applied automatically when no agents are active (0 turns it off)")
+	flags.Duration("update-interval", defaultUpdateInterval, "how often to check for a newer glorp release; an update is offered in the dashboards and applied automatically (0 turns it off)")
+	flags.Bool("auto-update", true, "apply an available glorp update and restart even while agents are busy, checkpointing their work first; false waits until no agents are active")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
@@ -156,6 +157,7 @@ func runWatch(args []string) (code int) {
 	remoteControl := flagValue[bool](flags, "remote-control")
 	noMerge := flagValue[bool](flags, "no-merge")
 	noChangelog := flagValue[bool](flags, "no-changelog")
+	autoUpdate := flagValue[bool](flags, "auto-update")
 	unblockInterval := flagValue[time.Duration](flags, "unblock-interval")
 	if err := validateUnblockInterval(unblockInterval); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -380,6 +382,7 @@ func runWatch(args []string) (code int) {
 	checkpointer.SetLog(w.logf)
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
+	w.autoUpdate.Store(autoUpdate)
 	w.SetUnblockInterval(unblockInterval)
 	w.SetUnblockAgent(unblock)
 	w.SetPromptAgent(prompt)
@@ -389,7 +392,7 @@ func runWatch(args []string) (code int) {
 	restartHandler := newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf, "restart requested from the web dashboard")
 	// The updater (issue #783) restarts through the same checkpoint and
 	// shutdown as the restart button, after swapping in the new binary.
-	updates := newWatchUpdater(updateInterval, activeRuns, newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf, "restarting onto the updated glorp"), w.logf, ui, webUI)
+	updates := newWatchUpdater(updateInterval, activeRuns, w.autoUpdate.Load, newRestartHandler(&restartRequested, checkpointer.Checkpoint, requestShutdown, w.logf, "restarting onto the updated glorp"), w.logf, ui, webUI)
 	// Installed skills older than this release are reinstalled, or reported
 	// when they cannot be, rather than left to steer agents with stale
 	// instructions (issue #797).

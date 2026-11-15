@@ -402,7 +402,7 @@ func promptAgentPrompt(state promptState) string {
 	} else {
 		settings := state.Settings
 		fmt.Fprintf(&b, "- coding agents: %s\n", strings.Join(settings.ConfiguredAgents, ", "))
-		fmt.Fprintf(&b, "- no merge: %t; no changelog: %t\n", settings.NoMerge, settings.NoChangelog)
+		fmt.Fprintf(&b, "- no merge: %t; no changelog: %t; auto-update while busy: %t\n", settings.NoMerge, settings.NoChangelog, settings.AutoUpdate)
 		if len(settings.AllowedCommenters) > 0 {
 			fmt.Fprintf(&b, "- allowed commenters: %s\n", strings.Join(settings.AllowedCommenters, ", "))
 		}
