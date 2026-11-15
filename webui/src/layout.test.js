@@ -58,12 +58,12 @@ describe("prompt agent panel (issue #828)", () => {
 		);
 	});
 
-	it("covers the dashboard on phones instead of squeezing it", () => {
+	it("keeps the dashboard full width on phones, where a modal opens", () => {
 		// The override has to follow the panel's own rules to win the cascade.
 		expect(panelMobile).toBeGreaterThan(css.indexOf(".prompt-panel {"));
 		expect(rule(".app-shell.prompt-open", panelMobile)).toContain(
 			"padding-right: 0",
 		);
-		expect(rule(".prompt-panel", panelMobile)).toContain("width: 100%");
+		expect(rule(".prompt-modal[hidden]")).toContain("display: none");
 	});
 });

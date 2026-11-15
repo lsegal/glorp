@@ -1094,16 +1094,30 @@ h1 .version {
 	color: #f87171;
 	font-size: 12px;
 }
-/* On a phone the prompt panel covers the dashboard instead of squeezing it.
-   This follows the panel's own rules so it wins the cascade. */
+/* On a phone the prompt agent opens as a modal instead of a side panel
+   (issue #828), so the dashboard keeps its full width. This follows the
+   panel's own rules so it wins the cascade. */
+.prompt-modal[hidden] {
+	display: none;
+}
+.prompt-modal-dialog {
+	background: #18181b;
+	height: min(640px, calc(100vh - 32px));
+	padding: 0;
+	overflow: hidden;
+}
+.prompt-modal-dialog .prompt-card {
+	height: 100%;
+	padding-right: 40px;
+}
+.prompt-modal-close {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	z-index: 1;
+}
 @media (max-width: 760px) {
 	.app-shell.prompt-open {
 		padding-right: 0;
-	}
-	.prompt-panel {
-		width: 100%;
-	}
-	.prompt-panel-resizer {
-		display: none;
 	}
 }

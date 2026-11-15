@@ -1,3 +1,4 @@
+import { XMarkIcon } from "@heroicons/react/24/outline";
 import { useEffect, useRef, useState } from "react";
 import {
 	clampPromptPanelWidth,
@@ -5,6 +6,10 @@ import {
 	promptPanelBounds,
 	savePromptPanel,
 } from "./dashboard";
+
+// mobileQuery matches the narrow-screen layout in index.css. There the prompt
+// agent opens as a modal instead of a side panel (issue #828).
+export const mobileQuery = "(max-width: 760px)";
 
 const storage = () => {
 	try {
@@ -15,8 +20,8 @@ const storage = () => {
 };
 
 // usePromptPanel holds the prompt agent panel's open state and width,
-// restoring them from this browser's storage and remembering every change
-// (issue #828).
+// restoring them from this browser's storage and remembering every change,
+// and whether the window is narrow enough to show it as a modal (issue #828).
 export function usePromptPanel() {
 	const [panel, setPanel] = useState(() => {
 		const stored = loadPromptPanel(storage());
@@ -36,6 +41,16 @@ export function usePromptPanel() {
 		window.addEventListener("resize", fit);
 		return () => window.removeEventListener("resize", fit);
 	}, []);
+	const [mobile, setMobile] = useState(
+		() => window.matchMedia?.(mobileQuery).matches ?? false,
+	);
+	useEffect(() => {
+		const query = window.matchMedia?.(mobileQuery);
+		if (!query) return;
+		const change = () => setMobile(query.matches);
+		query.addEventListener("change", change);
+		return () => query.removeEventListener("change", change);
+	}, []);
 	const toggle = () =>
 		setPanel((current) => ({ ...current, open: !current.open }));
 	const resize = (width) =>
@@ -43,7 +58,52 @@ export function usePromptPanel() {
 			...current,
 			width: clampPromptPanelWidth(width, window.innerWidth),
 		}));
-	return { panel, toggle, resize };
+	const close = () => setPanel((current) => ({ ...current, open: false }));
+	return { panel, mobile, toggle, close, resize };
+}
+
+// PromptModal shows the prompt agent as a pop-up on a phone, where a side
+// panel would leave no room for the dashboard. Like the panel, it stays
+// mounted while closed so a half-written request survives.
+export function PromptModal({ open, onClose, children }) {
+	useEffect(() => {
+		if (!open) return;
+		const closeOnEscape = (event) => {
+			if (event.key === "Escape") onClose();
+		};
+		window.addEventListener("keydown", closeOnEscape);
+		return () => window.removeEventListener("keydown", closeOnEscape);
+	}, [open, onClose]);
+	return (
+		<div
+			id="prompt-panel"
+			className="modal-overlay prompt-modal"
+			hidden={!open}
+		>
+			<button
+				type="button"
+				className="modal-overlay-dismiss"
+				onClick={onClose}
+				aria-label="Close prompt agent"
+			/>
+			<div
+				className="modal prompt-modal-dialog"
+				role="dialog"
+				aria-modal="true"
+				aria-label="Prompt agent"
+			>
+				<button
+					type="button"
+					className="modal-close prompt-modal-close"
+					onClick={onClose}
+					aria-label="Close prompt agent"
+				>
+					<XMarkIcon />
+				</button>
+				{children}
+			</div>
+		</div>
+	);
 }
 
 // PromptPanel docks the prompt agent to the right edge of the window. It

@@ -50,7 +50,7 @@ import {
 	toggleActiveModel,
 } from "./dashboard";
 import { JobTitle } from "./jobtitle";
-import { PromptPanel, usePromptPanel } from "./promptpanel";
+import { PromptModal, PromptPanel, usePromptPanel } from "./promptpanel";
 import "./index.css";
 
 const emptyState = {
@@ -992,16 +992,25 @@ function App() {
 					/>
 				</section>
 			</main>
-			<PromptPanel
-				open={promptPanel.panel.open}
-				width={promptPanel.panel.width}
-				onResize={promptPanel.resize}
-			>
-				<PromptArea
-					entries={state.prompts || []}
+			{promptPanel.mobile ? (
+				<PromptModal open={promptPanel.panel.open} onClose={promptPanel.close}>
+					<PromptArea
+						entries={state.prompts || []}
+						open={promptPanel.panel.open}
+					/>
+				</PromptModal>
+			) : (
+				<PromptPanel
 					open={promptPanel.panel.open}
-				/>
-			</PromptPanel>
+					width={promptPanel.panel.width}
+					onResize={promptPanel.resize}
+				>
+					<PromptArea
+						entries={state.prompts || []}
+						open={promptPanel.panel.open}
+					/>
+				</PromptPanel>
+			)}
 		</div>
 	);
 }
