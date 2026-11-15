@@ -553,18 +553,20 @@ func (ui *Server) serveAgents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agents unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	// Start any stale refresh first, then read the statuses and the
+	// refreshing flag under one lock. Reading them separately let a refresh
+	// finish in between, serving the old probe without the refreshing header
+	// (issue #836).
+	ui.refreshStaleAgentStatuses()
 	ui.mu.RLock()
 	statuses := append([]core.AgentStatus(nil), ui.agentStatuses...)
 	probed := ui.agentsProbed
+	refreshing := ui.agentsRefreshing
 	ui.mu.RUnlock()
-	ui.refreshStaleAgentStatuses()
 	if !probed {
 		http.Error(w, "agents are still being probed", http.StatusServiceUnavailable)
 		return
 	}
-	ui.mu.RLock()
-	refreshing := ui.agentsRefreshing
-	ui.mu.RUnlock()
 	if refreshing {
 		w.Header().Set(AgentsRefreshingHeader, "true")
 	}
