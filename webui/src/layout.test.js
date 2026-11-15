@@ -58,12 +58,35 @@ describe("prompt agent panel (issue #828)", () => {
 		);
 	});
 
-	it("keeps the dashboard full width on phones, where a modal opens", () => {
+	it("keeps the dashboard full width on phones, where a bottom drawer opens", () => {
 		// The override has to follow the panel's own rules to win the cascade.
 		expect(panelMobile).toBeGreaterThan(css.indexOf(".prompt-panel {"));
 		expect(rule(".app-shell.prompt-open", panelMobile)).toContain(
 			"padding-right: 0",
 		);
-		expect(rule(".prompt-modal[hidden]")).toContain("display: none");
+	});
+});
+
+describe("prompt agent bottom drawer (issue #834)", () => {
+	it("anchors the drawer to the bottom of the screen over the dashboard", () => {
+		const drawer = rule(".prompt-drawer");
+		expect(drawer).toContain("position: fixed");
+		expect(drawer).toContain("justify-content: flex-end");
+		expect(rule(".prompt-drawer[hidden]")).toContain("display: none");
+	});
+
+	it("slides the sheet up from the bottom edge when it opens", () => {
+		expect(rule(".prompt-drawer-sheet")).toContain(
+			"animation: prompt-drawer-up",
+		);
+		expect(rule("@keyframes prompt-drawer-up")).toContain(
+			"transform: translateY(100%)",
+		);
+	});
+
+	it("rounds only the top corners, like a sheet", () => {
+		expect(rule(".prompt-drawer-sheet")).toContain(
+			"border-radius: 14px 14px 0 0",
+		);
 	});
 });
