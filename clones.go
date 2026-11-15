@@ -479,12 +479,15 @@ func clearClones(reg *cloneRegistry, usage func() cloneUsage) core.ClearClonesRe
 			continue
 		}
 		_ = reg.remove(entry.Path)
+		entry.Size = size
 		result.Reclaimed += size
 		result.Removed = append(result.Removed, entry)
 	}
 	return result
 }
 
+// dirSize totals the regular files under path. WalkDir never follows
+// symlinks or Windows junctions, so nothing outside the clone is counted.
 func dirSize(path string) int64 {
 	var total int64
 	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {

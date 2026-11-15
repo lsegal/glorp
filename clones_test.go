@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,7 +116,8 @@ func TestClearClonesKeepsActiveAndPausedJobs(t *testing.T) {
 	if err := saveScopedWorkState(statePath, work, []string{"o/r", "o/s"}); err != nil {
 		t.Fatal(err)
 	}
-	w := &Glorp{Targets: []string{"o/r", "o/s"}, StatePath: statePath, Out: os.Stderr}
+	var logs bytes.Buffer
+	w := &Glorp{Targets: []string{"o/r", "o/s"}, StatePath: statePath, Out: &logs}
 	w.SetTempDirs([]string{root})
 	for number, dir := range map[int]string{1: active, 2: paused, 3: finished} {
 		w.recordClone(issueKey(Issue{Number: number, Target: "o/r"}), "o/r", Issue{Number: number, Target: "o/r"}, dir)
@@ -144,6 +146,73 @@ func TestClearClonesKeepsActiveAndPausedJobs(t *testing.T) {
 	}
 	if isDir(finished) || !isDir(active) || !isDir(paused) {
 		t.Fatal("clear removed the wrong directories")
+	}
+	// Each removal logs its size and the round ends with the total
+	// (issue #838).
+	if result.Removed[0].Size != result.Reclaimed {
+		t.Fatalf("removed size %d, reclaimed %d", result.Removed[0].Size, result.Reclaimed)
+	}
+	size := formatBytes(result.Reclaimed)
+	for _, want := range []string{"removed unused clone " + finished + " (" + size + ")", "cleared 1 unused clone, reclaimed " + size} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs.String())
+		}
+	}
+}
+
+// TestClearClonesTotalsEachRemoval checks the per-clone sizes sum to the
+// reclaimed total, a failed removal counts nothing, and a symlink out of a
+// clone is not followed when measuring it (issue #838).
+func TestClearClonesTotalsEachRemoval(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "big"), make([]byte, 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := makeClone(t, root, "r-gh-fix-1", "o/r")
+	second := makeClone(t, root, "r-gh-fix-2", "o/r")
+	if err := os.WriteFile(filepath.Join(second, "data"), make([]byte, 5000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := os.Symlink(outside, filepath.Join(second, "link")) == nil
+	reg := &cloneRegistry{records: map[string]cloneRecord{}}
+	work := map[string]workState{}
+	for i, dir := range []string{first, second} {
+		key := fmt.Sprintf("o/r#%d", i+1)
+		_ = reg.record(cloneRecord{Path: dir, Repository: "o/r", Issue: i + 1, Job: key})
+		work[key] = workState{Status: "completed"}
+	}
+	usage := func() cloneUsage { return cloneUsage{roots: []string{root}, work: work} }
+	result := clearClones(reg, usage)
+	if len(result.Removed) != 2 {
+		t.Fatalf("clear = %+v, want both clones removed", result)
+	}
+	var sum, secondSize int64
+	for _, entry := range result.Removed {
+		if entry.Size <= 0 {
+			t.Fatalf("removed %s with no size", entry.Path)
+		}
+		if entry.Path == second && entry.Size >= 1<<20 {
+			t.Fatalf("size %d of %s followed its symlink (linked %t)", entry.Size, second, linked)
+		}
+		if entry.Path == second {
+			secondSize = entry.Size
+		}
+		sum += entry.Size
+	}
+	if sum != result.Reclaimed {
+		t.Fatalf("sizes sum to %d, reclaimed %d", sum, result.Reclaimed)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "big")); err != nil {
+		t.Fatalf("clear touched the symlink target: %v", err)
+	}
+	if got := clearClonesTotal(result); got != "cleared 2 unused clones, reclaimed "+formatBytes(sum) {
+		t.Fatalf("total = %q", got)
+	}
+	var out bytes.Buffer
+	printClearClones(&out, result)
+	if !strings.Contains(out.String(), "removed "+second+" ("+formatBytes(secondSize)+")") {
+		t.Fatalf("CLI output lacks the clone size:\n%s", out.String())
 	}
 }
 

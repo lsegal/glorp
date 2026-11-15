@@ -119,10 +119,13 @@ func (w *Glorp) ClearClones(context.Context) (core.ClearClonesResult, error) {
 	reg.adopt(usage.roots, usage.work)
 	result := clearClones(reg, w.cloneUsage)
 	for _, entry := range result.Removed {
-		w.logf("removed unused clone %s", entry.Path)
+		w.logf("removed unused clone %s (%s)", entry.Path, formatBytes(entry.Size))
 	}
 	for _, failure := range result.Errors {
 		w.logf("could not remove clone %s", failure)
+	}
+	if len(result.Removed) > 0 {
+		w.logf("%s", clearClonesTotal(result))
 	}
 	return result, nil
 }
