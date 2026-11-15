@@ -265,6 +265,16 @@ export function parseAllowedCommenters(text) {
 		.filter(Boolean);
 }
 
+// parseTempDirs reads the temp-directories box, one directory per line in the
+// order new clones try them (issue #830). Blank lines are dropped, and an
+// empty list means the system temp directory.
+export function parseTempDirs(text) {
+	return String(text)
+		.split(/\r?\n/)
+		.map((dir) => dir.trim())
+		.filter(Boolean);
+}
+
 // buildSettingsUpdate turns the settings modal's form state into the partial
 // update the /api/settings endpoint expects. activeAgents is omitted when
 // empty (issue #572) so an instance with no configured runner doesn't fail
@@ -277,6 +287,7 @@ export function buildSettingsUpdate(form) {
 		noMerge: Boolean(form.noMerge),
 		noChangelog: Boolean(form.noChangelog),
 		autoUpdate: Boolean(form.autoUpdate),
+		tempDirs: parseTempDirs(form.tempDirs ?? ""),
 		unblockInterval: String(form.unblockInterval ?? "").trim() || "0",
 		unblockAgent: form.unblockAgent ?? "",
 		unblockModel: String(form.unblockModel ?? "").trim(),
@@ -579,4 +590,59 @@ export function agentSummaries(snapshot, statuses) {
 		});
 	}
 	return summaries;
+}
+
+// fetchClones lists every clone glorp has on record (issue #830).
+export async function fetchClones() {
+	const response = await fetch("/api/clones", { cache: "no-store" });
+	if (!response.ok) {
+		await throwForResponse(response);
+	}
+	return response.json();
+}
+
+// clearUnusedClones removes the unused clones and reports what was removed
+// and how many bytes that reclaimed.
+export async function clearUnusedClones() {
+	const response = await fetch("/api/clones", { method: "POST" });
+	if (!response.ok) {
+		await throwForResponse(response);
+	}
+	return response.json();
+}
+
+// formatBytes renders a byte count with a binary unit.
+export function formatBytes(bytes) {
+	const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+	let value = Number(bytes) || 0;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${units[unit]}`;
+}
+
+// cloneIssueURL and clonePullRequestURL link a clone to the issue and pull
+// request it was made for, or are empty when either is unknown.
+export function cloneIssueURL(clone) {
+	if (!clone?.repository || !clone.issue) return "";
+	return `https://github.com/${clone.repository}/issues/${clone.issue}`;
+}
+
+export function clonePullRequestURL(clone) {
+	const repository = clone?.pullRequestRepository || clone?.repository;
+	if (!repository || !clone.pullRequest) return "";
+	return `https://github.com/${repository}/pull/${clone.pullRequest}`;
+}
+
+// clearClonesSummary describes a clear's result in one line.
+export function clearClonesSummary(result) {
+	const removed = result?.removed?.length ?? 0;
+	const kept = result?.kept ?? 0;
+	let text = `Removed ${removed} unused clone${removed === 1 ? "" : "s"}, reclaimed ${formatBytes(result?.reclaimed)}; kept ${kept}`;
+	if (result?.errors?.length) {
+		text += `; ${result.errors.length} could not be removed`;
+	}
+	return text;
 }

@@ -100,6 +100,8 @@ func commandFlags(name string) *flag.FlagSet {
 		return browserFlagSet()
 	case "agents":
 		return agentsFlagSet(&agentsOptions{})
+	case "clones":
+		return clonesFlagSet(&tempDirFlag{})
 	}
 	return nil
 }

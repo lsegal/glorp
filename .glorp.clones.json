@@ -1,0 +1,316 @@
+[
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\glorp-gh-fix-755",
+    "repository": "lsegal/glorp",
+    "issue": 755,
+    "job": "lsegal/glorp#755",
+    "created": "2026-11-14T18:45:19.5575068-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\glorp-gh-fix-825",
+    "repository": "lsegal/glorp",
+    "issue": 825,
+    "job": "lsegal/glorp#825",
+    "created": "2026-11-14T18:45:19.5595399-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\glorp-gh-fix-830",
+    "repository": "lsegal/glorp",
+    "issue": 830,
+    "job": "lsegal/glorp#830",
+    "created": "2026-11-14T18:45:19.5595399-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\glorp-gh-fix-832",
+    "repository": "lsegal/glorp",
+    "issue": 832,
+    "job": "lsegal/glorp#832",
+    "created": "2026-11-14T18:45:19.5611155-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-114",
+    "repository": "lsegal/nupp",
+    "issue": 114,
+    "job": "lsegal/nupp#114",
+    "created": "2026-11-14T18:45:19.5621226-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-134",
+    "repository": "lsegal/nupp",
+    "issue": 134,
+    "job": "lsegal/nupp#134",
+    "created": "2026-11-14T18:45:19.5641598-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-139",
+    "repository": "lsegal/nupp",
+    "issue": 139,
+    "job": "lsegal/nupp#139",
+    "created": "2026-11-14T18:45:19.565222-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-148",
+    "repository": "lsegal/nupp",
+    "issue": 148,
+    "job": "lsegal/nupp#148",
+    "created": "2026-11-14T18:45:19.566289-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-149",
+    "repository": "lsegal/nupp",
+    "issue": 149,
+    "job": "lsegal/nupp#149",
+    "created": "2026-11-14T18:45:19.5668049-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-209",
+    "repository": "lsegal/nupp",
+    "issue": 209,
+    "job": "lsegal/nupp#209",
+    "created": "2026-11-14T18:45:19.5684361-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-221",
+    "repository": "lsegal/nupp",
+    "issue": 221,
+    "job": "lsegal/nupp#221",
+    "created": "2026-11-14T18:45:19.5700855-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-246",
+    "repository": "lsegal/nupp",
+    "issue": 246,
+    "job": "lsegal/nupp#246",
+    "created": "2026-11-14T18:45:19.5711392-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-275",
+    "repository": "lsegal/nupp",
+    "issue": 275,
+    "job": "lsegal/nupp#275",
+    "created": "2026-11-14T18:45:19.5727396-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-291",
+    "repository": "lsegal/nupp",
+    "issue": 291,
+    "job": "lsegal/nupp#291",
+    "created": "2026-11-14T18:45:19.5738144-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-295",
+    "repository": "lsegal/nupp",
+    "issue": 295,
+    "job": "lsegal/nupp#295",
+    "created": "2026-11-14T18:45:19.5743458-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-303",
+    "repository": "lsegal/nupp",
+    "issue": 303,
+    "job": "lsegal/nupp#303",
+    "created": "2026-11-14T18:45:19.5759306-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-306",
+    "repository": "lsegal/nupp",
+    "issue": 306,
+    "job": "lsegal/nupp#306",
+    "created": "2026-11-14T18:45:19.5764585-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-308",
+    "repository": "lsegal/nupp",
+    "issue": 308,
+    "job": "lsegal/nupp#308",
+    "created": "2026-11-14T18:45:19.576992-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-52",
+    "repository": "lsegal/nupp",
+    "issue": 52,
+    "job": "lsegal/nupp#52",
+    "created": "2026-11-14T18:45:19.578063-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-63",
+    "repository": "lsegal/nupp",
+    "issue": 63,
+    "job": "lsegal/nupp#63",
+    "created": "2026-11-14T18:45:19.578599-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-7",
+    "repository": "lsegal/nupp",
+    "issue": 7,
+    "job": "lsegal/nupp#7",
+    "created": "2026-11-14T18:45:19.5801894-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\nupp-gh-fix-8",
+    "repository": "lsegal/nupp",
+    "issue": 8,
+    "job": "lsegal/nupp#8",
+    "created": "2026-11-14T18:45:19.581264-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-1123",
+    "issue": 1123,
+    "created": "2026-11-14T18:45:19.5872823-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-1152",
+    "issue": 1152,
+    "created": "2026-11-14T18:45:19.588341-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-1154",
+    "issue": 1154,
+    "created": "2026-11-14T18:45:19.5888743-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-1156",
+    "issue": 1156,
+    "created": "2026-11-14T18:45:19.5899419-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-249",
+    "issue": 249,
+    "created": "2026-11-14T18:45:19.590475-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-260",
+    "issue": 260,
+    "created": "2026-11-14T18:45:19.5910107-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-266",
+    "issue": 266,
+    "created": "2026-11-14T18:45:19.5915353-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-280",
+    "issue": 280,
+    "created": "2026-11-14T18:45:19.592058-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-283",
+    "issue": 283,
+    "created": "2026-11-14T18:45:19.5925898-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-285",
+    "issue": 285,
+    "created": "2026-11-14T18:45:19.5931184-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-291",
+    "issue": 291,
+    "created": "2026-11-14T18:45:19.5936658-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-332",
+    "issue": 332,
+    "created": "2026-11-14T18:45:19.5941953-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-755",
+    "issue": 755,
+    "created": "2026-11-14T18:45:19.5952497-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-811",
+    "issue": 811,
+    "created": "2026-11-14T18:45:19.5957839-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-928",
+    "issue": 928,
+    "created": "2026-11-14T18:45:19.5963149-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-936",
+    "issue": 936,
+    "created": "2026-11-14T18:45:19.5968437-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvid-gh-fix-943",
+    "issue": 943,
+    "created": "2026-11-14T18:45:19.5973782-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvidlib-gh-fix-506",
+    "issue": 506,
+    "created": "2026-11-14T18:45:19.5984258-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvidlib-gh-fix-511",
+    "issue": 511,
+    "created": "2026-11-14T18:45:19.5989571-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvidlib-gh-fix-526",
+    "issue": 526,
+    "created": "2026-11-14T18:45:19.5994809-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvidlib-gh-fix-554",
+    "issue": 554,
+    "created": "2026-11-14T18:45:19.6005244-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvidlib-gh-fix-565",
+    "issue": 565,
+    "created": "2026-11-14T18:45:19.6011056-08:00",
+    "adopted": true
+  },
+  {
+    "path": "C:\\Users\\Loren\\AppData\\Local\\Temp\\zvidlib-gh-fix-692",
+    "issue": 692,
+    "created": "2026-11-14T18:45:19.60214-08:00",
+    "adopted": true
+  }
+]
