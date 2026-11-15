@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.6.3 - 2026-11-15
+
 - Report how much space each removed clone took when clearing unused clones, and the total reclaimed (issue #838). Each `removed unused clone` log entry now ends with the clone's size, for example `removed unused clone <path> (1.2 GiB)`, and a clear that removes any clones ends with one `cleared 33 unused clones, reclaimed 41.7 GiB` entry. `glorp clones -clear` prints each removed clone's size too. Clones that could not be removed are not counted, and sizes never follow symlinks or junctions out of a clone.
 
 ## v1.6.2 - 2026-11-15
