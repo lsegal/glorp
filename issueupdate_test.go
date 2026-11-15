@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/lsegal/glorp/browser"
 	"github.com/lsegal/glorp/core"
 )
 
@@ -55,6 +57,40 @@ func TestPostIssueUpdateMentionsTheAuthorAndThisInstance(t *testing.T) {
 	}
 	if comments.posts != 1 {
 		t.Errorf("invalid updates posted comments: %d posts", comments.posts)
+	}
+}
+
+// Browser mode wraps the comment client in the page reader, which is how the
+// owner's instance runs; updates still post through the API client behind it,
+// mentioning the author, on issues and pull requests alike (issue #832).
+func TestPostIssueUpdatePostsThroughTheBrowserCommentSource(t *testing.T) {
+	inner := updateCommentClient{fakeCommentClient: newFakeCommentClient(), author: "octo"}
+	w := &Glorp{Identity: "ABCD1234", Comments: browser.NewCommentSource(nil, inner, nil), Out: &syncBuffer{}}
+	for _, number := range []int{2, 3} {
+		result, err := w.PostIssueUpdate(context.Background(), core.IssueUpdate{Repository: "o/r", Number: number, Text: "Rebase onto main."})
+		if err != nil {
+			t.Fatalf("#%d: %v", number, err)
+		}
+		if result.URL == "" || result.Author != "octo" {
+			t.Errorf("#%d: result = %+v", number, result)
+		}
+		posted := inner.comments["o/r#"+strconv.Itoa(number)]
+		if len(posted) != 1 || !strings.HasPrefix(posted[0].Body, "@octo @/glorp:ABCD1234\n\n") {
+			t.Fatalf("#%d: posted %+v", number, posted)
+		}
+	}
+}
+
+// An instance that genuinely cannot post says what it is missing.
+func TestPostIssueUpdateNamesTheMissingCapability(t *testing.T) {
+	update := core.IssueUpdate{Repository: "o/r", Number: 2, Text: "x"}
+	_, err := (&Glorp{Out: &syncBuffer{}}).PostIssueUpdate(context.Background(), update)
+	if err == nil || !strings.Contains(err.Error(), "gh auth status") {
+		t.Errorf("no comment client: %v", err)
+	}
+	_, err = (&Glorp{Comments: newFakeCommentClient(), Out: &syncBuffer{}}).PostIssueUpdate(context.Background(), update)
+	if err == nil || !strings.Contains(err.Error(), "cannot read an issue's author") {
+		t.Errorf("comment client without update support: %v", err)
 	}
 }
 

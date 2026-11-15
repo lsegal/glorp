@@ -121,6 +121,12 @@ Flags:`,
 			run: runAgentsCommand,
 		},
 		{
+			name:    "clones",
+			summary: "List the clones glorp made and clear the unused ones",
+			usage:   clonesUsage,
+			run:     runClonesCommand,
+		},
+		{
 			name:    "version",
 			summary: "Print the glorp version",
 			usage:   "Usage: glorp version",

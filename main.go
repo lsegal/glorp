@@ -72,6 +72,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.String("prompt-model", "", "model the dashboards' prompt area runs requests with (default: the prompt agent's model)")
 	flags.Duration("update-interval", defaultUpdateInterval, "how often to check for a newer glorp release; an update is offered in the dashboards and applied automatically (0 turns it off)")
 	flags.Bool("auto-update", true, "apply an available glorp update and restart even while agents are busy, checkpointing their work first; false waits until no agents are active")
+	flags.Var(&tempDirFlag{}, "temp-dir", "directory new clones are placed in (repeatable, tried in order; the next one is used when one lacks space for a clone; default: the system temp directory)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
@@ -99,6 +100,8 @@ func commandFlags(name string) *flag.FlagSet {
 		return browserFlagSet()
 	case "agents":
 		return agentsFlagSet(&agentsOptions{})
+	case "clones":
+		return clonesFlagSet(&tempDirFlag{})
 	}
 	return nil
 }
@@ -158,6 +161,7 @@ func runWatch(args []string) (code int) {
 	noMerge := flagValue[bool](flags, "no-merge")
 	noChangelog := flagValue[bool](flags, "no-changelog")
 	autoUpdate := flagValue[bool](flags, "auto-update")
+	tempDirs := flagValue[[]string](flags, "temp-dir")
 	unblockInterval := flagValue[time.Duration](flags, "unblock-interval")
 	if err := validateUnblockInterval(unblockInterval); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -370,7 +374,10 @@ func runWatch(args []string) (code int) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	runner := CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, AgentBinaries: agentBinaries.values(), Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, NoMerge: noMerge, NoChangelog: noChangelog, Definitions: registry, agentCursor: agentCursor, Active: activeRuns}
+	// The runner picks each run's clone directory from the instance's live
+	// temp-directories setting, which the dashboard can change (issue #830).
+	var watch *Glorp
+	runner := CommandRunner{Binary: binary, CodexBinary: codexBinary, ClaudeBinary: claudeBinary, AgentBinaries: agentBinaries.values(), Agents: agentSpecs.specs(), Agent: agentSpecs.values[0].String(), Repo: targets[0], Identity: identity, Yolo: yolo, RemoteControl: remoteControl, NoMerge: noMerge, NoChangelog: noChangelog, Definitions: registry, agentCursor: agentCursor, Active: activeRuns, CloneRoot: func() (string, error) { return watch.CloneRoot() }}
 	// Quota commands are run through the same executable the agent itself is
 	// invoked with, so --agent-binary points both at the same install.
 	quota := combinedQuotaReader(namedQuotaReaders(registry, agentSpecs.names(), runner.binary))
@@ -383,6 +390,8 @@ func runWatch(args []string) (code int) {
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
 	w.autoUpdate.Store(autoUpdate)
+	w.SetTempDirs(tempDirs)
+	watch = w
 	w.SetUnblockInterval(unblockInterval)
 	w.SetUnblockAgent(unblock)
 	w.SetPromptAgent(prompt)
@@ -418,6 +427,8 @@ func runWatch(args []string) (code int) {
 		webUI.SetIssueUpdateHandler(w.PostIssueUpdate)
 		webUI.SetAskHandler(w.AskPrompt)
 		webUI.SetCreateIssueHandler(w.CreateIssue)
+		// Wired before the server starts, like every handler startWebUI sets.
+		webUI.SetClonesHandlers(w.ListClones, w.ClearClones)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
@@ -1889,6 +1900,10 @@ type CommandRunner struct {
 	// for the shutdown checkpoint (issue #741). It is shared by pointer across
 	// copies, and nil tracks nothing.
 	Active *activeAgents
+	// CloneRoot picks the sanctioned temp directory a run without a checkout
+	// starts in and clones under (issue #830). Nil uses the system temp
+	// directory.
+	CloneRoot func() (string, error)
 }
 
 func commandArgs(r CommandRunner, issue Issue) []string {
@@ -1991,7 +2006,25 @@ func sessionRunDir(session AgentSession) (string, bool) {
 			return session.CheckoutDirectory, true
 		}
 	}
+	if session.RunDir != "" {
+		return session.RunDir, false
+	}
 	return os.TempDir(), false
+}
+
+// resolveRunDir chooses the sanctioned temp directory a run without a usable
+// checkout starts in (issue #830). It fails, rather than falling back to some
+// other directory, when no configured temp directory has room for a clone.
+func (r CommandRunner) resolveRunDir(session AgentSession) (AgentSession, error) {
+	if _, inCheckout := sessionRunDir(session); inCheckout || session.RunDir != "" || r.CloneRoot == nil {
+		return session, nil
+	}
+	root, err := r.CloneRoot()
+	if err != nil {
+		return session, err
+	}
+	session.RunDir = root
+	return session, nil
 }
 
 func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) []string {
@@ -2027,6 +2060,11 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 			prompt += " and use fork " + issue.Fork
 		}
 		prompt += "\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+		// The clone must live under a sanctioned temp directory (issue #830),
+		// so the run names the one it chose rather than leaving it to the agent.
+		if _, inCheckout := sessionRunDir(session); session.RunDir != "" && !inCheckout && !isDiscussionTarget(target) {
+			prompt += "\n\nClone directory: " + session.RunDir
+		}
 	} else if session.Update != "" {
 		// The session is being resumed to relay a change made to the issue
 		// while it was running (issue #469), so the change itself is the
@@ -2638,6 +2676,10 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	versionWarning, versionErr := checkAgentVersion(ctx, definition, binary)
 	if versionErr != nil {
 		return versionErr, false
+	}
+	session, err := r.resolveRunDir(session)
+	if err != nil {
+		return err, false
 	}
 	args := commandArgsForSession(r, issue, session)
 	cmd := newAgentCommand(ctx, binary, args...)

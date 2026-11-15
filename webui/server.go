@@ -60,6 +60,10 @@ type Server struct {
 	action   func(context.Context, core.JobAction) error
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 	agents   func(context.Context) ([]core.AgentStatus, error)
+	// listClones and clearClones back the settings dialog's clones section
+	// (issue #830).
+	listClones  func(context.Context) (core.ClonesSnapshot, error)
+	clearClones func(context.Context) (core.ClearClonesResult, error)
 	// unblock and issueUpdate back the MCP tools that run a watchdog round
 	// and post an update comment (issue #806).
 	unblock     func(key string) error
@@ -297,6 +301,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/settings" {
 		ui.serveSettings(w, r)
+		return
+	}
+	if r.URL.Path == "/api/clones" {
+		ui.serveClones(w, r)
 		return
 	}
 	if r.URL.Path == "/api/agents" {
@@ -670,4 +678,44 @@ type Supervisor interface {
 	Start(*exec.Cmd) error
 	Run(*exec.Cmd) error
 	Stop(*exec.Cmd) error
+}
+
+// SetClonesHandlers wires the settings dialog's clones section (issue #830):
+// list enumerates every recorded clone and clear removes the unused ones.
+func (ui *Server) SetClonesHandlers(list func(context.Context) (core.ClonesSnapshot, error), clear func(context.Context) (core.ClearClonesResult, error)) {
+	ui.mu.Lock()
+	ui.listClones = list
+	ui.clearClones = clear
+	ui.mu.Unlock()
+}
+
+// serveClones backs the settings dialog's clones section (issue #830). GET
+// lists every recorded clone; POST removes the unused ones and reports what
+// was removed and the space reclaimed.
+func (ui *Server) serveClones(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ui.mu.RLock()
+	list, clear := ui.listClones, ui.clearClones
+	ui.mu.RUnlock()
+	var result any
+	var err error
+	switch {
+	case r.Method == http.MethodGet && list != nil:
+		result, err = list(r.Context())
+	case r.Method == http.MethodPost && clear != nil:
+		result, err = clear(r.Context())
+	default:
+		http.Error(w, "clones unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(result)
 }

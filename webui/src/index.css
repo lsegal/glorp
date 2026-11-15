@@ -1204,3 +1204,111 @@ h1 .version {
 		padding-right: 0;
 	}
 }
+
+.modal-body textarea {
+	font: inherit;
+	background: #09090b;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 7px 9px;
+	color: #fafafa;
+	resize: vertical;
+}
+@media (max-width: 640px) {
+	.modal-body textarea {
+		font-size: 16px;
+	}
+}
+.clones-section {
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: #09090b80;
+}
+.clones-section summary {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 10px;
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 600;
+}
+.clones-count {
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 400;
+}
+.clones-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 0 10px 10px;
+}
+.clones-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	max-height: 220px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.clones-list li {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	column-gap: 8px;
+	font-size: 12px;
+}
+.clone-status {
+	grid-row: span 3;
+	align-self: start;
+	font-size: 11px;
+	border-radius: 999px;
+	padding: 1px 8px;
+	border: 1px solid var(--border);
+}
+.clones-list li.in-use .clone-status {
+	color: #86efac;
+	border-color: #166534;
+}
+.clones-list li.unused .clone-status {
+	color: var(--muted);
+}
+.clone-path {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: #e4e4e7;
+	font-family: ui-monospace, monospace;
+}
+.clone-meta,
+.clone-reason,
+.clones-empty,
+.clones-result {
+	color: var(--muted);
+	font-size: 11px;
+	margin: 0;
+}
+.clone-meta a {
+	color: inherit;
+}
+.clones-clear {
+	align-self: flex-start;
+	border: 1px solid #52525b;
+	border-radius: 6px;
+	background: #27272a;
+	color: #e4e4e7;
+	padding: 6px 12px;
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.clones-clear:hover:not(:disabled) {
+	background: #3f3f46;
+}
+.clones-clear:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
