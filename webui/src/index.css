@@ -1136,4 +1136,19 @@ h1 .version {
 }
 .clones-clear {
 	align-self: flex-start;
+	border: 1px solid #52525b;
+	border-radius: 6px;
+	background: #27272a;
+	color: #e4e4e7;
+	padding: 6px 12px;
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.clones-clear:hover:not(:disabled) {
+	background: #3f3f46;
+}
+.clones-clear:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }

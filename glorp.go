@@ -194,7 +194,7 @@ type Glorp struct {
 	// clones keeps the temp directories new clones go in and the record of
 	// every clone this instance has made (issue #830).
 	clones cloneState
-	Issues     IssueSource
+	Issues IssueSource
 	// Discussions lists unanswered top-level Discussion threads for
 	// Discussions-board targets. When nil, Discussions-board targets are
 	// never polled.

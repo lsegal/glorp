@@ -7,3 +7,4 @@ webui/dist/
 public/
 resources/
 .hugo_build.lock
+.glorp.clones.json

@@ -782,3 +782,38 @@ func TestServerHandlesPromptRequests(t *testing.T) {
 		t.Fatalf("state prompts = %+v, %v", state.Prompts, err)
 	}
 }
+
+func TestServeClonesListsAndClears(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/clones", nil)
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unwired clones = %d, want 503", response.Code)
+	}
+	ui.SetClonesHandlers(func(context.Context) (core.ClonesSnapshot, error) {
+		return core.ClonesSnapshot{Roots: []string{"/tmp"}, Clones: []core.CloneEntry{{Path: "/tmp/r-gh-fix-1", Repository: "o/r", Issue: 1, PullRequest: 2, InUse: true}}}, nil
+	}, func(context.Context) (core.ClearClonesResult, error) {
+		return core.ClearClonesResult{Removed: []core.CloneEntry{{Path: "/tmp/r-gh-fix-3"}}, Kept: 1, Reclaimed: 4096}, nil
+	})
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/clones", nil))
+	var snapshot core.ClonesSnapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil || len(snapshot.Clones) != 1 || snapshot.Clones[0].PullRequest != 2 || !snapshot.Clones[0].InUse {
+		t.Fatalf("GET /api/clones = %d %s (%v)", response.Code, response.Body.String(), err)
+	}
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/clones", nil))
+	var result core.ClearClonesResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Removed) != 1 || result.Reclaimed != 4096 {
+		t.Fatalf("POST /api/clones = %d %s (%v)", response.Code, response.Body.String(), err)
+	}
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/clones", nil))
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("DELETE /api/clones = %d", response.Code)
+	}
+}
