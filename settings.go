@@ -244,6 +244,9 @@ func (w *Glorp) applySettingsRequest(update SettingsUpdate, sem *concurrencySema
 	if update.NoChangelog != nil {
 		w.noChangelog.Store(*update.NoChangelog)
 	}
+	if update.AutoUpdate != nil {
+		w.autoUpdate.Store(*update.AutoUpdate)
+	}
 	if update.ActiveAgents != nil {
 		trimmed := make([]string, len(*update.ActiveAgents))
 		for i, spec := range *update.ActiveAgents {
@@ -299,6 +302,7 @@ func (w *Glorp) settingsSnapshot() SettingsSnapshot {
 		AllowedCommenters: append([]string(nil), w.AllowedCommenters...),
 		NoMerge:           w.noMerge.Load(),
 		NoChangelog:       w.noChangelog.Load(),
+		AutoUpdate:        w.autoUpdate.Load(),
 		Agents:            w.registry().Names(),
 		AgentOptions:      w.agentOptions(),
 		ConfiguredAgents:  w.configuredAgents(),

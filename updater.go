@@ -384,11 +384,11 @@ func renameRetry(from, to string) error {
 
 // updater keeps a watch on the newest glorp release (issue #783). Each round
 // it looks up the latest release and, when it is newer than the running
-// version, downloads it and tells the dashboards an update is available. When
-// no agent is running it applies the update on its own: the new binary is
-// swapped in and glorp restarts through the restart button's path, which
-// pushes every run's work first. Otherwise the dashboards' update buttons
-// apply it.
+// version, downloads it and tells the dashboards an update is available. It
+// then applies the update on its own: the new binary is swapped in and glorp
+// restarts through the restart button's path, which pushes every run's work
+// first. With auto-update off (issue #824) it waits until no agent is running,
+// and until then the dashboards' update buttons apply it.
 type updater struct {
 	Current  string
 	Interval time.Duration
@@ -407,6 +407,10 @@ type updater struct {
 	Restart func(context.Context) ([]core.CheckpointResult, error)
 	// Active reports how many agent runs are in flight.
 	Active func() int
+	// AutoUpdate reports whether an update is applied while agents are
+	// busy (issue #824). It is read each round, so a settings change takes
+	// effect from the next check. Nil means off.
+	AutoUpdate func() bool
 	// Notify tells the dashboards an update to version is available.
 	Notify func(version string)
 	Logf   func(string, ...interface{})
@@ -459,13 +463,36 @@ func (u *updater) check(ctx context.Context) {
 		u.Logf("glorp %s is available (running %s)", tag, u.Current)
 		u.Notify(tag)
 	}
-	if active := u.Active(); active > 0 {
+	active := u.Active()
+	if active > 0 {
+		if u.AutoUpdate == nil || !u.AutoUpdate() {
+			return
+		}
+		u.Logf("auto-update is on; updating glorp to %s while %d agent run(s) are active, checkpointing their work first", tag, active)
+	} else {
+		u.Logf("no agents are active; updating glorp to %s", tag)
+	}
+	results, err := u.Apply(ctx)
+	if err != nil {
+		u.Logf("update glorp to %s: %v", tag, err)
 		return
 	}
-	u.Logf("no agents are active; updating glorp to %s", tag)
-	if _, err := u.Apply(ctx); err != nil {
-		u.Logf("update glorp to %s: %v", tag, err)
+	if active > 0 {
+		u.Logf("restarting onto glorp %s with %d active run(s): %s", tag, active, checkpointSummary(results))
 	}
+}
+
+// checkpointSummary renders each run's shutdown checkpoint outcome in one
+// line, so a busy update restart's record says what happened to every run.
+func checkpointSummary(results []core.CheckpointResult) string {
+	if len(results) == 0 {
+		return "no checkpoints"
+	}
+	parts := make([]string, len(results))
+	for i, result := range results {
+		parts[i] = fmt.Sprintf("%s#%d %s", result.Target, result.Number, result.Outcome)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Available is the release tag a downloaded update would install, or "" when
@@ -529,7 +556,7 @@ func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 
 // newWatchUpdater builds the updater a watch runs, or nil when it is turned
 // off or glorp is a development build with no release version to compare.
-func newWatchUpdater(interval time.Duration, active *activeAgents, restart func(context.Context) ([]core.CheckpointResult, error), logf func(string, ...interface{}), ui *TerminalUI, web *webui.Server) *updater {
+func newWatchUpdater(interval time.Duration, active *activeAgents, autoUpdate func() bool, restart func(context.Context) ([]core.CheckpointResult, error), logf func(string, ...interface{}), ui *TerminalUI, web *webui.Server) *updater {
 	if interval == 0 {
 		return nil
 	}
@@ -574,8 +601,9 @@ func newWatchUpdater(interval time.Duration, active *activeAgents, restart func(
 			}
 			return skillsRefresher{Repo: repo, Run: npxCommand}.Refresh(ctx, tag, targets)
 		},
-		Restart: restart,
-		Active:  active.count,
+		Restart:    restart,
+		Active:     active.count,
+		AutoUpdate: autoUpdate,
 		Notify: func(version string) {
 			if ui != nil {
 				ui.SetUpdate(version)

@@ -186,7 +186,9 @@ type Glorp struct {
 	ReadyState  string
 	noMerge     atomic.Bool
 	noChangelog atomic.Bool
-	Issues      IssueSource
+	// autoUpdate is read by the updater each round (issue #824).
+	autoUpdate atomic.Bool
+	Issues     IssueSource
 	// Discussions lists unanswered top-level Discussion threads for
 	// Discussions-board targets. When nil, Discussions-board targets are
 	// never polled.

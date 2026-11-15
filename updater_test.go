@@ -77,6 +77,7 @@ type fakeUpdater struct {
 	latest      string
 	latestErr   error
 	active      int
+	autoUpdate  bool
 	downloads   []string
 	downloadErr error
 	installs    []string
@@ -107,8 +108,9 @@ func (f *fakeUpdater) updater() *updater {
 			f.restarts++
 			return []core.CheckpointResult{{Target: "o/r", Number: 7, Outcome: "pushed"}}, nil
 		},
-		Active: func() int { return f.active },
-		Notify: func(version string) { f.notices = append(f.notices, version) },
+		Active:     func() int { return f.active },
+		AutoUpdate: func() bool { return f.autoUpdate },
+		Notify:     func(version string) { f.notices = append(f.notices, version) },
 		Logf: func(format string, args ...interface{}) {
 			f.logs = append(f.logs, fmt.Sprintf(format, args...))
 		},
@@ -179,6 +181,44 @@ func TestUpdaterWaitsForActiveAgents(t *testing.T) {
 	u.check(context.Background())
 	if len(f.downloads) != 1 || len(f.installs) != 1 || f.restarts != 1 {
 		t.Fatalf("idle: downloads=%v installs=%v restarts=%d", f.downloads, f.installs, f.restarts)
+	}
+}
+
+// With auto-update on (issue #824) a busy glorp still updates: the restart
+// checkpoints the active runs, and the log says how many there were and what
+// happened to each.
+func TestUpdaterAppliesWhileBusyWithAutoUpdate(t *testing.T) {
+	f := &fakeUpdater{latest: "v1.5.23", active: 2, autoUpdate: true}
+	u := f.updater()
+	u.check(context.Background())
+	if len(f.installs) != 1 || f.restarts != 1 {
+		t.Fatalf("busy auto-update: installs=%v restarts=%d", f.installs, f.restarts)
+	}
+	logs := strings.Join(f.logs, "\n")
+	if !strings.Contains(logs, "while 2 agent run(s) are active") {
+		t.Errorf("logs do not report the busy update:\n%s", logs)
+	}
+	if !strings.Contains(logs, "with 2 active run(s): o/r#7 pushed") {
+		t.Errorf("logs do not report checkpoint outcomes:\n%s", logs)
+	}
+	if strings.Contains(logs, "no agents are active") {
+		t.Errorf("busy update logged as idle:\n%s", logs)
+	}
+}
+
+// The setting is read each round, so turning it on takes effect from the
+// next check without restarting glorp.
+func TestUpdaterAutoUpdateToggleTakesEffectNextRound(t *testing.T) {
+	f := &fakeUpdater{latest: "v1.5.23", active: 1}
+	u := f.updater()
+	u.check(context.Background())
+	if f.restarts != 0 {
+		t.Fatalf("auto-update off: restarts=%d", f.restarts)
+	}
+	f.autoUpdate = true
+	u.check(context.Background())
+	if len(f.downloads) != 1 || f.restarts != 1 {
+		t.Fatalf("auto-update turned on: downloads=%v restarts=%d", f.downloads, f.restarts)
 	}
 }
 

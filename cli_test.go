@@ -136,6 +136,27 @@ func TestWatchNoChangelogFlag(t *testing.T) {
 	}
 }
 
+// Auto-update defaults on (issue #824) and can be turned off.
+func TestWatchAutoUpdateFlag(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"owner/repo"}, true},
+		{[]string{"--auto-update=false", "owner/repo"}, false},
+	} {
+		agents := agentFlag{values: []agentSpec{{Name: "codex"}}}
+		filter := filterFlag{values: []string{defaultIssueFilter}}
+		flags := watchFlagSet(&agents, &agentBinaryFlag{}, &filter)
+		if err := flags.Parse(tc.args); err != nil {
+			t.Fatalf("parse %v: %v", tc.args, err)
+		}
+		if got := flagValue[bool](flags, "auto-update"); got != tc.want {
+			t.Errorf("%v: auto-update = %t, want %t", tc.args, got, tc.want)
+		}
+	}
+}
+
 func TestWatchRemoteControlDefaultsOff(t *testing.T) {
 	// Claude ignores remoteControlAtStartup under -p, so the default must not
 	// advertise a capability the run does not get (issue #502).
