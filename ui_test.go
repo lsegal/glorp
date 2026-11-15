@@ -1424,3 +1424,58 @@ func TestDashboardUpdateButton(t *testing.T) {
 		})
 	}
 }
+
+// The status bar names the running version and links it, and an available
+// update, to their GitHub release pages; the log keeps both pages as plain
+// text for terminals without hyperlinks (issue #825).
+func TestDashboardReleaseLinks(t *testing.T) {
+	for _, hyperlinks := range []bool{true, false} {
+		t.Run(fmt.Sprintf("hyperlinks=%v", hyperlinks), func(t *testing.T) {
+			m := newDashboard(nil)
+			m.hyperlinks = hyperlinks
+			m.version, m.releaseRepo = "v1.5.22", "lsegal/glorp"
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+			m = updated.(dashboard)
+			updated, _ = m.Update(updateMsg("v1.5.23"))
+			m = updated.(dashboard)
+			view := m.View()
+			current := "https://github.com/lsegal/glorp/releases/tag/v1.5.22"
+			next := "https://github.com/lsegal/glorp/releases/tag/v1.5.23"
+			for _, link := range []struct{ text, url string }{{"glorp v1.5.22", current}, {"glorp v1.5.23", next}} {
+				linked := ansi.SetHyperlink(link.url) + link.text + ansi.ResetHyperlink()
+				if got := strings.Contains(view, linked); got != hyperlinks {
+					t.Errorf("view links %q to %s = %v, want %v", link.text, link.url, got, hyperlinks)
+				}
+			}
+			plain := ansi.Strip(view)
+			for _, want := range []string{"glorp v1.5.22", "glorp v1.5.23 available " + updateButton, "glorp v1.5.23 is available: " + next} {
+				if !strings.Contains(plain, want) {
+					t.Errorf("view missing %q in %q", want, plain)
+				}
+			}
+		})
+	}
+}
+
+// A development build has no release page, so its version links to the
+// releases index instead (issue #825).
+func TestDashboardDevVersionLinksReleasesIndex(t *testing.T) {
+	m := newDashboard(nil)
+	m.hyperlinks = true
+	m.version, m.releaseRepo = "dev", "lsegal/glorp"
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	view := updated.(dashboard).View()
+	if want := ansi.SetHyperlink("https://github.com/lsegal/glorp/releases") + "glorp dev" + ansi.ResetHyperlink(); !strings.Contains(view, want) {
+		t.Errorf("dev version not linked to the releases index in %q", view)
+	}
+}
+
+// A truncated hyperlink still closes, so the rest of the screen does not
+// become part of the link (issue #825).
+func TestTruncateKeepsHyperlinkClosed(t *testing.T) {
+	link := ansi.SetHyperlink("https://example.com") + "a long linked status bar cell" + ansi.ResetHyperlink()
+	got := truncate(link, 12)
+	if ansi.Strip(got) != "a long li..." || !strings.HasSuffix(got, ansi.ResetHyperlink()) {
+		t.Errorf("truncate(%q, 12) = %q", link, got)
+	}
+}

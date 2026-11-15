@@ -782,3 +782,33 @@ func TestServerHandlesPromptRequests(t *testing.T) {
 		t.Fatalf("state prompts = %+v, %v", state.Prompts, err)
 	}
 }
+
+// The dashboard state carries the release pages of the running version and of
+// an available update, and a development build links the releases index
+// (issue #825).
+func TestServerReleaseURLs(t *testing.T) {
+	for _, tc := range []struct{ version, update, repo, versionURL, updateURL string }{
+		{"v1.5.22", "v1.5.23", "", "https://github.com/lsegal/glorp/releases/tag/v1.5.22", "https://github.com/lsegal/glorp/releases/tag/v1.5.23"},
+		{"dev", "", "fork/glorp", "https://github.com/fork/glorp/releases", ""},
+	} {
+		ui, err := New(tc.version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.repo != "" {
+			ui.SetReleaseRepo(tc.repo)
+		}
+		if tc.update != "" {
+			ui.SetUpdate(tc.update)
+		}
+		response := httptest.NewRecorder()
+		ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+		var state State
+		if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.VersionURL != tc.versionURL || state.UpdateURL != tc.updateURL {
+			t.Errorf("%s: release URLs = %q, %q, want %q, %q", tc.version, state.VersionURL, state.UpdateURL, tc.versionURL, tc.updateURL)
+		}
+	}
+}

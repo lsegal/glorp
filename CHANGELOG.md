@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Link glorp's version to its GitHub release page in both dashboards (issue #825). The web dashboard's header version and the version in its update notice now open the running release's page and the new release's page. The terminal dashboard's status bar now shows the running version, and it and the update notice link to the same pages in terminals that support hyperlinks. The log also lists both pages as plain text for terminals that do not. A development build links to the releases index instead.
+
 ## v1.6.1 - 2026-11-15
 
 - Fix Codex job runs failing to start without `--yolo` with `Not inside a trusted directory and --skip-git-repo-check was not specified` (issue #819). A dispatched run starts in the temp directory until its checkout directory exists, which is outside any git repository, and Codex refuses that unless `--yolo` is set. Glorp now passes Codex `--skip-git-repo-check` for a run or resume that starts outside its checkout. Runs inside an existing checkout are unchanged. Agent definitions can add arguments for these runs with the new `noCheckout` condition, which also holds for every `oneShot` call.
