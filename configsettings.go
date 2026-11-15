@@ -168,6 +168,10 @@ func settingsUpdateFlags(update core.SettingsUpdate) map[string]any {
 	if update.AutoUpdate != nil {
 		values["auto-update"] = *update.AutoUpdate
 	}
+	if update.TempDirs != nil {
+		dirs, _ := normalizeTempDirs(*update.TempDirs)
+		values["temp-dir"] = append([]string{}, dirs...)
+	}
 	if update.ActiveAgents != nil {
 		values["agent"] = append([]string(nil), *update.ActiveAgents...)
 	}

@@ -464,3 +464,18 @@ func isBaseBranch(ctx context.Context, git checkpointGit, dir, remote, branch st
 func checkpointMessage(number int) string {
 	return fmt.Sprintf("Shutdown checkpoint for issue #%d [skip ci]", number)
 }
+
+// checkouts reports every in-flight run with the checkout it announced, which
+// is empty while the agent has not announced one yet (issue #830).
+func (a *activeAgents) checkouts() []checkpointRun {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	runs := make([]checkpointRun, 0, len(a.runs))
+	for run := range a.runs {
+		runs = append(runs, checkpointRun{Target: run.issue.Target, Number: run.issue.Number, Checkout: run.checkout})
+	}
+	return runs
+}

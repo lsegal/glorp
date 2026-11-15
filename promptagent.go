@@ -406,6 +406,11 @@ func promptAgentPrompt(state promptState) string {
 		if len(settings.AllowedCommenters) > 0 {
 			fmt.Fprintf(&b, "- allowed commenters: %s\n", strings.Join(settings.AllowedCommenters, ", "))
 		}
+		if len(settings.TempDirs) > 0 {
+			fmt.Fprintf(&b, "- temp directories for clones (in order): %s\n", strings.Join(settings.TempDirs, ", "))
+		} else {
+			fmt.Fprintf(&b, "- temp directory for clones: %s (system default)\n", settings.TempDirDefault)
+		}
 		fmt.Fprintf(&b, "- stuck-job watchdog interval: %s; unblock agent: %s\n", settings.UnblockInterval, overrideText(settings.UnblockAgent, settings.UnblockModel, settings.UnblockDefault))
 		fmt.Fprintf(&b, "- prompt agent: %s\n", overrideText(settings.PromptAgent, settings.PromptModel, settings.PromptDefault))
 	}

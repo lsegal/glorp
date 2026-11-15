@@ -6,12 +6,16 @@ import {
 	buildSettingsUpdate,
 	checkpointLines,
 	clampPromptPanelWidth,
+	clearClonesSummary,
+	cloneIssueURL,
+	clonePullRequestURL,
 	deliveryLabel,
 	fetchAgentStatuses,
 	fetchAgentStatusesWithRetry,
 	fetchRestartProgress,
 	fetchSettings,
 	fetchSettingsWithRetry,
+	formatBytes,
 	formatInterval,
 	jobActionAvailability,
 	jobAgentSummary,
@@ -498,6 +502,7 @@ describe("buildSettingsUpdate", () => {
 				noMerge: true,
 				noChangelog: true,
 				autoUpdate: true,
+				tempDirs: " /data/clones \n\n/scratch ",
 				unblockInterval: " 10m ",
 				unblockAgent: "claude",
 				unblockModel: "opus",
@@ -512,6 +517,7 @@ describe("buildSettingsUpdate", () => {
 			noMerge: true,
 			noChangelog: true,
 			autoUpdate: true,
+			tempDirs: ["/data/clones", "/scratch"],
 			unblockInterval: "10m",
 			unblockAgent: "claude",
 			unblockModel: "opus",
@@ -539,6 +545,7 @@ describe("buildSettingsUpdate", () => {
 			noMerge: false,
 			noChangelog: false,
 			autoUpdate: false,
+			tempDirs: [],
 			unblockInterval: "0",
 			unblockAgent: "",
 			unblockModel: "",
@@ -1105,5 +1112,33 @@ describe("prompt panel (issue #828)", () => {
 		const { min, max } = promptPanelBounds(400);
 		expect(max).toBe(min);
 		expect(clampPromptPanelWidth(600, 400)).toBe(min);
+	});
+});
+
+describe("clones (issue #830)", () => {
+	it("links a clone to its issue and pull request", () => {
+		const clone = { repository: "o/r", issue: 4, pullRequest: 9 };
+		expect(cloneIssueURL(clone)).toBe("https://github.com/o/r/issues/4");
+		expect(clonePullRequestURL(clone)).toBe("https://github.com/o/r/pull/9");
+		expect(
+			clonePullRequestURL({ ...clone, pullRequestRepository: "me/r" }),
+		).toBe("https://github.com/me/r/pull/9");
+		expect(cloneIssueURL({ path: "/tmp/x" })).toBe("");
+		expect(clonePullRequestURL({ repository: "o/r", issue: 4 })).toBe("");
+	});
+
+	it("summarizes a clear with the space reclaimed", () => {
+		expect(formatBytes(512)).toBe("512 B");
+		expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MiB");
+		expect(
+			clearClonesSummary({
+				removed: [{ path: "/tmp/a" }],
+				kept: 2,
+				reclaimed: 2048,
+				errors: ["/tmp/b: busy"],
+			}),
+		).toBe(
+			"Removed 1 unused clone, reclaimed 2.0 KiB; kept 2; 1 could not be removed",
+		);
 	});
 });

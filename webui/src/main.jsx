@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { ClonesSection } from "./clones";
 import {
 	buildSettingsUpdate,
 	checkpointLines,
@@ -458,6 +459,7 @@ function SettingsModal({ onClose }) {
 					noMerge: Boolean(snapshot.noMerge),
 					noChangelog: Boolean(snapshot.noChangelog),
 					autoUpdate: snapshot.autoUpdate !== false,
+					tempDirs: (snapshot.tempDirs || []).join("\n"),
 					unblockInterval: snapshot.unblockInterval ?? "",
 					unblockAgent: snapshot.unblockAgent ?? "",
 					unblockModel: snapshot.unblockModel ?? "",
@@ -633,6 +635,21 @@ function SettingsModal({ onClose }) {
 									/>
 									Restart onto glorp updates even when agents are busy
 								</label>
+								<label htmlFor="settings-temp-dirs">
+									Temp directories for clones (one per line, tried in order)
+									<textarea
+										id="settings-temp-dirs"
+										rows={2}
+										value={form.tempDirs}
+										onChange={update("tempDirs")}
+										placeholder={
+											settings?.tempDirDefault
+												? `${settings.tempDirDefault} (system temp directory)`
+												: "system temp directory"
+										}
+									/>
+								</label>
+								<ClonesSection />
 								<label htmlFor="settings-unblock-interval">
 									Stuck-job check interval (0 turns it off)
 									<input

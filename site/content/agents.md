@@ -39,6 +39,7 @@ Agent definitions live in `.glorp.config.json` in the directory glorp is started
 | --- | --- | --- | --- |
 | `.glorp.config.json` | `--config PATH` | you, by hand; the dashboard, when a setting is changed | agent definitions and default switch values |
 | `.glorp.json` | `--state PATH` | glorp, on every dispatch | handled issues and active sessions |
+| `.glorp.clones.json` | beside `--state PATH` | glorp, when a run announces its clone or clones are listed | every clone glorp made for a job, for `glorp clones` and the dashboard's "Clear unused clones" |
 
 Putting a definition in `.glorp.json` is the mistake this split exists to prevent: the next state save rewrites that file and the definition is gone. glorp catches the mix-up in the other direction too — hand it a work-state file as `--config` and it reports the state record it found by name rather than a pile of unknown fields.
 
