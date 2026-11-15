@@ -34,6 +34,9 @@ type Values struct {
 	Settings, SessionName string
 	// Yolo and RemoteControl mirror the run's own flags.
 	Yolo, RemoteControl bool
+	// PromptStdin renders the prompt argument as the definition's
+	// promptStdin arguments, because the caller writes the prompt to stdin.
+	PromptStdin bool
 }
 
 func (v Values) value(name string) string {
@@ -90,6 +93,10 @@ func (d Definition) Render(mode Mode, values Values) []string {
 			continue
 		}
 		for _, arg := range fragment.Args {
+			if values.PromptStdin && d.PromptStdin != nil && arg == "{"+placeholderPrompt+"}" {
+				args = append(args, (*d.PromptStdin)...)
+				continue
+			}
 			args = append(args, substitute(arg, values))
 		}
 	}

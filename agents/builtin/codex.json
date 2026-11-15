@@ -17,6 +17,7 @@
     "models": ["{binary}", "debug", "models"],
     "modelsJSON": "models[visibility=list].slug"
   },
+  "promptStdin": ["-"],
   "args": {
     "run": [
       {"args": ["exec"]},
