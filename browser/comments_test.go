@@ -329,6 +329,51 @@ func TestCommentsPostThroughTheAPI(t *testing.T) {
 	}
 }
 
+// The MCP update-issue tool and the prompt agent's update action read the
+// author and post through the wrapped API client, so browser mode can post
+// updates like any other instance (issue #832).
+func TestCommentsPostUpdatesThroughTheAPI(t *testing.T) {
+	api := &fakeUpdateClient{fakeCommentClient: newFakeCommentClient(), author: "octo"}
+	source := newTestCommentSource(&fakeCommentPage{}, api, nil)
+
+	author, err := source.IssueAuthor(context.Background(), "owner/repo", 7)
+	if err != nil || author != "octo" {
+		t.Fatalf("IssueAuthor = %q, %v", author, err)
+	}
+	url, err := source.PostCommentURL(context.Background(), "owner/repo", 7, "@octo update")
+	if err != nil || url != "https://github.com/owner/repo/issues/7#issuecomment-1" {
+		t.Fatalf("PostCommentURL = %q, %v", url, err)
+	}
+	if api.posts != 1 {
+		t.Fatalf("the API took %d post(s), want 1", api.posts)
+	}
+
+	bare := newTestCommentSource(&fakeCommentPage{}, newFakeCommentClient(), nil)
+	if _, err := bare.IssueAuthor(context.Background(), "owner/repo", 7); err == nil || !strings.Contains(err.Error(), "cannot read an issue's author") {
+		t.Fatalf("IssueAuthor without the capability: %v", err)
+	}
+	if _, err := bare.PostCommentURL(context.Background(), "owner/repo", 7, "x"); err == nil || !strings.Contains(err.Error(), "cannot report a posted comment's URL") {
+		t.Fatalf("PostCommentURL without the capability: %v", err)
+	}
+}
+
+// fakeUpdateClient is an API client that can also post updates.
+type fakeUpdateClient struct {
+	*fakeCommentClient
+	author string
+}
+
+func (f *fakeUpdateClient) IssueAuthor(context.Context, string, int) (string, error) {
+	return f.author, nil
+}
+
+func (f *fakeUpdateClient) PostCommentURL(ctx context.Context, repo string, number int, body string) (string, error) {
+	if err := f.PostComment(ctx, repo, number, body); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://github.com/%s/issues/%d#issuecomment-1", repo, number), nil
+}
+
 // Reacting has the same "no page affordance" shape as posting: GitHub's
 // conversation page offers nothing to drive it, so it always goes through
 // the wrapped API client (issue #581).
