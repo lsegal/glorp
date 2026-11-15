@@ -182,9 +182,19 @@ func printClones(out io.Writer, snapshot core.ClonesSnapshot) {
 	}
 }
 
+// clearClonesTotal is the one-line summary a clear that removed clones ends
+// with (issue #838).
+func clearClonesTotal(result core.ClearClonesResult) string {
+	noun := "clones"
+	if len(result.Removed) == 1 {
+		noun = "clone"
+	}
+	return fmt.Sprintf("cleared %d unused %s, reclaimed %s", len(result.Removed), noun, formatBytes(result.Reclaimed))
+}
+
 func printClearClones(out io.Writer, result core.ClearClonesResult) {
 	for _, entry := range result.Removed {
-		fmt.Fprintf(out, "removed %s\n", entry.Path)
+		fmt.Fprintf(out, "removed %s (%s)\n", entry.Path, formatBytes(entry.Size))
 	}
 	for _, failure := range result.Errors {
 		fmt.Fprintf(out, "could not remove %s\n", failure)
