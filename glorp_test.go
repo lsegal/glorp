@@ -1651,7 +1651,7 @@ func builtinDefaultModel(name string) string {
 
 func TestCommandRunnerUsesSelectedAgentSyntax(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex"}, Issue{Number: 12}), []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args: %#v", got)
 	}
 	if got, want := commandArgs(CommandRunner{Agent: "claude"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", claudeDefaultModel, "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
@@ -1663,7 +1663,7 @@ func TestCommandRunnerIncludesIssueRepository(t *testing.T) {
 	prompt := "/gh-fix owner/repo#12 identity:/glorp:ABC\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Repository: "owner/repo", Target: "https://github.com/users/owner/projects/3"}
 	got := commandArgs(CommandRunner{Agent: "codex", Repo: "wrong/repo", Identity: "ABC"}, issue)
-	want := []string{"exec", "--model", codexDefaultModel, prompt}
+	want := []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
@@ -1673,7 +1673,7 @@ func TestCommandRunnerPassesNoMergeAdvice(t *testing.T) {
 	prompt := "/gh-fix owner/repo#12 identity:/glorp:ABC and do not merge\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Repository: "owner/repo", Target: "owner/repo"}
 	got := commandArgs(CommandRunner{Agent: "codex", Identity: "ABC", NoMerge: true}, issue)
-	want := []string{"exec", "--model", codexDefaultModel, prompt}
+	want := []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
@@ -1683,7 +1683,7 @@ func TestCommandRunnerPassesNoChangelogAdvice(t *testing.T) {
 	prompt := "/gh-fix owner/repo#12 identity:/glorp:ABC and do not merge and no changelog\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Repository: "owner/repo", Target: "owner/repo"}
 	got := commandArgs(CommandRunner{Agent: "codex", Identity: "ABC", NoMerge: true, NoChangelog: true}, issue)
-	want := []string{"exec", "--model", codexDefaultModel, prompt}
+	want := []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
@@ -1693,7 +1693,7 @@ func TestCommandRunnerUsesGhDiscussForDiscussionTargets(t *testing.T) {
 	prompt := "/gh-discuss 5\n\nRepository: owner/repo\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 5, Target: "https://github.com/owner/repo/discussions"}
 	got := commandArgs(CommandRunner{Agent: "codex"}, issue)
-	want := []string{"exec", "--model", codexDefaultModel, prompt}
+	want := []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, prompt}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
@@ -1701,7 +1701,7 @@ func TestCommandRunnerUsesGhDiscussForDiscussionTargets(t *testing.T) {
 
 func TestCommandRunnerYoloDisablesAgentSafetyChecks(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex", Yolo: true}, Issue{Number: 12}), []string{"exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex yolo args = %#v, want %#v", got, want)
 	}
 	if got, want := commandArgs(CommandRunner{Agent: "claude", Yolo: true}, Issue{Number: 12}), []string{"-p", "--dangerously-skip-permissions", "--model", claudeDefaultModel, "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
@@ -1725,7 +1725,7 @@ func TestCommandRunnerRemoteControlLeavesCodexUnchanged(t *testing.T) {
 	prompt := "/gh-fix owner/repo#12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	issue := Issue{Number: 12, Target: "owner/repo"}
 	got := commandArgs(CommandRunner{Agent: "codex", RemoteControl: true}, issue)
-	if want := []string{"exec", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
+	if want := []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex remote control args = %#v, want %#v", got, want)
 	}
 }
@@ -1757,13 +1757,13 @@ func TestRemoteControlSessionNameFallsBackToIssueNumber(t *testing.T) {
 
 func TestCommandRunnerPassesAgentSpecModelAndLevel(t *testing.T) {
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
-	if got, want := commandArgs(CommandRunner{Agent: "codex/gpt-5.6-luna:high"}, Issue{Number: 12}), []string{"exec", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex/gpt-5.6-luna:high"}, Issue{Number: 12}), []string{"exec", "--skip-git-repo-check", "--model", "gpt-5.6-luna", "-c", "model_reasoning_effort=high", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex args = %#v, want %#v", got, want)
 	}
 	if got, want := commandArgs(CommandRunner{Agent: "claude/claude-sonnet:medium"}, Issue{Number: 12}), []string{"-p", "--permission-mode", "auto", "--model", "claude-sonnet", "--effort", "medium", "--output-format", "stream-json", "--verbose", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude args = %#v, want %#v", got, want)
 	}
-	if got, want := commandArgs(CommandRunner{Agent: "codex:low"}, Issue{Number: 12}), []string{"exec", "--model", codexDefaultModel, "-c", "model_reasoning_effort=low", prompt}; !reflect.DeepEqual(got, want) {
+	if got, want := commandArgs(CommandRunner{Agent: "codex:low"}, Issue{Number: 12}), []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, "-c", "model_reasoning_effort=low", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("codex level-only args = %#v, want %#v", got, want)
 	}
 }
@@ -1857,6 +1857,35 @@ func TestCommandRunnerResumesOriginalAgentSession(t *testing.T) {
 	wantClaude := []string{"-p", "--resume", "session-7", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", resumePrompt}
 	if got := commandArgsForSession(claude, Issue{Number: 7}, session); !reflect.DeepEqual(got, wantClaude) {
 		t.Fatalf("Claude resume args = %#v, want %#v", got, wantClaude)
+	}
+}
+
+// TestCommandRunnerSkipsCodexGitRepoCheckWithoutCheckout checks a Codex
+// dispatch that starts in the temp directory, because its checkout does not
+// exist yet or is gone, passes --skip-git-repo-check so Codex does not refuse
+// to run there without --yolo, and that a run inside its checkout renders
+// unchanged (issue #819).
+func TestCommandRunnerSkipsCodexGitRepoCheckWithoutCheckout(t *testing.T) {
+	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
+	resumePrompt := "continue\n\nRecover the existing work. If this issue has a draft pull request, inspect it and pull its branch before continuing."
+	runner := CommandRunner{Agent: "codex"}
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "gone")
+	cases := []struct {
+		name    string
+		session AgentSession
+		want    []string
+	}{
+		{"first dispatch", AgentSession{Agent: "codex"}, []string{"exec", "--skip-git-repo-check", "--model", codexDefaultModel, prompt}},
+		{"inside checkout", AgentSession{Agent: "codex", CheckoutDirectory: dir}, []string{"exec", "--model", codexDefaultModel, prompt}},
+		{"resume inside checkout", AgentSession{ID: "s-1", Agent: "codex", CheckoutDirectory: dir, Resume: true}, []string{"exec", "resume", "s-1", resumePrompt}},
+		{"resume without checkout", AgentSession{ID: "s-1", Agent: "codex", Resume: true}, []string{"exec", "resume", "--skip-git-repo-check", "s-1", resumePrompt}},
+		{"resume with missing checkout", AgentSession{ID: "s-1", Agent: "codex", CheckoutDirectory: missing, Resume: true}, []string{"exec", "resume", "--skip-git-repo-check", "s-1", resumePrompt + "\n\nThe original repository directory no longer exists. Regenerate any missing work before continuing."}},
+	}
+	for _, tc := range cases {
+		if got := commandArgsForSession(runner, Issue{Number: 12}, tc.session); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: args = %#v, want %#v", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -4620,11 +4649,11 @@ func TestCommandRunnerUsesAConfiguredDefaultModel(t *testing.T) {
 	}
 	prompt := "/gh-fix 12\n\nKeep your responses concise. Do not include code diffs or large code blocks; summarize the changes and tests instead."
 	got := commandArgs(CommandRunner{Agent: "codex", Definitions: registry}, Issue{Number: 12})
-	if want := []string{"exec", "--model", "gpt-5.4", prompt}; !reflect.DeepEqual(got, want) {
+	if want := []string{"exec", "--skip-git-repo-check", "--model", "gpt-5.4", prompt}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("configured default argv = %#v, want %#v", got, want)
 	}
 	explicit := commandArgs(CommandRunner{Agent: "codex/gpt-5.6-sol", Definitions: registry}, Issue{Number: 12})
-	if want := []string{"exec", "--model", "gpt-5.6-sol", prompt}; !reflect.DeepEqual(explicit, want) {
+	if want := []string{"exec", "--skip-git-repo-check", "--model", "gpt-5.6-sol", prompt}; !reflect.DeepEqual(explicit, want) {
 		t.Fatalf("explicit model argv = %#v, want %#v", explicit, want)
 	}
 }

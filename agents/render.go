@@ -40,6 +40,9 @@ type Values struct {
 	// OneShot marks an out-of-band call, such as the prompt agent or the
 	// unblock agent, which runs outside any checkout.
 	OneShot bool
+	// NoCheckout marks a call that runs outside any checkout: every one-shot
+	// call, and a dispatched run whose checkout directory does not exist yet.
+	NoCheckout bool
 }
 
 func (v Values) value(name string) string {
@@ -72,6 +75,8 @@ func (v Values) holds(condition string) bool {
 		return v.RemoteControl
 	case "oneShot":
 		return v.OneShot
+	case "noCheckout":
+		return v.NoCheckout
 	}
 	return v.value(condition) != ""
 }

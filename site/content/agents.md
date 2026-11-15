@@ -190,6 +190,7 @@ Each template is a list of **fragments**, appended in order. A fragment is delib
 | `yolo` | The run was started with `--yolo`. |
 | `remoteControl` | The run was started with `--remote-control`. |
 | `oneShot` | The call is an out-of-band one-shot call outside any checkout: the prompt area, the MCP `ask` and `create_issue` tools, or the stuck-job watchdog's unblock agent. Dispatched job runs never set it. |
+| `noCheckout` | The agent runs outside any checkout, in the temp directory: every `oneShot` call, and a dispatched job run whose checkout directory does not exist yet. |
 
 So `{"when": "yolo", "args": ["--dangerously-skip-permissions"]}` adds the bypass flag only under `--yolo`, and `{"when": "!yolo", "args": ["--permission-mode", "auto"]}` adds the safe default the rest of the time.
 
@@ -348,7 +349,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
   "args": {
     "run": [
       {"args": ["exec"]},
-      {"when": "oneShot", "args": ["--skip-git-repo-check"]},
+      {"when": "noCheckout", "args": ["--skip-git-repo-check"]},
       {"when": "yolo", "args": ["--dangerously-bypass-approvals-and-sandbox"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["-c", "model_reasoning_effort={level}"]},
@@ -356,6 +357,7 @@ These are the shipped documents, verbatim, and they are the best worked examples
     ],
     "resume": [
       {"args": ["exec", "resume"]},
+      {"when": "noCheckout", "args": ["--skip-git-repo-check"]},
       {"when": "yolo", "args": ["--dangerously-bypass-approvals-and-sandbox"]},
       {"args": ["{session}", "{prompt}"]}
     ],

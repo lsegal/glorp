@@ -44,6 +44,7 @@ type oneShotPrompt struct {
 func newOneShotPrompt(definition agents.Definition, values agents.Values, dir string) (oneShotPrompt, error) {
 	call := oneShotPrompt{Values: values, cleanup: func() {}}
 	call.Values.OneShot = true
+	call.Values.NoCheckout = true
 	if definition.ReadsPromptFromStdin() {
 		call.Values.PromptStdin = true
 		call.Stdin = strings.NewReader(values.Prompt)

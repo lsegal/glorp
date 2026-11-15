@@ -350,9 +350,11 @@ func TestCodexDefinitionContract(t *testing.T) {
 		SessionID:  "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
 		Stdout:     "working on it",
 		// The spec names no model, so the argv carries the definition's
-		// own defaultModel rather than leaving the choice to the CLI.
-		WantRun:    []string{"exec", "--model", "gpt-5.6-terra", freshPrompt("o/r", 7)},
-		WantResume: []string{"exec", "resume", "3f2504e0-4f89-11d3-9a0c-0305e82c3301", resumePrompt()},
+		// own defaultModel rather than leaving the choice to the CLI. The
+		// session has no checkout yet, so the run starts in the temp
+		// directory and skips Codex's git repo check (issue #819).
+		WantRun:    []string{"exec", "--skip-git-repo-check", "--model", "gpt-5.6-terra", freshPrompt("o/r", 7)},
+		WantResume: []string{"exec", "resume", "--skip-git-repo-check", "3f2504e0-4f89-11d3-9a0c-0305e82c3301", resumePrompt()},
 		WantOutput: "working on it",
 	}.check(t)
 }
