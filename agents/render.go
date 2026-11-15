@@ -37,6 +37,9 @@ type Values struct {
 	// PromptStdin renders the prompt argument as the definition's
 	// promptStdin arguments, because the caller writes the prompt to stdin.
 	PromptStdin bool
+	// OneShot marks an out-of-band call, such as the prompt agent or the
+	// unblock agent, which runs outside any checkout.
+	OneShot bool
 }
 
 func (v Values) value(name string) string {
@@ -67,6 +70,8 @@ func (v Values) holds(condition string) bool {
 		return v.Yolo
 	case "remoteControl":
 		return v.RemoteControl
+	case "oneShot":
+		return v.OneShot
 	}
 	return v.value(condition) != ""
 }

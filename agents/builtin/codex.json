@@ -21,6 +21,7 @@
   "args": {
     "run": [
       {"args": ["exec"]},
+      {"when": "oneShot", "args": ["--skip-git-repo-check"]},
       {"when": "yolo", "args": ["--dangerously-bypass-approvals-and-sandbox"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["-c", "model_reasoning_effort={level}"]},
@@ -32,7 +33,7 @@
       {"args": ["{session}", "{prompt}"]}
     ],
     "vision": [
-      {"args": ["exec", "--image", "{image}"]},
+      {"args": ["exec", "--skip-git-repo-check", "--image", "{image}"]},
       {"when": "yolo", "args": ["--dangerously-bypass-approvals-and-sandbox"]},
       {"when": "model", "args": ["--model", "{model}"]},
       {"when": "level", "args": ["-c", "model_reasoning_effort={level}"]},

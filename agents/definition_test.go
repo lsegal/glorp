@@ -69,7 +69,7 @@ func TestBuiltinArgvIsUnchanged(t *testing.T) {
 		{
 			name: "codex vision", agent: "codex", mode: ModeVision,
 			values: Values{Prompt: prompt, Image: "/tmp/shot.png", Model: "gpt-5"},
-			want:   []string{"exec", "--image", "/tmp/shot.png", "--model", "gpt-5", prompt},
+			want:   []string{"exec", "--skip-git-repo-check", "--image", "/tmp/shot.png", "--model", "gpt-5", prompt},
 		},
 		{
 			name: "claude fresh", agent: "claude", mode: ModeRun,
@@ -173,6 +173,31 @@ func TestRenderPromptStdinReplacesThePromptArgument(t *testing.T) {
 	}
 	if got := gemini.Render(ModeRun, Values{Prompt: "a long prompt", PromptStdin: true}); got[len(got)-1] != "a long prompt" {
 		t.Errorf("gemini argv = %#v, want the prompt kept in argv", got)
+	}
+}
+
+// TestRenderCodexOneShotSkipsTheGitRepoCheck checks an out-of-band Codex call,
+// which runs in the temp directory, passes --skip-git-repo-check so Codex does
+// not refuse to run outside a trusted directory (issue #817), and that a
+// dispatched run, which works inside its clone, renders without it.
+func TestRenderCodexOneShotSkipsTheGitRepoCheck(t *testing.T) {
+	codex, _ := MustBuiltin().Lookup("codex")
+	values := Values{Prompt: "status?", Model: "gpt-5", PromptStdin: true, OneShot: true}
+	want := []string{"exec", "--skip-git-repo-check", "--model", "gpt-5", "-"}
+	if got := codex.Render(ModeRun, values); !reflect.DeepEqual(got, want) {
+		t.Errorf("one-shot argv = %#v, want %#v", got, want)
+	}
+	values.Yolo = true
+	want = []string{"exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5", "-"}
+	if got := codex.Render(ModeRun, values); !reflect.DeepEqual(got, want) {
+		t.Errorf("one-shot yolo argv = %#v, want %#v", got, want)
+	}
+	for _, mode := range []Mode{ModeRun, ModeResume} {
+		for _, arg := range codex.Render(mode, Values{Prompt: "fix it", Session: "abc"}) {
+			if arg == "--skip-git-repo-check" {
+				t.Errorf("dispatched %s argv carries --skip-git-repo-check", mode)
+			}
+		}
 	}
 }
 
