@@ -522,7 +522,12 @@ func (r CommandRunner) runUnblock(ctx context.Context, spec agentSpec, prompt st
 	if !ok {
 		return "", unknownAgentError(r.registry(), spec.Name)
 	}
-	args := definition.Render(agents.ModeRun, agents.Values{Prompt: prompt, Model: spec.Model, Level: spec.Level, Yolo: r.Yolo})
+	call, err := newOneShotPrompt(definition, agents.Values{Prompt: prompt, Model: spec.Model, Level: spec.Level, Yolo: r.Yolo}, os.TempDir())
+	if err != nil {
+		return "", err
+	}
+	defer call.cleanup()
+	args := definition.Render(agents.ModeRun, call.Values)
 	if len(args) == 0 {
 		return "", fmt.Errorf("agent %s declares no run arguments", spec.Name)
 	}
@@ -531,6 +536,9 @@ func (r CommandRunner) runUnblock(ctx context.Context, spec agentSpec, prompt st
 		cmd.Env = append(os.Environ(), env...)
 	}
 	cmd.Dir = os.TempDir()
+	if call.Stdin != nil {
+		cmd.Stdin = call.Stdin
+	}
 	var text bytes.Buffer
 	output := io.Writer(&text)
 	decoder := newOutputDecoder(definition.Output, output)
@@ -538,7 +546,10 @@ func (r CommandRunner) runUnblock(ctx context.Context, spec agentSpec, prompt st
 		output = decoder
 	}
 	cmd.Stdout, cmd.Stderr = output, output
-	err := process.Run(cmd)
+	if err = process.Start(cmd); err != nil {
+		return "", spawnError(cmd, err)
+	}
+	err = process.Wait(cmd)
 	if decoder != nil {
 		if flushErr := decoder.Flush(); err == nil {
 			err = flushErr

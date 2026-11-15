@@ -73,6 +73,14 @@ type Definition struct {
 	// gh-discuss, and gh-create skills is installed for, so the installers
 	// derive their --agent list from the registry instead of a hand-edited one.
 	Skills Skills `json:"skills,omitempty"`
+	// PromptStdin, when declared, says the agent can read its prompt from
+	// stdin instead of argv: an argument that is exactly {prompt} renders as
+	// these arguments instead, and the prompt is written to the child's stdin.
+	// Absent means the agent cannot; [] means the prompt argument is simply
+	// left out (Claude's -p reads stdin then), and ["-"] stands in for it
+	// (Codex's exec). Out-of-band calls send their large payload this way, so
+	// no OS command-line limit can stop the agent from starting (issue #815).
+	PromptStdin *[]string `json:"promptStdin,omitempty"`
 	// Doctor names the read-only probes `glorp agents` runs to report on the
 	// agent: whether its CLI is signed in, and which models it accepts. An
 	// agent that declares none is reported from what the definition already
@@ -767,6 +775,16 @@ func (d Definition) Validate() error {
 			return err
 		}
 	}
+	if d.PromptStdin != nil {
+		for _, arg := range *d.PromptStdin {
+			if placeholderPattern.MatchString(arg) {
+				return fmt.Errorf(`field "promptStdin": %q cannot contain a placeholder`, arg)
+			}
+		}
+		if !hasPromptArg(d.Args.Run) {
+			return fmt.Errorf(`field "promptStdin" needs an argument that is exactly {prompt} in "args.run"`)
+		}
+	}
 	switch d.Session.Assign {
 	case AssignGlorp, AssignNone:
 		if d.Session.Capture != "" {
@@ -819,6 +837,20 @@ func (d Definition) Validate() error {
 	}
 	return nil
 }
+
+// hasPromptArg reports whether a template passes the prompt as an argument of
+// its own, which is the argument promptStdin replaces.
+func hasPromptArg(fragments []Fragment) bool {
+	for _, fragment := range fragments {
+		if contains(fragment.Args, "{"+placeholderPrompt+"}") {
+			return true
+		}
+	}
+	return false
+}
+
+// ReadsPromptFromStdin reports whether the agent can take its prompt on stdin.
+func (d Definition) ReadsPromptFromStdin() bool { return d.PromptStdin != nil }
 
 func validateFragments(mode string, fragments []Fragment) error {
 	for i, fragment := range fragments {
