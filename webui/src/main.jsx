@@ -51,6 +51,7 @@ import {
 } from "./dashboard";
 import { JobTitle } from "./jobtitle";
 import { PromptModal, PromptPanel, usePromptPanel } from "./promptpanel";
+import { ReleaseLink } from "./releaselink";
 import "./index.css";
 
 const emptyState = {
@@ -893,7 +894,11 @@ function App() {
 						<h1>
 							glorp <span>dashboard</span>
 							{state.version && (
-								<span className="version">{state.version}</span>
+								<span className="version">
+									<ReleaseLink href={state.versionURL}>
+										{state.version}
+									</ReleaseLink>
+								</span>
 							)}
 						</h1>
 					</div>
@@ -954,8 +959,11 @@ function App() {
 				{state.update && (
 					<section className="update-notice" aria-label="Update available">
 						<span>
-							glorp <strong>{state.update}</strong> is available. It installs on
-							its own once no agents are running.
+							glorp{" "}
+							<ReleaseLink href={state.updateURL}>
+								<strong>{state.update}</strong>
+							</ReleaseLink>{" "}
+							is available. It installs on its own once no agents are running.
 						</span>
 						<button type="button" onClick={update} disabled={restarting !== ""}>
 							{restarting ? "Updating..." : "Update now"}
