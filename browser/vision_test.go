@@ -441,8 +441,8 @@ func TestParseVisionRefsQualified(t *testing.T) {
 
 func TestVisionArgs(t *testing.T) {
 	codex := visionArgs(AgentSpec{Name: "codex", Model: "gpt-5"}, "/tmp/shot.png", "https://github.com/o/r/issues", false)
-	if codex[0] != "exec" || codex[1] != "--image" || codex[2] != "/tmp/shot.png" {
-		t.Fatalf("codex is not given the image: %v", codex)
+	if codex[0] != "exec" || codex[1] != "--skip-git-repo-check" || codex[2] != "--image" || codex[3] != "/tmp/shot.png" {
+		t.Fatalf("codex is not given the image outside a git repository: %v", codex)
 	}
 	if !strings.Contains(codex[len(codex)-1], "strict JSON array") {
 		t.Fatalf("codex prompt does not ask for a strict array: %q", codex[len(codex)-1])

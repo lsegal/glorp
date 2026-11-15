@@ -43,6 +43,7 @@ type oneShotPrompt struct {
 // and travels through a file in dir when it is too large for argv otherwise.
 func newOneShotPrompt(definition agents.Definition, values agents.Values, dir string) (oneShotPrompt, error) {
 	call := oneShotPrompt{Values: values, cleanup: func() {}}
+	call.Values.OneShot = true
 	if definition.ReadsPromptFromStdin() {
 		call.Values.PromptStdin = true
 		call.Stdin = strings.NewReader(values.Prompt)

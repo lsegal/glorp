@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -120,6 +121,22 @@ func TestOneShotPromptKeepsShortPromptsInArgv(t *testing.T) {
 	defer call.cleanup()
 	if call.Stdin != nil || call.Values.Prompt != "status?" || call.Values.PromptStdin {
 		t.Errorf("short prompt call = %+v", call)
+	}
+}
+
+// Every out-of-band call is marked one-shot, so an agent definition can add
+// the flags a call outside any checkout needs, such as Codex's
+// --skip-git-repo-check (issue #817).
+func TestOneShotPromptMarksTheCallOneShot(t *testing.T) {
+	codex, _ := agents.MustBuiltin().Lookup("codex")
+	call, err := newOneShotPrompt(codex, agents.Values{Prompt: "status?"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer call.cleanup()
+	want := []string{"exec", "--skip-git-repo-check", "-"}
+	if got := codex.Render(agents.ModeRun, call.Values); !reflect.DeepEqual(got, want) {
+		t.Errorf("codex one-shot argv = %#v, want %#v", got, want)
 	}
 }
 
