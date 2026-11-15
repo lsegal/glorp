@@ -117,6 +117,7 @@ Anything wrong with the file stops the run, naming the file, the agent, and the 
 | `missingSession` | array of string | no | none | Extra phrases that mean "the session you asked me to resume is gone". See [`missingSession`](#missingsession). |
 | `quota` | object | no | `{"reader": "none"}` | Where the status bar's quota reading comes from. See [`quota`](#quota). |
 | `skills` | object | no | none | The skills.sh target the agent's skills install for. See [`skills`](#skills). |
+| `promptStdin` | array of string | no | none | Lets out-of-band calls send the prompt on stdin. See [`promptStdin`](#promptstdin). |
 | `doctor` | object | no | none | The read-only probes `glorp agents` runs to report on the agent. See [`doctor`](#doctor). |
 
 ### Allow-lists
@@ -279,6 +280,10 @@ An agent that declares no quota reports none, which the dashboard shows as untra
 | `quota.timeout` | duration string | no | `30s` | Bounds one read. A quota call is a status-bar nicety, so it is never allowed to hang a poll. Must be positive. |
 
 Every field but `reader` belongs to the `command` reader and is rejected on the others rather than ignored, because a `quota` block that silently does nothing looks exactly like a working one until the status bar stays empty. A reading that fails leaves the last good one in place rather than blanking it.
+
+### `promptStdin`
+
+The prompt agent, the MCP `ask` and `create_issue` tools, and the stuck-job watchdog's unblock agent send a prompt that carries the instance's jobs and their latest output, which can be far longer than an OS command line allows: Windows refuses more than 32,767 characters, and Linux refuses a single argument over 128 KiB. A definition that declares `promptStdin` has these calls write the prompt to the agent's stdin instead, and render the run template's `{prompt}` argument as the listed arguments. `[]` leaves the argument out, which is what Claude's `-p` expects, and `["-"]` puts a dash in its place, which is how `codex exec` is told to read stdin. The run template needs an argument that is exactly `{prompt}`, and the listed arguments cannot use placeholders. A definition without `promptStdin` gets a long prompt through a file instead: glorp writes it to a temporary file and asks the agent to read that file. Dispatched job runs always pass their prompt as an argument.
 
 ### `skills`
 

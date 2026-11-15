@@ -143,6 +143,39 @@ func TestRenderSkipsUnknownMode(t *testing.T) {
 	}
 }
 
+// TestRenderPromptStdinReplacesThePromptArgument checks an out-of-band call
+// that writes its prompt to stdin renders the agent's stand-in for the prompt
+// argument instead of the prompt (issue #815), and that every other call, and
+// every agent that cannot read stdin, renders the prompt as before.
+func TestRenderPromptStdinReplacesThePromptArgument(t *testing.T) {
+	registry := MustBuiltin()
+	for _, test := range []struct {
+		agent string
+		want  []string
+	}{
+		{"claude", []string{"-p", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose"}},
+		{"codex", []string{"exec", "-"}},
+	} {
+		definition, _ := registry.Lookup(test.agent)
+		if !definition.ReadsPromptFromStdin() {
+			t.Fatalf("%s does not read its prompt from stdin", test.agent)
+		}
+		if got := definition.Render(ModeRun, Values{Prompt: "a long prompt", PromptStdin: true}); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("%s stdin argv = %#v, want %#v", test.agent, got, test.want)
+		}
+		if got := definition.Render(ModeRun, Values{Prompt: "a long prompt"}); got[len(got)-1] != "a long prompt" {
+			t.Errorf("%s argv without stdin = %#v, want the prompt last", test.agent, got)
+		}
+	}
+	gemini, _ := registry.Lookup("gemini")
+	if gemini.ReadsPromptFromStdin() {
+		t.Fatal("gemini declares a stdin prompt it was never measured to read")
+	}
+	if got := gemini.Render(ModeRun, Values{Prompt: "a long prompt", PromptStdin: true}); got[len(got)-1] != "a long prompt" {
+		t.Errorf("gemini argv = %#v, want the prompt kept in argv", got)
+	}
+}
+
 // TestInvalidDefinitionsNameTheirField checks every rejection says which field
 // was wrong. A definition dropped without one is indistinguishable, at the
 // --agent prompt, from a typo in the agent's name.
@@ -189,6 +222,11 @@ func TestInvalidDefinitionsNameTheirField(t *testing.T) {
 		{"empty level", func(d *Definition) { d.Levels = NewAllowList("high", " ") }, `"levels"`},
 		{"empty model", func(d *Definition) { d.Models = NewAllowList("") }, `"models"`},
 		{"unusable env name", func(d *Definition) { d.Env = map[string]string{"A=B": "c"} }, `"env"`},
+		{"stdin prompt with a placeholder", func(d *Definition) { d.PromptStdin = &[]string{"{model}"} }, `"promptStdin"`},
+		{"stdin prompt without a prompt argument", func(d *Definition) {
+			d.PromptStdin = &[]string{}
+			d.Args.Run = []Fragment{{Args: []string{"--say={prompt}"}}}
+		}, `"promptStdin"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			definition := valid()
