@@ -189,6 +189,35 @@ func TestGlorpApplySettingsNoMergeChangesNewDispatches(t *testing.T) {
 	<-done
 }
 
+func TestGlorpApplySettingsAutoUpdate(t *testing.T) {
+	dir := t.TempDir()
+	src := &fakeSource{batches: [][]Issue{{}}}
+	w := &Glorp{Repo: "o/r", Interval: time.Hour, Concurrency: 1, StatePath: filepath.Join(dir, "state"), Issues: src, Runner: CommandRunner{Agent: "codex"}, Out: &syncBuffer{}}
+	w.autoUpdate.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	snapshot, err := w.ApplySettings(ctx, SettingsUpdate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.AutoUpdate {
+		t.Fatal("snapshot autoUpdate = false, want the default true")
+	}
+	off := false
+	snapshot, err = w.ApplySettings(ctx, SettingsUpdate{AutoUpdate: &off})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.AutoUpdate || w.autoUpdate.Load() {
+		t.Fatalf("after turning off: snapshot=%t live=%t", snapshot.AutoUpdate, w.autoUpdate.Load())
+	}
+	cancel()
+	<-done
+}
+
 func TestGlorpApplySettingsNoChangelogChangesNewDispatches(t *testing.T) {
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{}}}

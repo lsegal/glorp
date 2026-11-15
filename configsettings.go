@@ -165,6 +165,9 @@ func settingsUpdateFlags(update core.SettingsUpdate) map[string]any {
 	if update.NoChangelog != nil {
 		values["no-changelog"] = *update.NoChangelog
 	}
+	if update.AutoUpdate != nil {
+		values["auto-update"] = *update.AutoUpdate
+	}
 	if update.ActiveAgents != nil {
 		values["agent"] = append([]string(nil), *update.ActiveAgents...)
 	}
