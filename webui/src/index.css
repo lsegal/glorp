@@ -1094,27 +1094,102 @@ h1 .version {
 	color: #f87171;
 	font-size: 12px;
 }
-/* On a phone the prompt agent opens as a modal instead of a side panel
-   (issue #828), so the dashboard keeps its full width. This follows the
-   panel's own rules so it wins the cascade. */
-.prompt-modal[hidden] {
+/* On a phone the prompt agent opens as a bottom drawer instead of a side
+   panel (issue #834), so the dashboard keeps its full width. This follows
+   the panel's own rules so it wins the cascade. */
+.prompt-drawer {
+	position: fixed;
+	inset: 0;
+	z-index: 10;
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+}
+.prompt-drawer[hidden] {
 	display: none;
 }
-.prompt-modal-dialog {
-	background: #18181b;
-	height: min(640px, calc(100vh - 32px));
-	padding: 0;
-	overflow: hidden;
-}
-.prompt-modal-dialog .prompt-card {
-	height: 100%;
-	padding-right: 40px;
-}
-.prompt-modal-close {
+.prompt-drawer-backdrop {
 	position: absolute;
-	top: 12px;
-	right: 12px;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border: none;
+	padding: 0;
+	background: #000000b3;
+	cursor: default;
+	animation: prompt-drawer-fade 200ms ease-out;
+}
+.prompt-drawer-sheet {
+	position: relative;
 	z-index: 1;
+	height: min(640px, 85dvh);
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--border);
+	border-bottom: none;
+	border-radius: 14px 14px 0 0;
+	background: #18181b;
+	box-shadow: 0 -12px 32px #0006;
+	padding-bottom: env(safe-area-inset-bottom);
+	overflow: hidden;
+	transition: transform 200ms ease-out;
+	animation: prompt-drawer-up 220ms ease-out;
+}
+.prompt-drawer.dragging .prompt-drawer-sheet {
+	transition: none;
+}
+.prompt-drawer-grip {
+	position: relative;
+	flex: none;
+	height: 28px;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	touch-action: none;
+	cursor: grab;
+}
+.prompt-drawer-handle {
+	width: 40px;
+	height: 4px;
+	border-radius: 2px;
+	background: var(--border);
+}
+.prompt-drawer-close {
+	position: absolute;
+	top: 6px;
+	right: 8px;
+	display: inline-flex;
+	padding: 8px;
+	border: none;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.prompt-drawer-close svg {
+	width: 20px;
+	height: 20px;
+}
+.prompt-drawer-sheet .prompt-card {
+	flex: 1 1 auto;
+	min-height: 0;
+	padding-top: 6px;
+}
+@keyframes prompt-drawer-up {
+	from {
+		transform: translateY(100%);
+	}
+}
+@keyframes prompt-drawer-fade {
+	from {
+		opacity: 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.prompt-drawer-backdrop,
+	.prompt-drawer-sheet {
+		animation: none;
+		transition: none;
+	}
 }
 @media (max-width: 760px) {
 	.app-shell.prompt-open {
