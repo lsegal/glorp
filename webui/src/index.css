@@ -61,6 +61,14 @@ h1 .version {
 	font-size: 12px;
 	font-family: ui-monospace, monospace;
 }
+.release-link {
+	color: inherit;
+	text-decoration: none;
+}
+.release-link:hover,
+.release-link:focus-visible {
+	text-decoration: underline;
+}
 .masthead-actions {
 	display: flex;
 	align-items: center;
