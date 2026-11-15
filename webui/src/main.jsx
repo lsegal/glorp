@@ -49,6 +49,7 @@ import {
 	toggleActiveModel,
 } from "./dashboard";
 import { JobTitle } from "./jobtitle";
+import { ReleaseLink } from "./releaselink";
 import "./index.css";
 
 const emptyState = {
@@ -870,7 +871,13 @@ function App() {
 					<p className="eyebrow">Git Loop fOr Robot Patchers</p>
 					<h1>
 						glorp <span>dashboard</span>
-						{state.version && <span className="version">{state.version}</span>}
+						{state.version && (
+							<span className="version">
+								<ReleaseLink href={state.versionURL}>
+									{state.version}
+								</ReleaseLink>
+							</span>
+						)}
 					</h1>
 				</div>
 				<div className="masthead-actions">
@@ -913,8 +920,11 @@ function App() {
 			{state.update && (
 				<section className="update-notice" aria-label="Update available">
 					<span>
-						glorp <strong>{state.update}</strong> is available. It installs on
-						its own once no agents are running.
+						glorp{" "}
+						<ReleaseLink href={state.updateURL}>
+							<strong>{state.update}</strong>
+						</ReleaseLink>{" "}
+						is available. It installs on its own once no agents are running.
 					</span>
 					<button type="button" onClick={update} disabled={restarting !== ""}>
 						{restarting ? "Updating..." : "Update now"}
