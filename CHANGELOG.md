@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.6.4 - 2026-11-16
+
 - Add a **Summarize** button to every job's log area in the web dashboard (issue #840). Clicking it opens the prompt agent, as the side panel on larger screens or the bottom drawer on a phone, and sends it a request to summarize the current session log of work on that job's issue, for example `Summarize the current session log of work on lsegal/nupp#337`. The reply shows up in the prompt agent like any other request. It works for running and finished jobs alike.
 
 ## v1.6.3 - 2026-11-15
