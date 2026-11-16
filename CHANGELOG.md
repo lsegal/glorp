@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a **Summarize** button to every job's log area in the web dashboard (issue #840). Clicking it opens the prompt agent, as the side panel on larger screens or the bottom drawer on a phone, and sends it a request to summarize the current session log of work on that job's issue, for example `Summarize the current session log of work on lsegal/nupp#337`. The reply shows up in the prompt agent like any other request. It works for running and finished jobs alike.
+
 ## v1.6.3 - 2026-11-15
 
 - Report how much space each removed clone took when clearing unused clones, and the total reclaimed (issue #838). Each `removed unused clone` log entry now ends with the clone's size, for example `removed unused clone <path> (1.2 GiB)`, and a clear that removes any clones ends with one `cleared 33 unused clones, reclaimed 41.7 GiB` entry. `glorp clones -clear` prints each removed clone's size too. Clones that could not be removed are not counted, and sizes never follow symlinks or junctions out of a clone.

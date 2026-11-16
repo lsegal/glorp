@@ -60,7 +60,11 @@ export function usePromptPanel() {
 			width: clampPromptPanelWidth(width, window.innerWidth),
 		}));
 	const close = () => setPanel((current) => ({ ...current, open: false }));
-	return { panel, mobile, toggle, close, resize };
+	const show = () =>
+		setPanel((current) =>
+			current.open ? current : { ...current, open: true },
+		);
+	return { panel, mobile, toggle, show, close, resize };
 }
 
 // drawerDismissDistance is how far, in pixels, the drawer has to be dragged

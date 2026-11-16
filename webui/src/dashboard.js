@@ -99,6 +99,14 @@ function jobIssueRepository(job) {
 	return /^[^/\s]+\/[^/\s]+$/.test(job.Target || "") ? job.Target : "";
 }
 
+// jobIssueKey names a job's issue as OWNER/REPO#NUMBER, the way glorp keys
+// its jobs, or "" when the issue's repository is unknown (issue #840).
+export function jobIssueKey(job) {
+	const repository = jobIssueRepository(job);
+	if (!repository || !(job.Number > 0)) return "";
+	return `${repository}#${job.Number}`;
+}
+
 // jobIssueURL is the GitHub page a job card's issue number links to, or ""
 // when the issue's repository is unknown (issue #767).
 export function jobIssueURL(job) {

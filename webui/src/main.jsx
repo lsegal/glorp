@@ -53,6 +53,7 @@ import {
 import { JobTitle } from "./jobtitle";
 import { PromptDrawer, PromptPanel, usePromptPanel } from "./promptpanel";
 import { ReleaseLink } from "./releaselink";
+import { SummarizeButton, summarizeJob } from "./summarize";
 import "./index.css";
 
 const emptyState = {
@@ -158,7 +159,7 @@ function JobProgress({ progress }) {
 	);
 }
 
-function JobCard({ job }) {
+function JobCard({ job, onSummarize }) {
 	const [pendingAction, setPendingAction] = useState("");
 	const [actionError, setActionError] = useState("");
 	const available = jobActionAvailability(job.Status);
@@ -201,14 +202,17 @@ function JobCard({ job }) {
 						type="button"
 						disabled={!available.retry || pendingAction !== ""}
 						onClick={() => runAction("retry")}
+						aria-label="Retry"
 						title={actionError || available.retryReason || "Retry gh-fix"}
 					>
-						<ArrowPathIcon /> Retry
+						<ArrowPathIcon />{" "}
+						<span className="viewport-action-label">Retry</span>
 					</button>
 					<button
 						type="button"
 						disabled={!available.stop || pendingAction !== ""}
 						onClick={() => runAction("stop")}
+						aria-label="Stop"
 						title={
 							actionError ||
 							(job.Status === "paused"
@@ -216,16 +220,18 @@ function JobCard({ job }) {
 								: "Stop gh-fix")
 						}
 					>
-						<StopIcon /> Stop
+						<StopIcon /> <span className="viewport-action-label">Stop</span>
 					</button>
 					<button
 						type="button"
 						disabled={!available.pause || pendingAction !== ""}
 						onClick={() => runAction("pause")}
+						aria-label="Pause"
 						title={actionError || "Pause until retried"}
 					>
-						<PauseIcon /> Pause
+						<PauseIcon /> <span className="viewport-action-label">Pause</span>
 					</button>
+					<SummarizeButton job={job} onSummarize={onSummarize} />
 				</div>
 				<ScrollViewport
 					value={job.Log}
@@ -238,8 +244,11 @@ function JobCard({ job }) {
 
 // PromptArea sends requests to the prompt agent, which answers questions about
 // this glorp instance and its jobs and acts on them (issue #801). Sending only
-// starts the agent call; its answer arrives with the next state poll.
-function PromptArea({ entries, open }) {
+// starts the agent call; its answer arrives with the next state poll. A queued
+// request, such as a job card's Summarize request (issue #840), is sent the
+// same way as one typed in, and handed back through onQueuedSent so it is sent
+// only once.
+function PromptArea({ entries, open, queued, onQueuedSent }) {
 	const [request, setRequest] = useState("");
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState("");
@@ -251,21 +260,29 @@ function PromptArea({ entries, open }) {
 		const node = conversation.current;
 		if (node && latest && open) node.scrollTop = node.scrollHeight;
 	}, [latest, open]);
-	const send = async (event) => {
-		event.preventDefault();
-		const text = request.trim();
-		if (!text) return;
+	const sendText = async (text, clear) => {
 		setSending(true);
 		setError("");
 		try {
 			await submitPrompt(text);
-			setRequest("");
+			if (clear) setRequest("");
 		} catch (failure) {
 			setError(failure.message);
 		} finally {
 			setSending(false);
 		}
 	};
+	const send = (event) => {
+		event.preventDefault();
+		const text = request.trim();
+		if (text) sendText(text, true);
+	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a queued request is sent when it arrives, then cleared.
+	useEffect(() => {
+		if (!queued) return;
+		onQueuedSent();
+		sendText(queued, false);
+	}, [queued]);
 	return (
 		<section className="prompt-card" aria-label="Prompt agent">
 			<div className="log-title">
@@ -825,6 +842,11 @@ function App() {
 	const [page, setPage] = useState(0);
 	const [state, connected] = useDashboardState(page);
 	const promptPanel = usePromptPanel();
+	// queuedPrompt is a request a job card's Summarize button handed the prompt
+	// agent (issue #840), held until the prompt area sends it.
+	const [queuedPrompt, setQueuedPrompt] = useState("");
+	const summarize = (job) =>
+		summarizeJob(job, { open: promptPanel.show, send: setQueuedPrompt });
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
 	// restarting is "requested" until the daemon drops off, then "down" until
@@ -998,7 +1020,11 @@ function App() {
 				<section className="job-grid" aria-label="Agent jobs">
 					{shown.jobs.length ? (
 						shown.jobs.map((job) => (
-							<JobCard key={`${job.Target}#${job.Number}`} job={job} />
+							<JobCard
+								key={`${job.Target}#${job.Number}`}
+								job={job}
+								onSummarize={summarize}
+							/>
 						))
 					) : (
 						<div className="empty-jobs">
@@ -1022,6 +1048,8 @@ function App() {
 					<PromptArea
 						entries={state.prompts || []}
 						open={promptPanel.panel.open}
+						queued={queuedPrompt}
+						onQueuedSent={() => setQueuedPrompt("")}
 					/>
 				</PromptDrawer>
 			) : (
@@ -1033,6 +1061,8 @@ function App() {
 					<PromptArea
 						entries={state.prompts || []}
 						open={promptPanel.panel.open}
+						queued={queuedPrompt}
+						onQueuedSent={() => setQueuedPrompt("")}
 					/>
 				</PromptPanel>
 			)}
