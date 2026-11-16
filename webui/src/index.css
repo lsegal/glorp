@@ -370,7 +370,7 @@ h1 .version {
 		monospace;
 }
 .job-viewport .viewport-status {
-	padding-right: 116px;
+	padding-right: 200px;
 }
 .viewport {
 	width: 100%;
@@ -894,6 +894,7 @@ h1 .version {
 	}
 	.viewport-actions {
 		position: static;
+		flex-wrap: wrap;
 		justify-content: flex-end;
 		gap: 8px;
 	}
