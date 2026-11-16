@@ -202,14 +202,17 @@ function JobCard({ job, onSummarize }) {
 						type="button"
 						disabled={!available.retry || pendingAction !== ""}
 						onClick={() => runAction("retry")}
+						aria-label="Retry"
 						title={actionError || available.retryReason || "Retry gh-fix"}
 					>
-						<ArrowPathIcon /> Retry
+						<ArrowPathIcon />{" "}
+						<span className="viewport-action-label">Retry</span>
 					</button>
 					<button
 						type="button"
 						disabled={!available.stop || pendingAction !== ""}
 						onClick={() => runAction("stop")}
+						aria-label="Stop"
 						title={
 							actionError ||
 							(job.Status === "paused"
@@ -217,15 +220,16 @@ function JobCard({ job, onSummarize }) {
 								: "Stop gh-fix")
 						}
 					>
-						<StopIcon /> Stop
+						<StopIcon /> <span className="viewport-action-label">Stop</span>
 					</button>
 					<button
 						type="button"
 						disabled={!available.pause || pendingAction !== ""}
 						onClick={() => runAction("pause")}
+						aria-label="Pause"
 						title={actionError || "Pause until retried"}
 					>
-						<PauseIcon /> Pause
+						<PauseIcon /> <span className="viewport-action-label">Pause</span>
 					</button>
 					<SummarizeButton job={job} onSummarize={onSummarize} />
 				</div>

@@ -26,13 +26,14 @@ export function SummarizeButton({ job, onSummarize }) {
 			className="summarize-button"
 			disabled={!key}
 			onClick={() => onSummarize(job)}
+			aria-label="Summarize"
 			title={
 				key
 					? `Ask the prompt agent to summarize the session log of ${key}`
 					: "This job's issue is unknown"
 			}
 		>
-			<NotebookText /> Summarize
+			<NotebookText /> <span className="viewport-action-label">Summarize</span>
 		</button>
 	);
 }

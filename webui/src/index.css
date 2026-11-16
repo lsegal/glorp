@@ -894,19 +894,24 @@ h1 .version {
 	}
 	.viewport-actions {
 		position: static;
-		flex-wrap: wrap;
 		justify-content: flex-end;
 		gap: 8px;
 	}
 	.viewport-actions button {
 		min-height: 36px;
-		padding: 6px 14px;
+		min-width: 44px;
+		justify-content: center;
+		padding: 6px 10px;
 		border-radius: 6px;
 		font-size: 13px;
 	}
 	.viewport-actions svg {
 		width: 16px;
 		height: 16px;
+	}
+	/* Icons only on a phone, so the log controls fit on one row (issue #840). */
+	.viewport-action-label {
+		display: none;
 	}
 	.job-viewport .viewport-status {
 		padding-right: 12px;

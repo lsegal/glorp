@@ -42,7 +42,8 @@ describe("SummarizeButton (issue #840)", () => {
 			const html = renderToStaticMarkup(
 				<SummarizeButton job={{ ...job, Status }} onSummarize={() => {}} />,
 			);
-			expect(html).toContain("Summarize</button>");
+			expect(html).toContain("Summarize</span></button>");
+			expect(html).toContain('aria-label="Summarize"');
 			expect(html).not.toContain("disabled");
 		}
 	});
