@@ -49,6 +49,11 @@ type RecentComment struct {
 	UpdatedAt time.Time
 }
 
+// routed is the comment as one routed to the prompt agent, posted in repo.
+func (c RecentComment) routed(repo string) routedComment {
+	return routedComment{Kind: c.Kind, Repository: repo, Number: c.Number, ID: c.ID, Author: c.Author}
+}
+
 // MentionSource is what the poll modes scan for direct @/glorp:ID mentions.
 // They receive no issue_comment webhook deliveries, so without it a mention
 // posted on an issue or its pull request is never seen (issue #689).
@@ -120,7 +125,8 @@ func (w *Glorp) commentRequestsRecheck(body, author string) bool {
 // qualify. A comment from glorp's own login posted while its agent ran on the
 // issue is left out: agents post as that login, so it may be the agent's own,
 // and a human's is relayed by that run's watcher.
-func (w *Glorp) queueCommentRecheck(scan *mentionScan, keys []string, author string, at time.Time, listed, directMentions map[string]bool) []string {
+func (w *Glorp) queueCommentRecheck(scan *mentionScan, keys []string, comment routedComment, at time.Time, listed, directMentions map[string]bool) []string {
+	author := comment.Author
 	var queued []string
 	for _, key := range keys {
 		if !listed[key] {
@@ -135,6 +141,7 @@ func (w *Glorp) queueCommentRecheck(scan *mentionScan, keys []string, author str
 			directMentions[key] = true
 			scan.rechecks[key] = true
 		}
+		scan.comments[key] = comment
 		w.logf("%s comment from %s mentions %s; queuing a threaded gh-fix run", key, author, w.SelfLogin)
 		queued = append(queued, key)
 	}
@@ -162,7 +169,7 @@ func (w *Glorp) handleScannedRecheck(ctx context.Context, scan *mentionScan, rep
 	if len(linked) > 0 {
 		keys = linked
 	}
-	if len(w.queueCommentRecheck(scan, keys, comment.Author, comment.CreatedAt, listed, directMentions)) > 0 {
+	if len(w.queueCommentRecheck(scan, keys, comment.routed(repo), comment.CreatedAt, listed, directMentions)) > 0 {
 		w.reactToMention(ctx, repo, comment.Kind, comment.Number, comment.ID, comment.NodeID)
 	}
 	return true
@@ -216,6 +223,10 @@ type mentionScan struct {
 	// addressed to one instance, so unlike a direct mention it stays subject to
 	// the claims standing on the ticket. Webhook deliveries use it as well.
 	rechecks map[string]bool
+	// comments is the latest comment that queued each "repo#number" key in
+	// the direct-mention queue, so a job's issue can route it to the prompt
+	// agent instead of restarting the job (issue #842).
+	comments map[string]routedComment
 	// linked is the derived watch on pull requests that work on an issue
 	// from another repository, such as a fork (issue #723).
 	linked *linkedPullRequests
@@ -234,7 +245,7 @@ type mentionScanKey struct {
 func newMentionScan(start time.Time) *mentionScan {
 	return &mentionScan{
 		start: start, since: make(map[string]time.Time), handled: make(map[mentionScanKey]bool),
-		seeded: make(map[string]bool), seen: make(map[mentionScanKey]bool), rechecks: make(map[string]bool),
+		seeded: make(map[string]bool), seen: make(map[mentionScanKey]bool), rechecks: make(map[string]bool), comments: make(map[string]routedComment),
 		agentRunning: make(map[string]bool), agentEnded: make(map[string]time.Time),
 		linked: newLinkedPullRequests(),
 	}
@@ -358,6 +369,12 @@ func (w *Glorp) scanMentionStream(ctx context.Context, scan *mentionScan, repo, 
 		if only != nil && !only(comment.Number) {
 			continue
 		}
+		if isPromptReply(comment.Body) {
+			// The prompt agent's own replies are never triggers, so routing
+			// a comment to it cannot loop (issue #842).
+			scan.seen[key] = true
+			continue
+		}
 		if !mentionedIdentity(comment.Body, w.Identity) {
 			if scan.handled[key] || scan.seen[key] {
 				continue
@@ -429,6 +446,7 @@ func (w *Glorp) handleScannedMention(ctx context.Context, scan *mentionScan, rep
 		for _, key := range linked {
 			directMentions[key] = true
 			delete(scan.rechecks, key)
+			scan.comments[key] = comment.routed(repo)
 			w.logf("issue %s directly mentioned instance %s; queuing a threaded gh-fix run", key, w.Identity)
 		}
 		return true
@@ -451,6 +469,7 @@ func (w *Glorp) handleScannedMention(ctx context.Context, scan *mentionScan, rep
 	for _, number := range issues {
 		directMentions[repo+"#"+strconv.Itoa(number)] = true
 		delete(scan.rechecks, repo+"#"+strconv.Itoa(number))
+		scan.comments[repo+"#"+strconv.Itoa(number)] = comment.routed(repo)
 		w.logf("issue #%d directly mentioned instance %s; queuing a threaded gh-fix run", number, w.Identity)
 	}
 	return true

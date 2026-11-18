@@ -74,6 +74,13 @@ func startPolledMentionRun(t *testing.T, allowed []string) (*fakeRunner, *fakeCo
 // GitHub user selfLogin.
 func startPolledRunAs(t *testing.T, allowed []string, selfLogin string) (*fakeRunner, *fakeCommentClient, *fakeMentionSource, func()) {
 	t.Helper()
+	return startPolledRunWith(t, allowed, selfLogin, nil)
+}
+
+// startPolledRunWith is startPolledRunAs with configure applied to the
+// instance before it starts.
+func startPolledRunWith(t *testing.T, allowed []string, selfLogin string, configure func(*Glorp)) (*fakeRunner, *fakeCommentClient, *fakeMentionSource, func()) {
+	t.Helper()
 	dir := t.TempDir()
 	src := &fakeSource{batches: [][]Issue{{{Number: 7}}}}
 	runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 4)}
@@ -83,6 +90,9 @@ func startPolledRunAs(t *testing.T, allowed []string, selfLogin string) (*fakeRu
 		Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: filepath.Join(dir, "state.json"),
 		Issues: src, Runner: runner, Identity: "SELF", AllowedCommenters: allowed, SelfLogin: selfLogin,
 		Comments: comments, Mentions: mentions,
+	}
+	if configure != nil {
+		configure(w)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

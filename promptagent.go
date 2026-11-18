@@ -251,6 +251,15 @@ func (w *Glorp) applyPromptAction(ctx context.Context, action promptAction, resp
 		return fmt.Sprintf("unblock %s: round requested; the stuck-job watchdog logs what it finds and does", action.Key)
 	}
 	job, ok := w.publishedJob(action.Key)
+	if !ok && route != nil && action.Key == route.JobKey {
+		// A routed comment's job is known to the run loop even when no
+		// dashboard has published a snapshot of it.
+		var target string
+		var number int
+		if target, number, ok = parseIssueWorkKey(action.Key); ok {
+			job = JobSnapshot{Target: target, Number: number}
+		}
+	}
 	if !ok {
 		return fmt.Sprintf("%s %s failed: glorp has no such job", action.Kind, action.Key)
 	}

@@ -101,7 +101,7 @@ func (w *Glorp) routeCommentToPrompt(ctx context.Context, route commentRoute) {
 		return
 	}
 	w.logf("%s prompt agent could not decide on comment %s; retrying the job instead", route.JobKey, route.Comment.URL())
-	w.applyPromptAction(ctx, promptAction{Kind: "retry", Key: route.JobKey}, "", nil)
+	w.applyPromptAction(ctx, promptAction{Kind: "retry", Key: route.JobKey}, "", &route)
 }
 
 // postPromptReply posts the prompt agent's reply to a routed comment on the
