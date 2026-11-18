@@ -2320,10 +2320,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		// routeToPrompt hands a direct mention's comment on a job's issue to
 		// the prompt agent, which restarts the job or replies to the comment
-		// (issue #842). Paused work is kept paused. It reports false when the
-		// comment is unknown or no prompt agent can run, leaving the mention
-		// queued.
-		routeToPrompt := func(issue Issue, key string, keepPaused bool, pauseReason string, own *OriginatingWorkState) bool {
+		// (issue #842). Paused work is kept paused; work that staysPaused is
+		// never restarted unless the prompt agent decides to. It reports false
+		// when the comment is unknown or no prompt agent can run, leaving the
+		// mention queued.
+		routeToPrompt := func(issue Issue, key string, keepPaused, staysPaused bool, pauseReason string, own *OriginatingWorkState) bool {
 			mentionKey := issue.Repository + "#" + strconv.Itoa(issue.Number)
 			comment, known := mentions.comments[mentionKey]
 			if !known || !w.routesCommentsToPrompt() {
@@ -2335,7 +2336,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			if keepPaused {
 				pauseJob(issue, key, pauseReason, own)
 			}
-			route := commentRoute{JobKey: key, Repository: issueRepository(issue.Target, issue), Number: issue.Number, Comment: comment}
+			route := commentRoute{JobKey: key, Repository: issueRepository(issue.Target, issue), Number: issue.Number, Comment: comment, StaysPaused: staysPaused}
 			w.logf("issue #%d comment %s goes to the prompt agent to decide on, instead of restarting the job", issue.Number, comment.URL())
 			go w.routeCommentToPrompt(ctx, route)
 			return true
@@ -2373,7 +2374,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					// instance, not review activity, so it is acted on below
 					// as it was before the pull request was paused.
 					w.logf("issue #%d paused work has a direct mention of instance %s; dispatching it", issue.Number, w.Identity)
-				case wake == core.PausedStay && mentioned && (paused.Kind == core.PausedBlocked || paused.Kind == core.PausedManual) && routeToPrompt(issue, key, true, wakeReason, pausedOwn):
+				case wake == core.PausedStay && mentioned && (paused.Kind == core.PausedBlocked || paused.Kind == core.PausedManual) && routeToPrompt(issue, key, true, true, wakeReason, pausedOwn):
 					// A direct mention on work waiting on its dependencies or
 					// paused by the owner is answered by the prompt agent while
 					// the work stays paused (issue #844).
@@ -2485,7 +2486,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				jobMu.Lock()
 				_, hasJob := jobs[key]
 				jobMu.Unlock()
-				if (hasJob || wasPaused) && routeToPrompt(issue, key, wasPaused, wakeReason, pausedOwn) {
+				if (hasJob || wasPaused) && routeToPrompt(issue, key, wasPaused, false, wakeReason, pausedOwn) {
 					continue
 				}
 			}

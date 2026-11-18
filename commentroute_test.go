@@ -123,15 +123,18 @@ func TestCommentOnCompletedJobIsRoutedToThePromptAgentWithoutLooping(t *testing.
 }
 
 // A direct mention on a job paused on its dependencies, or paused by its
-// owner, goes to the prompt agent, and the job stays paused (issue #844).
+// owner, goes to the prompt agent, and the job stays paused, even when the
+// prompt agent fails without deciding (issue #844).
 func TestCommentOnPausedJobIsRoutedToThePromptAgent(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		kind  string
-		issue Issue
+		name      string
+		kind      string
+		issue     Issue
+		answerErr error
 	}{
-		{"paused on dependencies", core.PausedBlocked, blockedOn12("open")[0]},
-		{"paused by owner", core.PausedManual, Issue{Number: 7, Repository: "o/r"}},
+		{"paused on dependencies", core.PausedBlocked, blockedOn12("open")[0], nil},
+		{"paused by owner", core.PausedManual, Issue{Number: 7, Repository: "o/r"}, nil},
+		{"prompt agent fails", core.PausedBlocked, blockedOn12("open")[0], errors.New("exit status 1")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			statePath := filepath.Join(t.TempDir(), "state.json")
@@ -156,6 +159,9 @@ func TestCommentOnPausedJobIsRoutedToThePromptAgent(t *testing.T) {
 			w.SetPromptAgent(unblockConfig{Agent: "claude"})
 			w.promptRun = func(_ context.Context, _ agentSpec, prompt string) (string, error) {
 				prompts <- prompt
+				if tc.answerErr != nil {
+					return "", tc.answerErr
+				}
 				return "Still waiting on its dependencies.\nGLORP comment o/r#7", nil
 			}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -170,6 +176,9 @@ func TestCommentOnPausedJobIsRoutedToThePromptAgent(t *testing.T) {
 			postMention(comments, mentions, 42, "What is the status? @/glorp:SELF")
 			awaitRoutedPrompt(t, prompts)
 			waitForLog(t, logs, "issue #7 comment https://github.com/o/r/issues/7#issuecomment-42 goes to the prompt agent to decide on")
+			if tc.answerErr != nil {
+				waitForLog(t, logs, "prompt agent could not decide on comment https://github.com/o/r/issues/7#issuecomment-42; the job stays paused")
+			}
 			waitForScans(t, mentions, 5)
 			select {
 			case n := <-runner.dispatched:
