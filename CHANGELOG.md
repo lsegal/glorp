@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.6.5 - 2026-11-18
+
 - Send new comments on a finished or paused job's issue to the prompt agent instead of restarting the job from scratch (issue #842). When a comment mentions this instance, or the login glorp runs as, on an issue whose job has completed or is paused, glorp now asks the prompt agent to `look at comment <link> on issue OWNER/REPO#N and determine next steps`, and the request shows in the prompt area. The prompt agent reads the comment and either restarts the job, which resumes it the way Retry does, or answers the comment. glorp posts that answer as a comment on the same thread with every @mention broken, so it notifies nobody. glorp never treats the prompt agent's own replies as new comments, so a reply cannot start the process over. When the prompt agent cannot run, or fails without deciding, the job restarts as it did before. Comments on a running job are still passed into that run, and comments on issues without a job still start one.
 
 ## v1.6.4 - 2026-11-16
