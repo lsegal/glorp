@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/lsegal/glorp/agents"
+	"github.com/lsegal/glorp/core"
 )
 
 func TestNeutralizeMentionsBreaksEveryMention(t *testing.T) {
@@ -117,6 +119,65 @@ func TestCommentOnCompletedJobIsRoutedToThePromptAgentWithoutLooping(t *testing.
 	case n := <-runner.dispatched:
 		t.Fatalf("a routed comment restarted #%d", n)
 	default:
+	}
+}
+
+// A direct mention on a job paused on its dependencies, or paused by its
+// owner, goes to the prompt agent, and the job stays paused (issue #844).
+func TestCommentOnPausedJobIsRoutedToThePromptAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kind  string
+		issue Issue
+	}{
+		{"paused on dependencies", core.PausedBlocked, blockedOn12("open")[0]},
+		{"paused by owner", core.PausedManual, Issue{Number: 7, Repository: "o/r"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.json")
+			saved := `{"o/r#7": {"status": "paused", "sessionId": "session-7", "agent": "claude", "paused": {"kind": "` + tc.kind + `"}}}`
+			if err := os.WriteFile(statePath, []byte(saved), 0600); err != nil {
+				t.Fatal(err)
+			}
+			src := pausingSource([]Issue{tc.issue})
+			src.states[7] = OriginatingWorkState{IssueState: "open"}
+			src.states[12] = OriginatingWorkState{IssueState: "open"}
+			runner := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 4)}
+			close(runner.release)
+			comments, mentions := newFakeCommentClient(), newFakeMentionSource()
+			prompts := make(chan string, 8)
+			logs := &syncBuffer{}
+			w := &Glorp{
+				Repo: "o/r", Interval: 5 * time.Millisecond, Concurrency: 1, StatePath: statePath,
+				Issues: src, Runner: runner, Identity: "SELF", AllowedCommenters: []string{"lsegal"},
+				Comments: comments, Mentions: mentions, Out: logs, Registry: agents.MustBuiltin(),
+				closureInterval: time.Millisecond,
+			}
+			w.SetPromptAgent(unblockConfig{Agent: "claude"})
+			w.promptRun = func(_ context.Context, _ agentSpec, prompt string) (string, error) {
+				prompts <- prompt
+				return "Still waiting on its dependencies.\nGLORP comment o/r#7", nil
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- w.Run(ctx) }()
+			defer func() {
+				cancel()
+				<-done
+			}()
+			waitForLog(t, logs, "issue #7 paused: ")
+
+			postMention(comments, mentions, 42, "What is the status? @/glorp:SELF")
+			awaitRoutedPrompt(t, prompts)
+			waitForLog(t, logs, "issue #7 comment https://github.com/o/r/issues/7#issuecomment-42 goes to the prompt agent to decide on")
+			waitForScans(t, mentions, 5)
+			select {
+			case n := <-runner.dispatched:
+				t.Fatalf("a mention on a paused job dispatched #%d:\n%s", n, logs)
+			default:
+			}
+			waitForPaused(t, statePath, 7, tc.kind)
+		})
 	}
 }
 
