@@ -68,6 +68,9 @@ type commentRoute struct {
 	Repository string
 	Number     int
 	Comment    routedComment
+	// StaysPaused marks a job paused on its dependencies or by its owner:
+	// only the prompt agent's own decision may restart it (issue #844).
+	StaysPaused bool
 }
 
 // request is what the prompt area shows for a routed comment.
@@ -98,6 +101,10 @@ func (w *Glorp) routeCommentToPrompt(ctx context.Context, route commentRoute) {
 	}
 	entry = w.answerPrompt(ctx, entry, earlier, "", &route)
 	if entry.Status != "failed" || len(entry.Actions) > 0 || ctx.Err() != nil {
+		return
+	}
+	if route.StaysPaused {
+		w.logf("%s prompt agent could not decide on comment %s; the job stays paused", route.JobKey, route.Comment.URL())
 		return
 	}
 	w.logf("%s prompt agent could not decide on comment %s; retrying the job instead", route.JobKey, route.Comment.URL())
