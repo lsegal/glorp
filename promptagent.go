@@ -112,7 +112,7 @@ func (w *Glorp) SubmitPrompt(ctx context.Context, request string) (core.PromptEn
 	if err != nil {
 		return core.PromptEntry{}, err
 	}
-	go w.answerPrompt(ctx, entry, earlier, "")
+	go w.answerPrompt(ctx, entry, earlier, "", nil)
 	return entry, nil
 }
 
@@ -128,7 +128,7 @@ func (w *Glorp) AskPrompt(ctx context.Context, request, model string) (core.Prom
 	if err != nil {
 		return core.PromptEntry{}, err
 	}
-	return w.answerPrompt(ctx, entry, earlier, model), nil
+	return w.answerPrompt(ctx, entry, earlier, model, nil), nil
 }
 
 // startPrompt adds a pending entry for request to the prompt area and returns
@@ -183,8 +183,9 @@ func (w *Glorp) promptRunner() (func(context.Context, agentSpec, string) (string
 
 // answerPrompt runs the prompt agent for one request, then performs the job
 // actions and unblock rounds its answer asks for through glorp's own paths,
-// and returns the answered entry.
-func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlier []core.PromptEntry, model string) core.PromptEntry {
+// and returns the answered entry. route is set when the request is a comment
+// glorp routed to the agent (issue #842) rather than one the owner typed.
+func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlier []core.PromptEntry, model string, route *commentRoute) core.PromptEntry {
 	spec, err := w.promptSpec(model)
 	if err != nil {
 		entry.Status, entry.Response = "failed", fmt.Sprintf("the prompt agent cannot run: %v", err)
@@ -199,7 +200,7 @@ func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlie
 	w.logf("prompt agent (%s) answering request %d: %s", spec, entry.ID, truncate(entry.Request, 120))
 	callCtx, cancel := context.WithTimeout(ctx, promptCallTimeout)
 	defer cancel()
-	output, err := run(callCtx, spec, w.promptText(ctx, entry.Request, earlier))
+	output, err := run(callCtx, spec, w.promptText(ctx, entry.Request, earlier, route))
 	if ctx.Err() != nil {
 		entry.Status, entry.Response = "failed", "glorp stopped before the prompt agent answered"
 		return w.finishPrompt(entry)
@@ -216,7 +217,7 @@ func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlie
 		}
 	}
 	for _, action := range actions {
-		entry.Actions = append(entry.Actions, w.applyPromptAction(ctx, action))
+		entry.Actions = append(entry.Actions, w.applyPromptAction(ctx, action, entry.Response, route))
 	}
 	w.logf("prompt agent answered request %d (%s)", entry.ID, entry.Status)
 	return w.finishPrompt(entry)
@@ -224,7 +225,20 @@ func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlie
 
 // applyPromptAction performs one action from the prompt agent's answer with
 // exactly the semantics of the dashboards' controls, and says how it went.
-func (w *Glorp) applyPromptAction(ctx context.Context, action promptAction) string {
+// A comment action posts response, the agent's answer, in reply to the
+// routed comment, and only route's own job can be replied for.
+func (w *Glorp) applyPromptAction(ctx context.Context, action promptAction, response string, route *commentRoute) string {
+	if action.Kind == "comment" {
+		if route == nil || action.Key != route.JobKey {
+			return fmt.Sprintf("comment %s failed: replying is only for a comment glorp routed to the prompt agent, on that comment's job", action.Key)
+		}
+		url, err := w.postPromptReply(ctx, *route, response)
+		if err != nil {
+			return fmt.Sprintf("comment %s failed: %v", action.Key, err)
+		}
+		w.logf("%s prompt agent replied to comment %s: %s", route.JobKey, route.Comment.URL(), url)
+		return fmt.Sprintf("comment %s: posted %s", action.Key, url)
+	}
 	if action.Kind == "unblock" {
 		key := action.Key
 		if strings.EqualFold(key, "all") {
@@ -237,6 +251,15 @@ func (w *Glorp) applyPromptAction(ctx context.Context, action promptAction) stri
 		return fmt.Sprintf("unblock %s: round requested; the stuck-job watchdog logs what it finds and does", action.Key)
 	}
 	job, ok := w.publishedJob(action.Key)
+	if !ok && route != nil && action.Key == route.JobKey {
+		// A routed comment's job is known to the run loop even when no
+		// dashboard has published a snapshot of it.
+		var target string
+		var number int
+		if target, number, ok = parseIssueWorkKey(action.Key); ok {
+			job = JobSnapshot{Target: target, Number: number}
+		}
+	}
 	if !ok {
 		return fmt.Sprintf("%s %s failed: glorp has no such job", action.Kind, action.Key)
 	}
@@ -274,7 +297,7 @@ func (w *Glorp) publishedJob(key string) (JobSnapshot, bool) {
 
 // promptActionPattern reads one action line of the prompt agent's answer,
 // tolerating the list markers and code quotes a model may wrap it in.
-var promptActionPattern = regexp.MustCompile("(?mi)^[\\s>*`-]*GLORP[ \\t]+(retry|pause|resume|stop|unblock)[ \\t]+([^\\s`]+)[`\\s]*$")
+var promptActionPattern = regexp.MustCompile("(?mi)^[\\s>*`-]*GLORP[ \\t]+(retry|pause|resume|stop|unblock|comment)[ \\t]+([^\\s`]+)[`\\s]*$")
 
 // parsePromptActions reads the actions the prompt agent's answer asks for, in
 // order, each job action at most once.
@@ -302,7 +325,7 @@ func promptResponse(output string) string {
 // promptText builds the prompt agent's prompt: its scope and tools, the live
 // state of the instance and its jobs read now, the last few exchanges, and
 // the request.
-func (w *Glorp) promptText(ctx context.Context, request string, earlier []core.PromptEntry) string {
+func (w *Glorp) promptText(ctx context.Context, request string, earlier []core.PromptEntry, route *commentRoute) string {
 	var snapshot core.Snapshot
 	if published := w.published.Load(); published != nil {
 		snapshot = *published
@@ -333,6 +356,7 @@ func (w *Glorp) promptText(ctx context.Context, request string, earlier []core.P
 		Logs:        logs,
 		Earlier:     recent,
 		Request:     request,
+		Route:       route,
 		Now:         time.Now(),
 	})
 }
@@ -349,7 +373,10 @@ type promptState struct {
 	Logs        []string
 	Earlier     []core.PromptEntry
 	Request     string
-	Now         time.Time
+	// Route is the comment glorp routed to the agent, when the request is
+	// one (issue #842).
+	Route *commentRoute
+	Now   time.Time
 }
 
 // promptAgentPrompt asks the prompt agent to answer one request about this
@@ -357,7 +384,11 @@ type promptState struct {
 func promptAgentPrompt(state promptState) string {
 	var b strings.Builder
 	id := string(state.Identity)
-	fmt.Fprintf(&b, "You are the prompt agent of the glorp instance /glorp:%s. glorp dispatches GitHub issues to coding agents as jobs. The owner typed a request into glorp's dashboard. Your only subject is this glorp instance and its jobs.\n\n", id)
+	source := "The owner typed a request into glorp's dashboard."
+	if state.Route != nil {
+		source = "glorp routed a new comment on a job's issue to you to decide what it calls for."
+	}
+	fmt.Fprintf(&b, "You are the prompt agent of the glorp instance /glorp:%s. glorp dispatches GitHub issues to coding agents as jobs. %s Your only subject is this glorp instance and its jobs.\n\n", id, source)
 	b.WriteString("Scope:\n")
 	b.WriteString("- You answer questions about this instance (its version, configuration, agents, and quotas) and its jobs (their state, output, and why one is paused, blocked, waiting, or stuck), and you act on its jobs only in the ways listed below.\n")
 	b.WriteString("- Refuse anything else in one plain sentence and do nothing for it: writing or editing code or files in any repository, git or other shell work, and general questions unrelated to this instance. Never improvise a way around this.\n")
@@ -372,10 +403,18 @@ func promptAgentPrompt(state promptState) string {
 	b.WriteString("GLORP stop KEY     stops a running job, or clears a paused one and releases its claim\n")
 	b.WriteString("GLORP unblock all  runs a stuck-job watchdog round now over every stuck job\n")
 	b.WriteString("GLORP unblock KEY  runs a stuck-job watchdog round now over that job alone\n")
-	b.WriteString("Only add an action line when the owner asked for that action. glorp reports how each one went below your reply, so do not claim it already happened.\n\n")
+	if state.Route == nil {
+		b.WriteString("Only add an action line when the owner asked for that action. glorp reports how each one went below your reply, so do not claim it already happened.\n\n")
+	} else {
+		b.WriteString("Only add an action line the routed comment below calls for. glorp reports how each one went below your reply, so do not claim it already happened.\n\n")
+	}
 	b.WriteString("Actions you perform yourself:\n")
 	fmt.Fprintf(&b, "- Filing an issue: when the owner describes an issue to file, run the gh-create skill as /gh-create OWNER/REPO <the owner's description> identity:/glorp:%s, choosing OWNER/REPO from the owner's words or this instance's targets, and ask which repository when that is unclear. Reply with the new issue's URL.\n", id)
-	fmt.Fprintf(&b, "- Updating an issue or pull request: post one comment on it with gh that mentions its author as @LOGIN and this instance as @/glorp:%s, and carries the update. That mention is how the owning job receives it. Never edit an issue or pull request body or title to perform an update. Reply with the comment's URL.\n", id)
+	if state.Route == nil {
+		fmt.Fprintf(&b, "- Updating an issue or pull request: post one comment on it with gh that mentions its author as @LOGIN and this instance as @/glorp:%s, and carries the update. That mention is how the owning job receives it. Never edit an issue or pull request body or title to perform an update. Reply with the comment's URL.\n", id)
+	} else {
+		writeCommentRouting(&b, *state.Route)
+	}
 	if state.SelfLogin != "" {
 		fmt.Fprintf(&b, "glorp runs as @%s on GitHub.\n", state.SelfLogin)
 	}
@@ -472,7 +511,11 @@ func promptAgentPrompt(state promptState) string {
 			}
 		}
 	}
-	fmt.Fprintf(&b, "\nThe owner's request:\n%s\n", state.Request)
+	if state.Route != nil {
+		fmt.Fprintf(&b, "\nglorp's request:\n%s\n", state.Request)
+	} else {
+		fmt.Fprintf(&b, "\nThe owner's request:\n%s\n", state.Request)
+	}
 	return b.String()
 }
 
@@ -490,4 +533,17 @@ func overrideText(agent, model, fallback string) string {
 		return "the coding agent (" + fallback + ")"
 	}
 	return "the coding agent"
+}
+
+// writeCommentRouting tells the prompt agent how to handle a comment glorp
+// routed to it (issue #842): restart the job, or reply without mentioning
+// anyone, since a mention would be detected as a new comment and loop.
+func writeCommentRouting(b *strings.Builder, route commentRoute) {
+	b.WriteString("\nThis request is a routed comment, not the owner typing:\n")
+	fmt.Fprintf(b, "- A new comment from @%s arrived at %s, on the issue of job %s (%s#%d). glorp did not restart the job for it; you decide what it calls for.\n", route.Comment.Author, route.Comment.URL(), route.JobKey, route.Repository, route.Number)
+	b.WriteString("- Read the comment, the issue, and its pull request with read-only gh commands, alongside the job's state below.\n")
+	fmt.Fprintf(b, "- When the comment calls for the work itself to change, resume, or be redone, restart the job: end your reply with the line GLORP retry %s\n", route.JobKey)
+	fmt.Fprintf(b, "- When a reply is all it needs, write that reply as your answer, addressed to the comment's reader, and end it with the line GLORP comment %s. glorp posts your answer, without its action lines, as a comment on the thread the comment is on.\n", route.JobKey)
+	b.WriteString("- Never @mention anyone in that reply, neither a person nor a glorp instance: a mention would be detected as a new comment and start this over. glorp breaks any mention it finds anyway.\n")
+	b.WriteString("- Never post, edit, or delete comments yourself with gh; glorp posts your reply for you. Ask for at most one of the two actions.\n")
 }

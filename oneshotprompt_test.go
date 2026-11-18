@@ -89,7 +89,7 @@ func TestAskPromptStartsTheAgentWithALargeInstanceContext(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			w := &Glorp{Registry: registry, Runner: CommandRunner{Agent: name, Agents: []string{name}, Definitions: registry}, Out: &syncBuffer{}}
 			w.published.Store(&core.Snapshot{Jobs: jobs})
-			if size := len(w.promptText(context.Background(), "status?", nil)); size <= linuxArgumentLimit {
+			if size := len(w.promptText(context.Background(), "status?", nil, nil)); size <= linuxArgumentLimit {
 				t.Fatalf("prompt is only %d bytes; the test needs one past every argv limit", size)
 			}
 			entry, err := w.AskPrompt(context.Background(), "status?", "")

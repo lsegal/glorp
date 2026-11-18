@@ -191,7 +191,7 @@ func TestPromptUnblockActionRunsAWatchdogRoundNow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go w.watchStuckJobs(ctx, list.get)
-	if got := w.applyPromptAction(ctx, promptAction{Kind: "unblock", Key: "all"}); !strings.Contains(got, "round requested") {
+	if got := w.applyPromptAction(ctx, promptAction{Kind: "unblock", Key: "all"}, "", nil); !strings.Contains(got, "round requested") {
 		t.Fatalf("unblock all = %q", got)
 	}
 	calls.await(t, 1)
@@ -200,14 +200,14 @@ func TestPromptUnblockActionRunsAWatchdogRoundNow(t *testing.T) {
 	}
 	waitForLog(t, logs, "stuck-job watchdog: o/r#1 needed no action: its blocker merged")
 	w.published.Store(&core.Snapshot{Jobs: list.get()})
-	if got := w.applyPromptAction(ctx, promptAction{Kind: "unblock", Key: "o/r#2"}); !strings.Contains(got, "round requested") {
+	if got := w.applyPromptAction(ctx, promptAction{Kind: "unblock", Key: "o/r#2"}, "", nil); !strings.Contains(got, "round requested") {
 		t.Fatalf("unblock o/r#2 = %q", got)
 	}
 	calls.await(t, 1)
 	if prompt := calls.prompt(1); !strings.Contains(prompt, "key: o/r#2") || !strings.Contains(prompt, "named from the prompt area while active") || strings.Contains(prompt, "key: o/r#1") {
 		t.Errorf("the round over a named job did not cover just that job:\n%s", prompt)
 	}
-	w.applyPromptAction(ctx, promptAction{Kind: "unblock", Key: "o/r#404"})
+	w.applyPromptAction(ctx, promptAction{Kind: "unblock", Key: "o/r#404"}, "", nil)
 	waitForLog(t, logs, "the unblock round requested for o/r#404 cannot run: glorp has no such job")
 	if calls.count() != 2 {
 		t.Errorf("a round for a missing job made an unblock call")

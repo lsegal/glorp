@@ -2450,6 +2450,28 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logChanged("mention-active-"+key, "waiting", "issue #%d direct mention of instance %s waits for the run in progress to finish: that run's session cannot be resumed to relay it", issue.Number, w.Identity)
 				}
 			}
+			// A comment on the issue of a finished or paused job goes to the
+			// prompt agent, which restarts the job or replies to the comment,
+			// instead of restarting the job from scratch (issue #842). It
+			// applies only when the comment is the one reason to dispatch.
+			if directMention && !isActive && issue.Number > 0 && (wasCompleted || (wasPaused && wake == core.PausedStay)) && rejected == 0 && !swept && !staleRestoredState && !shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) {
+				comment, known := mentions.comments[mentionKey]
+				jobMu.Lock()
+				_, hasJob := jobs[key]
+				jobMu.Unlock()
+				if known && (hasJob || wasPaused) && w.routesCommentsToPrompt() {
+					delete(directMentions, mentionKey)
+					delete(mentions.rechecks, mentionKey)
+					delete(mentions.comments, mentionKey)
+					if wasPaused {
+						pauseJob(issue, key, wakeReason, pausedOwn)
+					}
+					route := commentRoute{JobKey: key, Repository: issueRepository(issue.Target, issue), Number: issue.Number, Comment: comment}
+					w.logf("issue #%d comment %s goes to the prompt agent to decide on, instead of restarting the job", issue.Number, comment.URL())
+					go w.routeCommentToPrompt(ctx, route)
+					continue
+				}
+			}
 			if issue.Number > 0 && (wasFailed || rejected > 0 || wasPaused || (staleRestoredState && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || shouldDispatchIssue(issue.Target, issue, isActive, wasActive, wasCompleted, seen[key], w.ReadyState) || (swept && !isActive && remoteIssueAllowsDispatch(issue.Target, issue, w.ReadyState)) || (directMention && !isActive)) {
 				seen[key] = true
 				delete(restored, key)
@@ -3650,7 +3672,11 @@ func (w *Glorp) Run(ctx context.Context) error {
 					w.logf("issue #%d direct mention is still pending; using the scheduled follow-up refresh", number)
 				}
 			}
-			if kind, ok := webhookMentionKind(event); ok && mentionedIdentity(event.CommentBody, w.Identity) {
+			promptReply := isPromptReply(event.CommentBody)
+			if promptReply {
+				w.logf("issue #%d comment is the prompt agent's own reply; it triggers nothing", event.IssueNumber)
+			}
+			if kind, ok := webhookMentionKind(event); ok && !promptReply && mentionedIdentity(event.CommentBody, w.Identity) {
 				// Acknowledge the mention was read regardless of whether it goes on
 				// to authorize a run (issue #581): a human watching the thread should
 				// see the eyes reaction even when the mention is stale or from an
@@ -3689,6 +3715,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					for _, mentioned := range keys {
 						directMentions[mentioned] = true
 						delete(mentions.rechecks, mentioned)
+						mentions.comments[mentioned] = routedComment{Kind: kind, Repository: event.Repository, Number: event.IssueNumber, ID: event.CommentID, Author: event.CommentAuthor}
 					}
 					if event.OnPullRequest {
 						w.logf("pull request #%d directly mentioned instance %s%s; refreshing for a threaded gh-fix run on %s", event.IssueNumber, w.Identity, mentionLocationSuffix(kind), formatIssueRefs(event.ClosesIssues))
@@ -3702,7 +3729,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					continue
 				}
 			}
-			if kind, ok := webhookMentionKind(event); ok && !mentionedIdentity(event.CommentBody, w.Identity) && w.commentRequestsRecheck(event.CommentBody, event.CommentAuthor) {
+			if kind, ok := webhookMentionKind(event); ok && !promptReply && !mentionedIdentity(event.CommentBody, w.Identity) && w.commentRequestsRecheck(event.CommentBody, event.CommentAuthor) {
 				// The delivery marks the comment as new, so only its author, its
 				// mention of the login, and its presence on GitHub need checking
 				// (issue #708).
@@ -3721,7 +3748,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 							reportPollError("comment-recheck", err)
 						}
 					}
-					if queued := w.queueCommentRecheck(mentions, keys, event.CommentAuthor, time.Now(), observed, directMentions); len(queued) > 0 {
+					if queued := w.queueCommentRecheck(mentions, keys, routedComment{Kind: kind, Repository: event.Repository, Number: event.IssueNumber, ID: event.CommentID, Author: event.CommentAuthor}, time.Now(), observed, directMentions); len(queued) > 0 {
 						w.reactToMention(ctx, event.Repository, kind, event.IssueNumber, event.CommentID, event.CommentNodeID)
 						if err := poll(nil); err != nil && ctx.Err() == nil {
 							reportPollError("comment-recheck", err)
