@@ -108,6 +108,13 @@ export function emptyScheduleForm(repository = "") {
 	};
 }
 
+// hasTime reports whether value is a real time; Go sends an unset time as the
+// year 1.
+export function hasTime(value) {
+	const date = new Date(value);
+	return !Number.isNaN(date.getTime()) && date.getFullYear() > 1;
+}
+
 // datetimeLocal formats a time for an <input type="datetime-local">.
 function datetimeLocal(value) {
 	const date = new Date(value);
@@ -126,7 +133,7 @@ export function scheduleToForm(schedule) {
 		name: schedule.name || "",
 		prompt: schedule.prompt || "",
 		kind: trigger.kind || "daily",
-		at: trigger.at ? datetimeLocal(trigger.at) : "",
+		at: hasTime(trigger.at) ? datetimeLocal(trigger.at) : "",
 		every: trigger.every || form.every,
 		time: trigger.time || form.time,
 		weekdays: trigger.weekdays?.length ? trigger.weekdays : form.weekdays,
@@ -199,8 +206,8 @@ export function describeTrigger(trigger = {}) {
 // formatFireTime shows a fire time in the browser's zone, such as
 // "Wed 18 Nov, 09:00".
 export function formatFireTime(value) {
+	if (!hasTime(value)) return "";
 	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) return "";
 	return date.toLocaleString(undefined, {
 		weekday: "short",
 		day: "numeric",
@@ -212,6 +219,7 @@ export function formatFireTime(value) {
 
 // formatRelative says how far off a fire time is, such as "in 3h 20m".
 export function formatRelative(value, now = Date.now()) {
+	if (!hasTime(value)) return "";
 	const minutes = Math.round((new Date(value).getTime() - now) / 60000);
 	if (Number.isNaN(minutes)) return "";
 	if (minutes <= 0) return "now";

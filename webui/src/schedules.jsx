@@ -11,6 +11,7 @@ import {
 	formatRelative,
 	formToSchedule,
 	formTrigger,
+	hasTime,
 	lastRunLabel,
 	previewTrigger,
 	runScheduleNow,
@@ -467,7 +468,7 @@ export function SchedulesModal({ onClose, initialId, defaultRepository }) {
 												className={`schedule-last ${schedule.running ? "running" : (schedule.history?.at(-1)?.status ?? "")}`}
 											>
 												{lastRunLabel(schedule)}
-												{schedule.enabled && schedule.next
+												{schedule.enabled && hasTime(schedule.next)
 													? ` · next ${formatRelative(schedule.next)}`
 													: ""}
 											</span>

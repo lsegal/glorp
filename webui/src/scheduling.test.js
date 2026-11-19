@@ -105,6 +105,7 @@ describe("schedule labels (issue #848)", () => {
 		expect(formatRelative("2026-11-18T15:20:00Z", now)).toBe("in 3h 20m");
 		expect(formatRelative("2026-11-20T13:00:00Z", now)).toBe("in 2d 1h");
 		expect(formatRelative("2026-11-18T11:00:00Z", now)).toBe("now");
+		expect(formatRelative("0001-01-01T00:00:00Z", now)).toBe("");
 	});
 
 	it("describes triggers and last results", () => {

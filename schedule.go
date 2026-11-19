@@ -108,6 +108,10 @@ const scheduleMissedGrace = 2 * time.Minute
 // most this long.
 const schedulerMaxSleep = time.Minute
 
+// upcomingPerSchedule is how many of one schedule's fires the upcoming runs
+// list at most.
+const upcomingPerSchedule = 3
+
 // scheduleSummaryLimit bounds the summary a run's history entry keeps.
 const scheduleSummaryLimit = 200
 
@@ -573,7 +577,9 @@ func (s *scheduler) upcoming() []core.UpcomingRun {
 		if !schedule.Enabled || next.IsZero() {
 			continue
 		}
-		fires := append([]time.Time{next}, schedule.Trigger.NextFires(next, schedule.Created, core.MaxUpcomingRuns-1)...)
+		// A few fires per schedule, so one frequent schedule does not hide
+		// the next run of every other.
+		fires := append([]time.Time{next}, schedule.Trigger.NextFires(next, schedule.Created, upcomingPerSchedule-1)...)
 		for _, at := range fires {
 			runs = append(runs, core.UpcomingRun{ScheduleID: schedule.ID, Name: schedule.Name, Repository: schedule.Repository, At: at})
 		}
@@ -842,7 +848,15 @@ func (w *Glorp) serveScheduleJobAction(env scheduleJobEnv, request jobActionRequ
 		w.logf("schedule %s run stop requested from web UI", id)
 		env.publish()
 		cancel(errWorkStoppedFromWebUI)
-		go w.awaitStoppedRun(env.ctx, action.Number, exited, request.done)
+		go func() {
+			select {
+			case <-exited:
+				w.logf("schedule %s run stopped from web UI; its agent has exited", id)
+				request.done <- nil
+			case <-env.ctx.Done():
+				request.done <- fmt.Errorf("job is still stopping: %w", env.ctx.Err())
+			}
+		}()
 	case "retry":
 		if cancel != nil {
 			w.logf("schedule %s run retry requested from web UI; stopping it and running the schedule again", id)

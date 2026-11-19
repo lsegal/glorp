@@ -1461,7 +1461,8 @@ h1 .version {
 }
 .schedule-history ul > li {
 	display: grid;
-	grid-template-columns: 64px 130px 56px minmax(0, 1fr);
+	grid-template-columns: 64px max-content 48px minmax(0, 1fr);
+	white-space: nowrap;
 	gap: 8px;
 	align-items: center;
 	color: #d4d4d8;
