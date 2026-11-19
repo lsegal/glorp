@@ -73,8 +73,17 @@ func scheduleCommand(args []string, stdin io.Reader, stdout, stderr io.Writer, n
 		return 2
 	}
 	action := args[0]
-	if err := flags.Parse(args[1:]); err != nil {
-		return 2
+	// Flags may come before or after the schedule ID.
+	var positional []string
+	for rest := args[1:]; ; {
+		if err := flags.Parse(rest); err != nil {
+			return 2
+		}
+		if flags.NArg() == 0 {
+			break
+		}
+		positional = append(positional, flags.Arg(0))
+		rest = flags.Args()[1:]
 	}
 	path := flagValue[string](flags, "schedules")
 	if path == "" {
@@ -85,7 +94,6 @@ func scheduleCommand(args []string, stdin io.Reader, stdout, stderr io.Writer, n
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	positional := flags.Args()
 	switch action {
 	case "list", "ls":
 		printSchedules(stdout, schedules, now())
