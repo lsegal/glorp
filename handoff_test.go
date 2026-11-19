@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -964,6 +965,88 @@ func TestNegotiateContestedIssuesDoesNotBlockThePollOnTheGraceWindow(t *testing.
 	}
 	if posted, _ = comments.ListComments(context.Background(), "o/r", 5); len(posted) != 2 {
 		t.Fatalf("expected the ask and one starting claim, got %v", posted)
+	}
+}
+
+// Issue #859 reproduced the logged sequence: two stale-claimed issues enter
+// their handshakes, and a third, uncontested issue is assigned while both
+// grace windows are still open. The assignment delivery must poll and start
+// the uncontested issue at once rather than leave it for whichever poll the
+// settled handshakes nudge, and the contested issues must still wait out
+// their windows before they are claimed.
+func TestGlorpStartsAssignedIssueWhileOtherHandshakesWait(t *testing.T) {
+	dir := t.TempDir()
+	comments := newFakeCommentClient()
+	stale := time.Now().Add(-time.Hour)
+	comments.inject("o/r", 1, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: stale})
+	comments.inject("o/r", 2, Comment{Body: signComment(startingClaimBody, "OTHER"), CreatedAt: stale})
+	contested := []Issue{{Number: 1, Repository: "o/r"}, {Number: 2, Repository: "o/r"}}
+	// GitHub's search index has not caught up with #3's assignment on the
+	// first poll; every later poll lists it.
+	src := &fakeSource{batches: [][]Issue{contested, append(append([]Issue(nil), contested...), Issue{Number: 3, Repository: "o/r"})}}
+	r := &fakeRunner{release: make(chan struct{}), dispatched: make(chan int, 3)}
+	release := make(chan struct{})
+	events := make(chan WebhookEvent)
+	w := &Glorp{
+		Repo: "o/r", Interval: time.Hour, Concurrency: 3,
+		StatePath: filepath.Join(dir, "state.json"), Issues: src, Runner: r, Comments: comments,
+		Identity: "SELF", UseWebhooks: true, Events: events, fallbackInterval: time.Hour,
+		ownershipWait: func(ctx context.Context) bool {
+			select {
+			case <-release:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	// Both handshakes have asked and are inside their grace windows.
+	waitForComments(t, comments, "o/r", 1, 2)
+	waitForComments(t, comments, "o/r", 2, 2)
+
+	// The run's own state saves schedule a resync stateReloadDebounce later,
+	// which would eventually list #3 regardless of the delivery, so the
+	// deadline sits well inside that debounce.
+	sendWebhookEvent(t, events, WebhookEvent{Kind: "issues", Action: "assigned", Repository: "o/r", IssueNumber: 3})
+	select {
+	case got := <-r.dispatched:
+		if got != 3 {
+			t.Fatalf("dispatched #%d while its handshake was still waiting; want the uncontested #3 first", got)
+		}
+	case <-time.After(stateReloadDebounce / 2):
+		t.Fatal("the uncontested, newly assigned issue waited behind the other issues' handshakes")
+	}
+	for _, number := range []int{1, 2} {
+		if posted, _ := comments.ListComments(context.Background(), "o/r", number); len(posted) != 2 {
+			t.Fatalf("#%d must stay unclaimed until its grace window elapses, got %v", number, posted)
+		}
+	}
+
+	// Once the windows elapse unanswered, the contested issues are claimed
+	// and dispatched too.
+	close(release)
+	started := map[int]bool{}
+	for len(started) < 2 {
+		select {
+		case got := <-r.dispatched:
+			started[got] = true
+		case <-time.After(webhookDispatchWait):
+			t.Fatalf("contested issues not dispatched after their handshakes settled; started %v", started)
+		}
+	}
+	if !started[1] || !started[2] {
+		t.Fatalf("started %v after the handshakes settled, want #1 and #2", started)
+	}
+	close(r.release)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
