@@ -721,29 +721,24 @@ func TestDefaultIssueFilterOmitsKindAndStateQualifiers(t *testing.T) {
 	}
 }
 
-// TestDefaultIssueFilterRequiresBothAssigneeAndAuthor pins the default filter to
-// requiring that the authenticated user both authored and is assigned to an
-// issue. Matching either qualifier alone would let anyone dispatch an agent by
-// assigning the authenticated user an issue they filed themselves.
-func TestDefaultIssueFilterRequiresBothAssigneeAndAuthor(t *testing.T) {
-	if defaultIssueFilter != "assignee:@me author:@me" {
-		t.Fatalf("defaultIssueFilter = %q, want both assignee:@me and author:@me", defaultIssueFilter)
+// TestDefaultIssueFilterIsAssigneeOnly pins the default filter to the
+// assignee qualifier alone (issue #854). Only someone with triage or write
+// access can assign an issue, so assignment is the gate; an author term would
+// only exclude issues somebody else wrote that the user assigned themself.
+func TestDefaultIssueFilterIsAssigneeOnly(t *testing.T) {
+	if defaultIssueFilter != "assignee:@me" {
+		t.Fatalf("defaultIssueFilter = %q, want assignee:@me", defaultIssueFilter)
 	}
 	query := publicIssueSearchQuery("owner/repo", defaultIssueFilter, false, "lsegal")
-	for _, want := range []string{"assignee:lsegal", "author:lsegal"} {
-		if !strings.Contains(query, want) {
-			t.Fatalf("publicIssueSearchQuery() = %q, want it to contain %q", query, want)
-		}
-	}
-	if strings.Contains(query, "@me") {
-		t.Fatalf("publicIssueSearchQuery() = %q, want every @me qualifier substituted", query)
+	if want := "repo:owner/repo is:issue state:open assignee:lsegal"; query != want {
+		t.Fatalf("publicIssueSearchQuery() = %q, want %q", query, want)
 	}
 }
 
-// TestListIssuesSearchesOnceWithBothQualifiers guards against reintroducing the
-// two-search union that treated the default filter as an OR of assignee and
-// author (see issue #371): a single search must carry both qualifiers.
-func TestListIssuesSearchesOnceWithBothQualifiers(t *testing.T) {
+// listIssuesSearchQueries runs ListIssues against a private repo with filter
+// and returns every issue search query it sent.
+func listIssuesSearchQueries(t *testing.T, filter string) []string {
+	t.Helper()
 	var queries []string
 	gh := GHCLI{
 		publicRepoCache: &sync.Map{},
@@ -762,12 +757,37 @@ func TestListIssuesSearchesOnceWithBothQualifiers(t *testing.T) {
 			return []byte(`[]`), nil
 		},
 	}
-	gh.Filter = defaultIssueFilter
+	gh.Filter = filter
 	if _, err := gh.ListIssues(context.Background(), "owner/repo"); err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
+	return queries
+}
+
+// TestListIssuesDefaultFilterSearchesAssigneeOnly checks the pickup query a
+// run sends with no filter configured: one search, gated on the assignee, with
+// no author term, so an issue somebody else wrote is still picked up once it
+// is assigned to the user. It also guards against reintroducing the
+// two-search union of issue #371.
+func TestListIssuesDefaultFilterSearchesAssigneeOnly(t *testing.T) {
+	queries := listIssuesSearchQueries(t, defaultIssueFilter)
 	if len(queries) != 1 {
-		t.Fatalf("issue searches = %#v, want exactly one search carrying both qualifiers", queries)
+		t.Fatalf("issue searches = %#v, want exactly one search", queries)
+	}
+	if !strings.Contains(queries[0], "assignee:@me") {
+		t.Fatalf("search query = %q, want assignee:@me", queries[0])
+	}
+	if strings.Contains(queries[0], "author:") {
+		t.Fatalf("search query = %q, want no author: term", queries[0])
+	}
+}
+
+// TestListIssuesKeepsConfiguredAuthorFilter checks that a configured filter is
+// used exactly as configured, including one that still names an author.
+func TestListIssuesKeepsConfiguredAuthorFilter(t *testing.T) {
+	queries := listIssuesSearchQueries(t, "assignee:@me author:@me")
+	if len(queries) != 1 {
+		t.Fatalf("issue searches = %#v, want exactly one search", queries)
 	}
 	if !strings.Contains(queries[0], "assignee:@me") || !strings.Contains(queries[0], "author:@me") {
 		t.Fatalf("search query = %q, want both assignee:@me and author:@me", queries[0])

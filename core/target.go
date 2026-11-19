@@ -8,8 +8,10 @@ import (
 )
 
 // DefaultIssueFilter is the search filter a run uses when none is configured:
-// the issues the authenticated user opened or was assigned.
-const DefaultIssueFilter = "assignee:@me author:@me"
+// the issues assigned to the authenticated user. Only someone with triage or
+// write access can assign an issue, so assignment alone is the gate; who
+// authored the issue does not matter.
+const DefaultIssueFilter = "assignee:@me"
 
 // Target is a parsed watch target: an OWNER/REPO repository, a Projects (v2)
 // board, or a repository's Discussions.
