@@ -68,9 +68,26 @@ export function jobPage(snapshot, page) {
 }
 
 // stateURL is the /api/state request for a page of jobs. The server publishes
-// agent output only for the jobs on the requested page (issue #739).
-export function stateURL(page) {
-	return page > 0 ? `/api/state?page=${page}` : "/api/state";
+// agent output only for the jobs on the requested page (issue #739), so it
+// also runs the dashboard's search, which looks through every job's whole
+// log, and pages the matches (issue #851).
+export function stateURL(page, search = "") {
+	const query = new URLSearchParams();
+	if (page > 0) query.set("page", page);
+	if (search.trim()) query.set("search", search.trim());
+	const encoded = query.toString();
+	return encoded ? `/api/state?${encoded}` : "/api/state";
+}
+
+// searchSummary counts a search's matches against every job, as in "2 of 37
+// jobs match", or is "" while there is no search or the state shown is not
+// yet the answer to it (issue #851).
+export function searchSummary(state, search) {
+	const term = search.trim();
+	if (!term || state.search !== term) return "";
+	const matches = (state.snapshot?.Jobs || []).length;
+	const total = state.totalJobs || 0;
+	return `${matches} of ${total} jobs match`;
 }
 
 export function jobAgentSummary(job) {

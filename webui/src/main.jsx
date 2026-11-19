@@ -19,6 +19,7 @@ import {
 	FolderGit2,
 	MessageSquare,
 	Radio,
+	Search,
 	Send,
 	Sparkles,
 	Terminal,
@@ -43,6 +44,7 @@ import {
 	modelOptionsFrom,
 	promptAgentLabel,
 	restartPhase,
+	searchSummary,
 	stateURL,
 	submitJobAction,
 	submitPrompt,
@@ -68,15 +70,18 @@ const emptyState = {
 
 // useDashboardState polls /api/state for the page of jobs being shown, and
 // polls again right away when the page changes so its output fills in without
-// waiting for the next tick (issue #739).
-function useDashboardState(page) {
+// waiting for the next tick (issue #739). It polls again right away when the
+// search changes too, since the server runs the search (issue #851).
+function useDashboardState(page, search) {
 	const [state, setState] = useState(emptyState);
 	const [connected, setConnected] = useState(true);
 	useEffect(() => {
 		let stopped = false;
 		const refresh = async () => {
 			try {
-				const response = await fetch(stateURL(page), { cache: "no-store" });
+				const response = await fetch(stateURL(page, search), {
+					cache: "no-store",
+				});
 				if (!response.ok) throw new Error(`HTTP ${response.status}`);
 				const next = await response.json();
 				if (!stopped) {
@@ -93,7 +98,7 @@ function useDashboardState(page) {
 			stopped = true;
 			window.clearInterval(timer);
 		};
-	}, [page]);
+	}, [page, search]);
 	return [state, connected];
 }
 
@@ -347,28 +352,71 @@ function PromptArea({ entries, open, queued, onQueuedSent }) {
 
 // JobPager steps through the pages of jobs when they do not all fit on one
 // (issue #739), wrapping around at either end as the terminal dashboard does.
-function JobPager({ page, pages, onPage }) {
-	if (pages < 2) return null;
+// While a search is filtering the list it always shows, counting the pages of
+// matches (issue #851).
+function JobPager({ page, pages, onPage, searching }) {
+	if (pages < 2 && !searching) return null;
 	return (
 		<nav className="job-pager" aria-label="Job pages">
 			<button
 				type="button"
 				onClick={() => onPage((page + pages - 1) % pages)}
+				disabled={pages < 2}
 				aria-label="Previous page of jobs"
 			>
 				<ChevronLeft />
 			</button>
 			<span>
-				page {page + 1} of {pages}
+				page {page + 1} of {Math.max(pages, 1)}
 			</span>
 			<button
 				type="button"
 				onClick={() => onPage((page + 1) % pages)}
+				disabled={pages < 2}
 				aria-label="Next page of jobs"
 			>
 				<ChevronRight />
 			</button>
 		</nav>
+	);
+}
+
+// JobSearch filters the job list as the user types, matching any of a job's
+// fields including its whole log (issue #851). Escape or the clear button
+// empties it and brings back the full list.
+function JobSearch({ value, onChange, summary }) {
+	return (
+		<div className="job-search">
+			<label className="job-search-field">
+				<Search aria-hidden="true" />
+				<input
+					type="search"
+					value={value}
+					onChange={(event) => onChange(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Escape") onChange("");
+					}}
+					placeholder="Search jobs, logs, issues, PRs, sessions..."
+					aria-label="Search jobs"
+					spellCheck={false}
+				/>
+				{value && (
+					<button
+						type="button"
+						onClick={() => onChange("")}
+						aria-label="Clear search"
+						title="Clear search"
+					>
+						<X />
+					</button>
+				)}
+			</label>
+			{summary && (
+				<span className="job-search-summary" aria-live="polite">
+					{summary}
+				</span>
+			)}
+		</div>
 	);
 }
 
@@ -853,7 +901,13 @@ function CheckpointReport({ checkpoints, onClose }) {
 
 function App() {
 	const [page, setPage] = useState(0);
-	const [state, connected] = useDashboardState(page);
+	// search filters the job list across every page (issue #851).
+	const [search, setSearch] = useState("");
+	const searchFor = (value) => {
+		setSearch(value);
+		setPage(0);
+	};
+	const [state, connected] = useDashboardState(page, search);
 	const promptPanel = usePromptPanel();
 	// queuedPrompt is a request a job card's Summarize button handed the prompt
 	// agent (issue #840), held until the prompt area sends it.
@@ -893,6 +947,7 @@ function App() {
 	}, [restarting]);
 	const snapshot = state.snapshot || emptyState.snapshot;
 	const shown = jobPage(snapshot, page);
+	const searchTerm = search.trim();
 	// Follow the clamp when finished jobs empty the page being shown, so the
 	// next poll asks for the output of the page actually drawn.
 	useEffect(() => {
@@ -1069,7 +1124,19 @@ function App() {
 					/>
 				)}
 				<UpNextStrip upcoming={snapshot.Upcoming} onOpen={setSchedulesOpen} />
-				<JobPager page={shown.page} pages={shown.pages} onPage={setPage} />
+				<div className="job-toolbar">
+					<JobSearch
+						value={search}
+						onChange={searchFor}
+						summary={searchSummary(state, search)}
+					/>
+					<JobPager
+						page={shown.page}
+						pages={shown.pages}
+						onPage={setPage}
+						searching={searchTerm !== ""}
+					/>
+				</div>
 				<section className="job-grid" aria-label="Agent jobs">
 					{shown.jobs.length ? (
 						shown.jobs.map((job) => (
@@ -1079,6 +1146,14 @@ function App() {
 								onSummarize={summarize}
 							/>
 						))
+					) : searchTerm && state.search === searchTerm ? (
+						<div className="empty-jobs no-matches">
+							<Search />
+							<span>No jobs match “{searchTerm}”</span>
+							<button type="button" onClick={() => searchFor("")}>
+								Clear search
+							</button>
+						</div>
 					) : (
 						<div className="empty-jobs">
 							<Activity />

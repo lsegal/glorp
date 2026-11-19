@@ -52,6 +52,12 @@ type State struct {
 	// Prompts is the prompt area's conversation with the prompt agent, oldest
 	// first (issue #801).
 	Prompts []core.PromptEntry `json:"prompts,omitempty"`
+	// Search is the dashboard search the snapshot's Jobs were filtered by,
+	// and TotalJobs how many jobs there are before filtering, so the
+	// dashboard can count the matches (issue #851). Both are empty without a
+	// search.
+	Search    string `json:"search,omitempty"`
+	TotalJobs int    `json:"totalJobs,omitempty"`
 }
 
 // Server keeps the browser dashboard's state and serves its frontend.
@@ -609,10 +615,15 @@ func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
 	ui.mu.RLock()
 	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion, Restarting: ui.restarting, Prompts: ui.prompts}
 	ui.setReleaseURLs(&state)
 	ui.mu.RUnlock()
+	if search != "" {
+		state.Search, state.TotalJobs = search, len(state.Snapshot.Jobs)
+		state.Snapshot.Jobs = searchJobs(state.Snapshot.Jobs, search)
+	}
 	state.Snapshot.Jobs = pageLogs(state.Snapshot.Jobs, state.Snapshot.VisibleJobs, page)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
