@@ -64,8 +64,8 @@ type Server struct {
 	action   func(context.Context, core.JobAction) error
 	// schedules backs /api/schedules (issue #848).
 	schedules func(context.Context, core.ScheduleRequest) (core.ScheduleResponse, error)
-	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
-	agents   func(context.Context) ([]core.AgentStatus, error)
+	settings  func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
+	agents    func(context.Context) ([]core.AgentStatus, error)
 	// listClones and clearClones back the settings dialog's clones section
 	// (issue #830).
 	listClones  func(context.Context) (core.ClonesSnapshot, error)
