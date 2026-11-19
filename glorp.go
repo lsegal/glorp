@@ -3997,9 +3997,16 @@ func webhookEventNeedsRefresh(event WebhookEvent) bool {
 		switch event.Action {
 		case "opened", "reopened", "closed", "deleted", "transferred", "labeled", "unlabeled":
 			return true
+		case "assigned", "unassigned", "milestoned", "demilestoned":
+			// The issue filter is a search query, and the default one is
+			// assignee:@me, so assigning an issue is what makes it
+			// dispatchable. Skipping these left newly assigned work waiting
+			// for whatever poll came next: the 15m fallback, or a settled
+			// ownership handshake's nudge (issue #859).
+			return true
 		default:
-			// edited, assigned, milestoned, locked, pinned, and friends leave
-			// every dispatch input (labels, state, dependencies) untouched.
+			// edited, locked, pinned, and friends leave every dispatch input
+			// (labels, state, assignees, milestone, dependencies) untouched.
 			return false
 		}
 	case "projects_v2_item":
