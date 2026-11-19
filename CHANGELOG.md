@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.6.6 - 2026-11-19
+
 - Fix comments that mention this instance on a job paused on its dependencies, or paused by the owner, never reaching the prompt agent (issue #844). The comment was held until the job woke, so nobody answered it. It now goes to the prompt agent like a comment on a finished job, and the job stays paused while the prompt agent replies. A comment the prompt agent decides needs work still restarts the job.
 
 ## v1.6.5 - 2026-11-18
