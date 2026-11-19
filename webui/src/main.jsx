@@ -102,7 +102,14 @@ function useDashboardState(page, search) {
 	return [state, connected];
 }
 
-function ScrollViewport({ value, empty = "waiting for output...", status }) {
+// ScrollViewport shows a log that follows new output. Its status row lays any
+// actions out beside the status text, never on top of it (issue #850).
+function ScrollViewport({
+	value,
+	empty = "waiting for output...",
+	status,
+	actions,
+}) {
 	const viewport = useRef(null);
 	const follow = useRef(true);
 	const [showMore, setShowMore] = useState(false);
@@ -117,7 +124,14 @@ function ScrollViewport({ value, empty = "waiting for output...", status }) {
 	};
 	return (
 		<div className="viewport-wrap">
-			{status && <div className="viewport-status">{status}</div>}
+			{status && (
+				<div className="viewport-status">
+					<span className="viewport-status-text" title={status}>
+						{status}
+					</span>
+					{actions}
+				</div>
+			)}
 			<pre ref={viewport} onScroll={onScroll} className="viewport">
 				{value || empty}
 			</pre>
@@ -210,50 +224,53 @@ function JobCard({ job, onSummarize }) {
 				</div>
 			)}
 			<div className="job-viewport">
-				<div className="viewport-actions">
-					<button
-						type="button"
-						disabled={!available.retry || pendingAction !== ""}
-						onClick={() => runAction("retry")}
-						aria-label="Retry"
-						title={actionError || available.retryReason || `Retry ${verb}`}
-					>
-						<ArrowPathIcon />{" "}
-						<span className="viewport-action-label">Retry</span>
-					</button>
-					<button
-						type="button"
-						disabled={!available.stop || pendingAction !== ""}
-						onClick={() => runAction("stop")}
-						aria-label="Stop"
-						title={
-							actionError ||
-							(job.Status === "paused"
-								? "Clear the pause and release the issue"
-								: `Stop ${verb}`)
-						}
-					>
-						<StopIcon /> <span className="viewport-action-label">Stop</span>
-					</button>
-					<button
-						type="button"
-						disabled={!available.pause || pendingAction !== ""}
-						onClick={() => runAction("pause")}
-						aria-label="Pause"
-						title={
-							actionError ||
-							(scheduled
-								? "A scheduled run cannot be paused"
-								: "Pause until retried")
-						}
-					>
-						<PauseIcon /> <span className="viewport-action-label">Pause</span>
-					</button>
-					<SummarizeButton job={job} onSummarize={onSummarize} />
-				</div>
 				<ScrollViewport
 					value={job.Log}
 					status={`clone: ${job.CheckoutDirectory || "pending"}`}
+					actions={
+						<div className="viewport-actions">
+							<button
+								type="button"
+								disabled={!available.retry || pendingAction !== ""}
+								onClick={() => runAction("retry")}
+								aria-label="Retry"
+								title={actionError || available.retryReason || `Retry ${verb}`}
+							>
+								<ArrowPathIcon />{" "}
+								<span className="viewport-action-label">Retry</span>
+							</button>
+							<button
+								type="button"
+								disabled={!available.stop || pendingAction !== ""}
+								onClick={() => runAction("stop")}
+								aria-label="Stop"
+								title={
+									actionError ||
+									(job.Status === "paused"
+										? "Clear the pause and release the issue"
+										: `Stop ${verb}`)
+								}
+							>
+								<StopIcon /> <span className="viewport-action-label">Stop</span>
+							</button>
+							<button
+								type="button"
+								disabled={!available.pause || pendingAction !== ""}
+								onClick={() => runAction("pause")}
+								aria-label="Pause"
+								title={
+									actionError ||
+									(scheduled
+										? "A scheduled run cannot be paused"
+										: "Pause until retried")
+								}
+							>
+								<PauseIcon />{" "}
+								<span className="viewport-action-label">Pause</span>
+							</button>
+							<SummarizeButton job={job} onSummarize={onSummarize} />
+						</div>
+					}
 				/>
 			</div>
 		</article>

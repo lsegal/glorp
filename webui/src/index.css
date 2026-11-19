@@ -414,12 +414,14 @@ h1 .version {
 }
 .job-viewport .viewport-wrap {
 	flex: 1;
+	min-width: 0;
 }
+/* Job actions sit in the log's status row as a flex item beside the clone
+   path, and wrap onto their own line when the card is too narrow for both, so
+   they never cover the card's text (issue #850). */
 .viewport-actions {
-	position: absolute;
-	top: 4px;
-	right: 6px;
-	z-index: 1;
+	flex: 0 0 auto;
+	margin-left: auto;
 	display: flex;
 	gap: 4px;
 }
@@ -462,8 +464,20 @@ h1 .version {
 		Consolas,
 		monospace;
 }
+.viewport-status-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
 .job-viewport .viewport-status {
-	padding-right: 264px;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	padding: 4px 6px 4px 12px;
+}
+.job-viewport .viewport-status-text {
+	flex: 1 1 160px;
 }
 .viewport {
 	width: 100%;
@@ -997,12 +1011,7 @@ h1 .version {
 		height: 360px;
 		padding: 14px;
 	}
-	.job-viewport {
-		flex-direction: column;
-		gap: 8px;
-	}
 	.viewport-actions {
-		position: static;
 		justify-content: flex-end;
 		gap: 8px;
 	}
@@ -1021,9 +1030,6 @@ h1 .version {
 	/* Icons only on a phone, so the log controls fit on one row (issue #840). */
 	.viewport-action-label {
 		display: none;
-	}
-	.job-viewport .viewport-status {
-		padding-right: 12px;
 	}
 	.more {
 		padding: 6px 12px;

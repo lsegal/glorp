@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add a search bar to the web dashboard, in the toolbar row next to the job pages (issue #851). Typing filters the job list as you type, across every page, matching any of a job's fields: its whole agent log, issue number, pull request number, title, session id, repository, status, agent and model, and clone path. The match count (for example `2 of 37 jobs match`) and the pages follow the filtered list, a search with no matches says so, and clearing the search, or pressing Escape in it, brings back the full list.
+- Fix the web dashboard's job card action buttons covering the clone path (issue #850). Retry, Stop, Pause, and Summarize now sit beside the clone path in the log's header, which truncates the path instead of hiding it under the buttons, and drop onto their own row when the card is too narrow for both.
 
 ## v1.6.8 - 2026-11-19
 

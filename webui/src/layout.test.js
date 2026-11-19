@@ -24,9 +24,10 @@ describe("mobile layout (issue #669)", () => {
 		expect(mobile).toBeGreaterThan(0);
 	});
 
-	it("moves job actions out of the log header on phones", () => {
-		expect(rule(".viewport-actions", mobile)).toContain("position: static");
-		expect(rule(".job-viewport", mobile)).toContain("flex-direction: column");
+	it("gives job actions a finger-sized target on phones", () => {
+		expect(rule(".viewport-actions button", mobile)).toContain(
+			"min-height: 36px",
+		);
 	});
 
 	it("lets the masthead wrap on phones", () => {
@@ -39,6 +40,38 @@ describe("mobile layout (issue #669)", () => {
 
 	it("keeps settings fields at 16px so mobile Safari does not zoom", () => {
 		expect(rule(".modal-body select", mobile)).toContain("font-size: 16px");
+	});
+});
+
+describe("job card actions (issue #850)", () => {
+	it("lays the actions out in the status row instead of over it", () => {
+		const actions = rule(".viewport-actions");
+		expect(actions).not.toContain("position: absolute");
+		expect(actions).toContain("flex: 0 0 auto");
+		expect(css).not.toMatch(/padding-right: 264px/);
+	});
+
+	it("wraps the actions onto their own line when the card is narrow", () => {
+		const status = rule(".job-viewport .viewport-status");
+		expect(status).toContain("display: flex");
+		expect(status).toContain("flex-wrap: wrap");
+		expect(rule(".job-viewport .viewport-status-text")).toContain(
+			"flex: 1 1 160px",
+		);
+	});
+
+	it("truncates the clone path rather than letting it push the actions", () => {
+		const text = rule(".viewport-status-text");
+		expect(text).toContain("min-width: 0");
+		expect(text).toContain("text-overflow: ellipsis");
+	});
+
+	it("lets the log shrink to the card so the actions are not cut off", () => {
+		expect(rule(".job-viewport .viewport-wrap")).toContain("min-width: 0");
+	});
+
+	it("never positions the actions absolutely on phones either", () => {
+		expect(rule(".viewport-actions", mobile)).not.toContain("position:");
 	});
 });
 
