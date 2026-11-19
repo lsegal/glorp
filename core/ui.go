@@ -118,7 +118,8 @@ func (j JobSnapshot) issueRepository() string {
 // is unknown (issue #767).
 func (j JobSnapshot) IssueURL() string {
 	repository := j.issueRepository()
-	if repository == "" || j.Number <= 0 {
+	// A scheduled run's Number is its fire time, not an issue.
+	if repository == "" || j.Number <= 0 || j.Kind == JobKindSchedule {
 		return ""
 	}
 	return fmt.Sprintf("https://github.com/%s/issues/%d", repository, j.Number)

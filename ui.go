@@ -60,6 +60,11 @@ func sortJobSnapshots(jobs []JobSnapshot) {
 // request carries a plan checklist (issue #755). With hyperlinks, the issue
 // number and pull request label link to their GitHub pages (issue #767).
 func jobTitlePrefix(indicator string, job JobSnapshot, hyperlinks bool) string {
+	// A scheduled run has no issue number, so its card is badged instead
+	// (issue #848).
+	if job.Kind == core.JobKindSchedule {
+		return indicator + " [scheduled] "
+	}
 	prefix := indicator + " " + terminalLink(fmt.Sprintf("#%d", job.Number), job.IssueURL(), hyperlinks)
 	if label := job.PullRequestLabel(); label != "" {
 		prefix += " · " + terminalLink(label, job.PullRequestURL(), hyperlinks)
@@ -680,7 +685,11 @@ func (m dashboard) View() string {
 	tokens := quotaText(m.snapshot)
 	push := deliveryText(m.snapshot)
 	targets := "targets: " + strings.Join(formatTargets(m.snapshot.Targets, m.snapshot.IssueCounts), ", ")
-	footer := renderStatusBar(m.width, []string{counts, tokens, push, targets})
+	items := []string{counts, tokens, push, targets}
+	if next := nextScheduledText(m.snapshot, time.Now()); next != "" {
+		items = append(items, next)
+	}
+	footer := renderStatusBar(m.width, items)
 	// The id, pager hint, and web link join the counts line directly (no gap
 	// line) so the whole status bar reads as one colored block instead of the
 	// counts sitting on a colored line above bare, unstyled text (issue #647).
@@ -836,6 +845,21 @@ func renderScrollbar(view viewport.Model) string {
 // and the web dashboard's formatInterval in webui/src/dashboard.js mirrors this
 // exactly; the two are covered by the same table of cases on each side.
 func formatInterval(d time.Duration) string { return core.FormatInterval(d) }
+
+// nextScheduledText names the next scheduled run for the status bar, such as
+// "next: Nightly sweep in 3h20m", or "" when no schedule is enabled (issue
+// #848).
+func nextScheduledText(snapshot GlorpSnapshot, now time.Time) string {
+	if len(snapshot.Upcoming) == 0 {
+		return ""
+	}
+	next := snapshot.Upcoming[0]
+	until := next.At.Sub(now).Round(time.Minute)
+	if until < time.Minute {
+		return "next: " + next.Name + " now"
+	}
+	return "next: " + next.Name + " in " + formatInterval(until)
+}
 
 // deliveryText describes how the run is picking work up, and when it last
 // checked GitHub. The last-checked time is the only sign a quiet poll loop is

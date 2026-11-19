@@ -26,6 +26,14 @@ function JobLink({ href, children }) {
 // JobTitle is a job card's heading: its issue number, its pull request when it
 // has one (issue #753), and its title, with both numbers linked (issue #767).
 export function JobTitle({ job }) {
+	// A scheduled run has no issue; its card is badged instead (issue #848).
+	if (job.Kind === "schedule") {
+		return (
+			<h2>
+				<span className="scheduled-badge">scheduled</span> {job.Title}
+			</h2>
+		);
+	}
 	const pullRequest = jobPullRequestLabel(job);
 	return (
 		<h2>
