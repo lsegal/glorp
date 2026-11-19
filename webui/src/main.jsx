@@ -249,20 +249,20 @@ function JobCard({ job, onSummarize }) {
 								<button
 									type="button"
 									aria-pressed={view === "transcript"}
+									aria-label="Transcript"
 									onClick={() => setView("transcript")}
 									title="Show the job's activity as a structured transcript"
 								>
-									<ListTree />{" "}
-									<span className="viewport-action-label">Transcript</span>
+									<ListTree />
 								</button>
 								<button
 									type="button"
 									aria-pressed={view === "output"}
+									aria-label="Output"
 									onClick={() => setView("output")}
 									title="Show the job's raw output"
 								>
-									<Terminal />{" "}
-									<span className="viewport-action-label">Output</span>
+									<Terminal />
 								</button>
 							</fieldset>
 							<button

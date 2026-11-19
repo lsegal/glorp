@@ -423,6 +423,7 @@ h1 .version {
 	flex: 0 0 auto;
 	margin-left: auto;
 	display: flex;
+	flex-wrap: wrap;
 	gap: 4px;
 }
 .viewport-actions button {
