@@ -66,6 +66,10 @@ describe("job card actions (issue #850)", () => {
 		expect(text).toContain("text-overflow: ellipsis");
 	});
 
+	it("lets the log shrink to the card so the actions are not cut off", () => {
+		expect(rule(".job-viewport .viewport-wrap")).toContain("min-width: 0");
+	});
+
 	it("never positions the actions absolutely on phones either", () => {
 		expect(rule(".viewport-actions", mobile)).not.toContain("position:");
 	});

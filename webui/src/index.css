@@ -324,6 +324,7 @@ h1 .version {
 }
 .job-viewport .viewport-wrap {
 	flex: 1;
+	min-width: 0;
 }
 /* Job actions sit in the log's status row as a flex item beside the clone
    path, and wrap onto their own line when the card is too narrow for both, so
