@@ -76,7 +76,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
 	flags.String("schedules", "", "file the scheduled prompts are kept in, shared with \"glorp schedule\" (default: .schedules.json beside --state, such as .glorp.schedules.json)")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
-	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
+	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues assigned to you")
 	flags.Bool("all-issues", false, "disable the default issue filter")
 	flags.String("allowed-commenters", "", "comma-separated GitHub logins allowed to trigger a run with a direct @/glorp:ID mention or a mention of the authenticated gh user (default: the authenticated gh user)")
 	flags.Bool("browser", false, "deprecated alias for -pollmode=browser")
@@ -716,7 +716,7 @@ type GHCLI struct {
 	// literals directly) simply disables memoization rather than panicking.
 	publicRepoCache *sync.Map
 	// selfLoginCache memoizes the authenticated gh user's login, needed only
-	// to translate the "author:@me" search qualifier for the public API.
+	// to translate the "@me" search qualifiers for the public API.
 	selfLoginCache *sync.Map
 }
 
