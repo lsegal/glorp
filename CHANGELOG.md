@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.6.8 - 2026-11-19
+
 - Add scheduled prompts: prompts glorp runs on a timer rather than for an issue, such as a nightly dependency sweep or a weekly flaky-test triage that files issues for glorp to fix (issue #848). A schedule names a repository, a prompt, and a trigger: once at a time, every interval, daily, weekly on chosen days, or a cron expression, each in a timezone. A due schedule starts a job that takes a concurrency slot like an issue's, clones its repository, and runs the schedule's prompt instead of `/gh-fix`; the job card is badged **scheduled**, shows the live log, and can be stopped and retried, and the job finishes when the agent exits. A schedule can skip or queue a fire while its previous run is still active, and skip or run once for fires missed while the machine slept or glorp was stopped, so a laptop opened in the morning does not start a burst of catch-up runs. The web dashboard's new calendar button opens a Schedules modal that lists every schedule with an enable toggle and its last result, edits it, previews its next three fire times, shows its recent runs, and starts a run on demand, and an **Up next** strip above the jobs lists the next runs. The terminal dashboard badges scheduled jobs and shows the next run in its status bar. From the command line, `glorp schedule add|list|rm|run` edits the same `.glorp.schedules.json` store beside the state file, which `glorp watch --schedules` can move and a running watch reloads on every edit, and `/api/schedules` exposes the same operations.
 
 ## v1.6.7 - 2026-11-19
