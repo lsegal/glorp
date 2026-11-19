@@ -390,6 +390,9 @@ func runWatch(args []string) (code int) {
 	}
 	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, SelfLogin: selfLogin, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Active: activeRuns, Registry: registry, Out: wOut, SchedulesPath: flagValue[string](flags, "schedules")}
 	checkpointer.SetLog(w.logf)
+	// Once a run's work is checkpointed, its issue's ownership is handed back
+	// so the next instance can pick it up at once (issue #857).
+	checkpointer.SetRescind(w.rescindOwnership)
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
 	w.autoUpdate.Store(autoUpdate)
