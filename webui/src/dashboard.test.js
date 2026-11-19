@@ -35,6 +35,7 @@ import {
 	promptPanelKey,
 	restartPhase,
 	savePromptPanel,
+	searchSummary,
 	stateURL,
 	submitJobAction,
 	submitPrompt,
@@ -294,6 +295,39 @@ describe("stateURL", () => {
 	it("asks for the page of jobs being shown", () => {
 		expect(stateURL(0)).toBe("/api/state");
 		expect(stateURL(2)).toBe("/api/state?page=2");
+	});
+
+	describe("stateURL with a search (issue #851)", () => {
+		it("asks the server to search, trimmed and encoded, alongside the page", () => {
+			expect(stateURL(0, "")).toBe("/api/state");
+			expect(stateURL(0, "   ")).toBe("/api/state");
+			expect(stateURL(0, " 351 ")).toBe("/api/state?search=351");
+			expect(stateURL(1, "PR #351")).toBe("/api/state?page=1&search=PR+%23351");
+		});
+	});
+
+	describe("searchSummary (issue #851)", () => {
+		const state = {
+			search: "351",
+			totalJobs: 37,
+			snapshot: { Jobs: [{ Number: 351 }, { Number: 12 }] },
+		};
+
+		it("counts the matches against every job", () => {
+			expect(searchSummary(state, "351")).toBe("2 of 37 jobs match");
+			expect(searchSummary(state, " 351 ")).toBe("2 of 37 jobs match");
+		});
+
+		it("counts no matches", () => {
+			expect(
+				searchSummary({ search: "zz", totalJobs: 37, snapshot: {} }, "zz"),
+			).toBe("0 of 37 jobs match");
+		});
+
+		it("says nothing without a search or before the server answers it", () => {
+			expect(searchSummary(state, "")).toBe("");
+			expect(searchSummary(state, "3512")).toBe("");
+		});
 	});
 });
 
