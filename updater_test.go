@@ -83,6 +83,7 @@ type fakeUpdater struct {
 	installs    []string
 	restarts    int
 	notices     []string
+	restarting  []bool
 	logs        []string
 }
 
@@ -111,6 +112,7 @@ func (f *fakeUpdater) updater() *updater {
 		Active:     func() int { return f.active },
 		AutoUpdate: func() bool { return f.autoUpdate },
 		Notify:     func(version string) { f.notices = append(f.notices, version) },
+		Restarting: func(on bool) { f.restarting = append(f.restarting, on) },
 		Logf: func(format string, args ...interface{}) {
 			f.logs = append(f.logs, fmt.Sprintf(format, args...))
 		},
@@ -203,6 +205,60 @@ func TestUpdaterAppliesWhileBusyWithAutoUpdate(t *testing.T) {
 	}
 	if strings.Contains(logs, "no agents are active") {
 		t.Errorf("busy update logged as idle:\n%s", logs)
+	}
+}
+
+// An update the updater starts on its own, idle or busy with auto-update on,
+// tells the dashboards it is restarting before the install begins, as the
+// update button does (issue #846).
+func TestUpdaterAnnouncesInternalRestart(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		f    *fakeUpdater
+	}{
+		{"idle", &fakeUpdater{latest: "v1.5.23"}},
+		{"busy with auto-update", &fakeUpdater{latest: "v1.5.23", active: 2, autoUpdate: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.f
+			u := f.updater()
+			var atInstall []bool
+			install := u.Install
+			u.Install = func(staged string) error {
+				atInstall = append([]bool(nil), f.restarting...)
+				return install(staged)
+			}
+			u.check(context.Background())
+			if f.restarts != 1 {
+				t.Fatalf("restarts = %d", f.restarts)
+			}
+			if len(atInstall) != 1 || !atInstall[0] {
+				t.Fatalf("restarting at install = %v, want announced first", atInstall)
+			}
+			if len(f.restarting) != 1 {
+				t.Fatalf("restarting = %v, want one announcement", f.restarting)
+			}
+		})
+	}
+}
+
+// A failed update clears the dashboards' restart state again.
+func TestUpdaterClearsRestartOnFailure(t *testing.T) {
+	f := &fakeUpdater{latest: "v1.5.23"}
+	u := f.updater()
+	u.Install = func(string) error { return errors.New("access denied") }
+	u.check(context.Background())
+	if len(f.restarting) != 2 || !f.restarting[0] || f.restarting[1] {
+		t.Fatalf("restarting after failed install = %v, want [true false]", f.restarting)
+	}
+	f.restarting = nil
+	u.Install = func(string) error { return nil }
+	u.Restart = func(context.Context) ([]core.CheckpointResult, error) {
+		return nil, errors.New("glorp is already restarting")
+	}
+	u.check(context.Background())
+	if len(f.restarting) != 2 || !f.restarting[0] || f.restarting[1] {
+		t.Fatalf("restarting after failed restart = %v, want [true false]", f.restarting)
 	}
 }
 

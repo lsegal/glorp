@@ -256,6 +256,22 @@ export async function fetchRestartProgress() {
 	return Array.isArray(body?.Checkpoints) ? body.Checkpoints : [];
 }
 
+// restartPhase advances the dashboard's restart state from the daemon's
+// connection and its published restarting flag. A restart the buttons start
+// is "requested"; one the daemon announces on its own, such as an automatic
+// update, is "announced" (issue #846). Either becomes "down" once the daemon
+// drops off and clears when it answers again. An announced restart also
+// clears when the daemon stops announcing it while still up, because the
+// update failed before glorp went down.
+export function restartPhase(phase, connected, restarting) {
+	if (phase === "" && connected && restarting) return "announced";
+	if ((phase === "requested" || phase === "announced") && !connected)
+		return "down";
+	if (phase === "down" && connected) return "";
+	if (phase === "announced" && !restarting) return "";
+	return phase;
+}
+
 // checkpointLines describes each run's shutdown checkpoint outcome as one line
 // of text, in the order the daemon reported them.
 export function checkpointLines(checkpoints) {

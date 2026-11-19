@@ -41,6 +41,7 @@ import {
 	modelGroupsFrom,
 	modelOptionsFrom,
 	promptAgentLabel,
+	restartPhase,
 	stateURL,
 	submitJobAction,
 	submitPrompt,
@@ -849,16 +850,32 @@ function App() {
 		summarizeJob(job, { open: promptPanel.show, send: setQueuedPrompt });
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
-	// restarting is "requested" until the daemon drops off, then "down" until
-	// it answers again, so the button stays busy through the whole restart.
+	// restarting is "requested" (or "announced" when the daemon started it,
+	// issue #846) until the daemon drops off, then "down" until it answers
+	// again, so the button stays busy through the whole restart.
 	const [restarting, setRestarting] = useState("");
 	// checkpoints holds the shutdown checkpoint outcomes the last restart
 	// reported (issue #741), shown until dismissed.
 	const [checkpoints, setCheckpoints] = useState(null);
 	useEffect(() => {
-		if (restarting === "requested" && !connected) setRestarting("down");
-		if (restarting === "down" && connected) setRestarting("");
-	}, [restarting, connected]);
+		const next = restartPhase(restarting, connected, !!state.restarting);
+		if (next === "announced") setCheckpoints(null);
+		if (next !== restarting) setRestarting(next);
+	}, [restarting, connected, state.restarting]);
+	// An announced restart has no button waiting on its answer, so follow its
+	// shutdown checkpoint here as restartWith does for the buttons.
+	useEffect(() => {
+		if (restarting !== "announced") return;
+		const progress = setInterval(async () => {
+			try {
+				const runs = await fetchRestartProgress();
+				if (runs.length) setCheckpoints(runs);
+			} catch {
+				// The dropped connection says the daemon is going down.
+			}
+		}, 1000);
+		return () => clearInterval(progress);
+	}, [restarting]);
 	const snapshot = state.snapshot || emptyState.snapshot;
 	const shown = jobPage(snapshot, page);
 	// Follow the clamp when finished jobs empty the page being shown, so the

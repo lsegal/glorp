@@ -413,7 +413,11 @@ type updater struct {
 	AutoUpdate func() bool
 	// Notify tells the dashboards an update to version is available.
 	Notify func(version string)
-	Logf   func(string, ...interface{})
+	// Restarting tells the dashboards an update started installing and
+	// restarting (true) or failed before glorp went down (false), so they
+	// show the restart however it was triggered (issue #846). Nil skips it.
+	Restarting func(bool)
+	Logf       func(string, ...interface{})
 
 	mu        sync.Mutex
 	available string
@@ -516,6 +520,7 @@ func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 	if !u.applying.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("glorp is already updating")
 	}
+	u.setRestarting(true)
 	if installed != tag {
 		if err := u.Install(staged); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -529,6 +534,7 @@ func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 				u.mu.Unlock()
 			}
 			u.applying.Store(false)
+			u.setRestarting(false)
 			return nil, fmt.Errorf("install glorp %s: %w", tag, err)
 		}
 		u.mu.Lock()
@@ -549,9 +555,16 @@ func (u *updater) Apply(ctx context.Context) ([]core.CheckpointResult, error) {
 	results, err := u.Restart(ctx)
 	if err != nil {
 		u.applying.Store(false)
+		u.setRestarting(false)
 		return nil, err
 	}
 	return results, nil
+}
+
+func (u *updater) setRestarting(restarting bool) {
+	if u.Restarting != nil {
+		u.Restarting(restarting)
+	}
 }
 
 // newWatchUpdater builds the updater a watch runs, or nil when it is turned
@@ -610,6 +623,11 @@ func newWatchUpdater(interval time.Duration, active *activeAgents, autoUpdate fu
 			}
 			if web != nil {
 				web.SetUpdate(version)
+			}
+		},
+		Restarting: func(restarting bool) {
+			if web != nil {
+				web.SetRestarting(restarting)
 			}
 		},
 		Logf: logf,

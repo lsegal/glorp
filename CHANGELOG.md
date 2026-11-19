@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the web dashboard showing nothing while glorp updates itself automatically (issue #846). When the update installed on its own, either once no agents were running or with the auto-update setting on while agents were busy, the dashboard never showed the update/restart state that the **Update now** button shows. Every open dashboard now shows it as soon as the update starts installing: the button reads **Updating...**, the restart icon pulses, the shutdown checkpoint lists each run as it is pushed, and the dashboard follows glorp through the restart. If the update fails before glorp goes down, the dashboard returns to normal.
+
 ## v1.6.6 - 2026-11-19
 
 - Fix comments that mention this instance on a job paused on its dependencies, or paused by the owner, never reaching the prompt agent (issue #844). The comment was held until the job woke, so nobody answered it. It now goes to the prompt agent like a comment on a finished job, and the job stays paused while the prompt agent replies. A comment the prompt agent decides needs work still restarts the job.

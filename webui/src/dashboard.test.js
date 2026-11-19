@@ -33,6 +33,7 @@ import {
 	promptPanelBounds,
 	promptPanelDefaults,
 	promptPanelKey,
+	restartPhase,
 	savePromptPanel,
 	stateURL,
 	submitJobAction,
@@ -1017,6 +1018,31 @@ describe("toggleActiveModel", () => {
 
 	it("does not duplicate a value already checked", () => {
 		expect(toggleActiveModel(["codex"], "codex", true)).toEqual(["codex"]);
+	});
+});
+
+describe("restartPhase", () => {
+	it("shows a restart the daemon announces on its own", () => {
+		expect(restartPhase("", true, true)).toBe("announced");
+		expect(restartPhase("announced", true, true)).toBe("announced");
+		expect(restartPhase("announced", false, true)).toBe("down");
+		expect(restartPhase("down", true, false)).toBe("");
+	});
+
+	it("clears an announced restart the daemon gave up on", () => {
+		expect(restartPhase("announced", true, false)).toBe("");
+	});
+
+	it("keeps a requested restart until the daemon drops off", () => {
+		expect(restartPhase("requested", true, false)).toBe("requested");
+		expect(restartPhase("requested", true, true)).toBe("requested");
+		expect(restartPhase("requested", false, true)).toBe("down");
+		expect(restartPhase("down", false, true)).toBe("down");
+	});
+
+	it("stays idle while nothing is restarting", () => {
+		expect(restartPhase("", true, false)).toBe("");
+		expect(restartPhase("", false, true)).toBe("");
 	});
 });
 

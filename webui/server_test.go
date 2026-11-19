@@ -708,6 +708,17 @@ func TestServerUpdate(t *testing.T) {
 	if got := state().Update; got != "v1.5.23" {
 		t.Fatalf("update = %q, want v1.5.23", got)
 	}
+	if state().Restarting {
+		t.Fatal("restarting before an update starts")
+	}
+	ui.SetRestarting(true)
+	if !state().Restarting {
+		t.Fatal("restarting not published once an update starts")
+	}
+	ui.SetRestarting(false)
+	if state().Restarting {
+		t.Fatal("restarting still published after a failed update")
+	}
 	calls := 0
 	ui.SetUpdateHandler(func(context.Context) ([]core.CheckpointResult, error) {
 		calls++
