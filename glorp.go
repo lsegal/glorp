@@ -367,6 +367,15 @@ type Glorp struct {
 	// settings modal reads it directly, so opening settings never waits on a
 	// poll, startup, or anything else the loop is busy with (issue #803).
 	settingsView atomic.Pointer[SettingsSnapshot]
+	// SchedulesPath is the schedule store (issue #848). Empty keeps it beside
+	// the state file, as schedulesPathFor names it.
+	SchedulesPath string
+	// scheduleOnce/scheduleRequests carry schedule requests from the
+	// dashboards into the run's scheduler.
+	scheduleOnce     sync.Once
+	scheduleRequests chan scheduleRequest
+	// scheduleWakes replaces the scheduler's sleep/wake detector in tests.
+	scheduleWakes <-chan time.Duration
 }
 
 // publishHandledIssues records which issues are no longer dispatch candidates:
@@ -2081,6 +2090,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 	webhookRepos := mentionScanRepos(targets, nil)
 	workFinished := make(chan struct{}, 1)
 	jobs := make(map[string]JobSnapshot)
+	// upcoming is the next scheduled runs the scheduler last reported,
+	// guarded by jobMu (issue #848).
+	var upcoming []core.UpcomingRun
 	issueCounts := make(map[string]int)
 	// lastPoll is when the most recent poll of GitHub finished, which the UIs
 	// report so a run that has stopped logging every tick (issue #413) can
@@ -2125,6 +2137,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 		}
 		polled := lastPoll
 		watched := targets
+		next := append([]core.UpcomingRun(nil), upcoming...)
 		jobMu.Unlock()
 		var quotas map[string]string
 		if w.Quota != nil {
@@ -2134,9 +2147,39 @@ func (w *Glorp) Run(ctx context.Context) error {
 		if online && w.WebhookOnline != nil {
 			online = w.WebhookOnline()
 		}
-		snapshot := GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Paused: paused, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list, VisibleJobs: maxVisibleJobs}
+		snapshot := GlorpSnapshot{Identity: string(w.Identity), Targets: watched, IssueCounts: counts, Running: running, Queued: queued, Completed: completed, Failed: failed, Paused: paused, Concurrency: w.Concurrency, Interval: w.Interval, UseWebhooks: w.UseWebhooks, WebhookOnline: online, WebUIURL: w.WebUIURL, LastPoll: polled, Quotas: quotas, Jobs: list, VisibleJobs: maxVisibleJobs, Upcoming: next}
 		w.published.Store(&snapshot)
 		w.UI.Snapshot(snapshot)
+	}
+	// The scheduler runs out-of-band prompts on a timer as jobs of their own
+	// (issue #848). Its runs take slots from the same semaphore as issues.
+	schedulesPath := w.SchedulesPath
+	if schedulesPath == "" {
+		schedulesPath = schedulesPathFor(w.StatePath)
+	}
+	schedules := newScheduler(schedulesPath)
+	schedules.requests = w.scheduleRequestsChan()
+	schedules.wakes = w.scheduleWakes
+	schedules.logf = w.logf
+	scheduleEnv := scheduleJobEnv{ctx: ctx, sem: sem, wg: &wg, tasks: &tasks, jobMu: &jobMu, jobs: jobs, publish: publish, runs: newScheduleRuns(), finished: schedules.finished}
+	scheduleEnv.rerun = func(id string) {
+		go func() {
+			if _, err := w.HandleSchedule(ctx, core.ScheduleRequest{Op: core.ScheduleOpRun, ID: id}); err != nil && ctx.Err() == nil {
+				w.logf("schedule %s failed to run again: %v", id, err)
+			}
+		}()
+	}
+	schedules.dispatch = func(schedule core.Schedule, fired time.Time) {
+		w.startScheduledRun(scheduleEnv, schedule, fired)
+	}
+	schedules.publish = func(runs []core.UpcomingRun) {
+		jobMu.Lock()
+		upcoming = runs
+		jobMu.Unlock()
+		publish()
+	}
+	if err := schedules.load(); err != nil {
+		return err
 	}
 	pollNumber := 0
 	// observed records the "repo#number" keys returned by the most recent
@@ -2693,7 +2736,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			mentions.agentStarted(issue.Repository + "#" + strconv.Itoa(issue.Number))
 			spec, _ := parseAgentSpec(session.Agent)
 			jobMu.Lock()
-			jobs[key] = JobSnapshot{Number: issue.Number, Target: issue.Target, Repository: issueRepository(issue.Target, issue), Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Agent: spec.Name, Model: spec.Model, Effort: spec.Level, Started: time.Now()}
+			jobs[key] = JobSnapshot{Kind: core.JobKindIssue, Number: issue.Number, Target: issue.Target, Repository: issueRepository(issue.Target, issue), Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Agent: spec.Name, Model: spec.Model, Effort: spec.Level, Started: time.Now()}
 			jobMu.Unlock()
 			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory, Owner: string(w.Identity)}
 			err = saveScopedWorkState(w.StatePath, work, targets)
@@ -3251,6 +3294,10 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// work, when a retry that needs a poll of its own is refused.
 	serveJobAction = func(request jobActionRequest, dispatching bool) {
 		action := request.action
+		if _, scheduled := core.ScheduleIDFromTarget(action.Target); scheduled {
+			w.serveScheduleJobAction(scheduleEnv, request)
+			return
+		}
 		key := action.Target + "#" + strconv.Itoa(action.Number)
 		jobMu.Lock()
 		job, exists := jobs[key]
@@ -3477,6 +3524,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 	// main.go's run() -- can take a real amount of time, and a settings or
 	// job-action request that lands during that window must not block on a
 	// channel nothing is reading yet (issue #579).
+	go schedules.loop(watchCtx)
 	close(w.readyChan())
 	if err := poll(nil); err != nil {
 		if ctx.Err() != nil {

@@ -2033,7 +2033,9 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		target = r.Repo
 	}
 	prompt := "continue"
-	if !session.Resume {
+	if !session.Resume && issue.Prompt != "" {
+		prompt = scheduledRunPrompt(r, issue, session)
+	} else if !session.Resume {
 		repo := issueRepository(target, issue)
 		if isDiscussionTarget(target) {
 			prompt = fmt.Sprintf("/gh-discuss %d", issue.Number)
@@ -2114,6 +2116,26 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		Settings:      remoteControlSettings,
 		SessionName:   remoteControlSessionName(target, issue),
 	})
+}
+
+// scheduledRunPrompt is what a scheduled run's agent is told in place of the
+// gh-fix invocation (issue #848): the schedule's own prompt, the repository it
+// targets, and where to clone it.
+func scheduledRunPrompt(r CommandRunner, issue Issue, session AgentSession) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(issue.Prompt))
+	fmt.Fprintf(&b, "\n\nThis is a scheduled prompt (schedule %q, %q) that glorp runs on a timer; it is not tied to an issue.", issue.ScheduleID, issue.Title)
+	if issue.Repository != "" {
+		b.WriteString("\n\nRepository: " + issue.Repository)
+	}
+	if r.Identity != "" {
+		b.WriteString("\n\nInstance identity: /glorp:" + string(r.Identity) + ". End the body of every issue you create with `**Created by Glorp:** /glorp:" + string(r.Identity) + "`.")
+	}
+	b.WriteString("\n\nKeep your responses concise. Finish with a one-line summary of what you did.")
+	if _, inCheckout := sessionRunDir(session); session.RunDir != "" && !inCheckout {
+		b.WriteString("\n\nIf you need a checkout, clone the repository into a new directory inside this clone directory and nowhere else, print GLORP_CHECKOUT_DIRECTORY=<absolute clone path> once it exists, and remove it before you finish: " + session.RunDir)
+	}
+	return b.String()
 }
 
 // definition resolves the agent a run is dispatching to. Runners built without
