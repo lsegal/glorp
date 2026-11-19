@@ -45,6 +45,10 @@ type State struct {
 	// update notice link to (issue #825).
 	VersionURL string `json:"versionURL,omitempty"`
 	UpdateURL  string `json:"updateURL,omitempty"`
+	// Restarting is set once glorp starts installing an update and
+	// restarting onto it, however that was triggered, so the dashboard shows
+	// its update/restart state for an automatic update too (issue #846).
+	Restarting bool `json:"restarting,omitempty"`
 	// Prompts is the prompt area's conversation with the prompt agent, oldest
 	// first (issue #801).
 	Prompts []core.PromptEntry `json:"prompts,omitempty"`
@@ -81,6 +85,7 @@ type Server struct {
 	// updateVersion names that release (issue #783).
 	update        func(context.Context) ([]core.CheckpointResult, error)
 	updateVersion string
+	restarting    bool
 	// releaseRepo is the repository whose release pages the version and the
 	// update notice link to (issue #825).
 	releaseRepo string
@@ -188,6 +193,15 @@ func (ui *Server) Prompts(entries []core.PromptEntry) {
 func (ui *Server) SetUpdate(version string) {
 	ui.mu.Lock()
 	ui.updateVersion = version
+	ui.mu.Unlock()
+}
+
+// SetRestarting records whether glorp is installing an update and restarting
+// onto it, which /api/state publishes so every dashboard shows the restart
+// even when no button started it (issue #846).
+func (ui *Server) SetRestarting(restarting bool) {
+	ui.mu.Lock()
+	ui.restarting = restarting
 	ui.mu.Unlock()
 }
 
@@ -582,7 +596,7 @@ func (ui *Server) serveState(w http.ResponseWriter, r *http.Request) {
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	ui.mu.RLock()
-	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion, Prompts: ui.prompts}
+	state := State{Version: ui.version, Snapshot: ui.snapshot, Logs: append([]string(nil), ui.logs...), Update: ui.updateVersion, Restarting: ui.restarting, Prompts: ui.prompts}
 	ui.setReleaseURLs(&state)
 	ui.mu.RUnlock()
 	state.Snapshot.Jobs = pageLogs(state.Snapshot.Jobs, state.Snapshot.VisibleJobs, page)
