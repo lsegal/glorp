@@ -433,6 +433,7 @@ func runWatch(args []string) (code int) {
 		// Wired before the server starts, like every handler startWebUI sets.
 		webUI.SetClonesHandlers(w.ListClones, w.ClearClones)
 		webUI.SetScheduleHandler(w.HandleSchedule)
+		webUI.SetJobEventsHandler(w.JobEvents)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
