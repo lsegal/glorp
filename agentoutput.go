@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/lsegal/glorp/agents"
+	"github.com/lsegal/glorp/core"
 )
 
 // outputDecoder wraps the writer an agent's stdout is forwarded to, turning
@@ -20,6 +21,9 @@ type outputDecoder interface {
 	io.Writer
 	// Flush renders whatever the agent left without a trailing newline.
 	Flush() error
+	// recordEventsTo sends the events the decoder reads to events as well as
+	// rendering them (issue #715).
+	recordEventsTo(events jobEventRecorder)
 }
 
 // newOutputDecoder builds the decoder an output block selects, or nil when the
@@ -34,6 +38,39 @@ func newOutputDecoder(output agents.Output, w io.Writer) outputDecoder {
 		return newJSONLOutputWriter(w, *output.JSONL)
 	}
 	return nil
+}
+
+// passthroughEventWriter forwards an agent's output unchanged while recording
+// each of its lines as an output event, for an agent whose output has no
+// events of its own to decode (issue #715).
+type passthroughEventWriter struct {
+	*lineWriter
+	output io.Writer
+	events jobEventRecorder
+}
+
+func newPassthroughEventWriter(output io.Writer) *passthroughEventWriter {
+	w := &passthroughEventWriter{lineWriter: &lineWriter{}, output: output}
+	w.lineWriter.line = func(line []byte) error {
+		if text := strings.TrimRight(string(line), "\r"); strings.TrimSpace(text) != "" && w.events != nil {
+			w.events.recordJobEvent(core.JobEvent{Kind: core.JobEventOutput, Text: text})
+		}
+		return nil
+	}
+	return w
+}
+
+func (w *passthroughEventWriter) Write(p []byte) (int, error) {
+	if _, err := w.output.Write(p); err != nil {
+		return 0, err
+	}
+	return w.lineWriter.Write(p)
+}
+
+func (w *passthroughEventWriter) recordEventsTo(events jobEventRecorder) {
+	w.lineWriter.mu.Lock()
+	w.events = events
+	w.lineWriter.mu.Unlock()
 }
 
 // lineWriter buffers writes into whole lines, since a streaming agent's output
@@ -86,6 +123,28 @@ type jsonlOutputWriter struct {
 	// used only when the definition declares its text events are deltas. It
 	// is guarded by lineWriter.mu along with the line buffer itself.
 	pending []string
+	// events receives each decoded message and tool call as a typed job
+	// event (issue #715), also guarded by lineWriter.mu.
+	events jobEventRecorder
+}
+
+func (w *jsonlOutputWriter) recordEventsTo(events jobEventRecorder) {
+	w.lineWriter.mu.Lock()
+	w.events = events
+	w.lineWriter.mu.Unlock()
+}
+
+func (w *jsonlOutputWriter) record(event core.JobEvent) {
+	if w.events != nil {
+		w.events.recordJobEvent(event)
+	}
+}
+
+// jsonlToolCall is one tool call read out of an event.
+type jsonlToolCall struct {
+	name    string
+	input   json.RawMessage
+	summary string
 }
 
 func newJSONLOutputWriter(output io.Writer, config agents.JSONL) *jsonlOutputWriter {
@@ -117,6 +176,7 @@ func (w *jsonlOutputWriter) writeLine(line []byte) error {
 				return err
 			}
 		}
+		w.record(core.JobEvent{Kind: core.JobEventOutput, Text: string(line)})
 		_, err = fmt.Fprintln(w.output, string(line))
 		return err
 	}
@@ -128,8 +188,12 @@ func (w *jsonlOutputWriter) writeLine(line []byte) error {
 		return w.writeDelta(event, paths)
 	}
 	texts := jsonlStrings(event, paths.Text)
+	for _, text := range texts {
+		w.record(core.JobEvent{Kind: core.JobEventText, Text: text})
+	}
 	for _, call := range w.toolCalls(event, paths) {
-		texts = append(texts, "Running: "+call)
+		texts = append(texts, "Running: "+call.summary)
+		w.record(core.JobEvent{Kind: core.JobEventTool, Tool: call.name, Input: call.input, Summary: call.summary})
 	}
 	if len(texts) == 0 {
 		// An event of a shape the definition does not describe renders
@@ -159,14 +223,16 @@ func (w *jsonlOutputWriter) writeDelta(event any, paths agents.JSONLEvent) error
 // flushPending writes the buffered message followed by the progress lines of
 // the event that ended it. Either may be empty: an event of a shape the
 // definition does not describe ends a message without adding a line of its own.
-func (w *jsonlOutputWriter) flushPending(calls []string) error {
+func (w *jsonlOutputWriter) flushPending(calls []jsonlToolCall) error {
 	var texts []string
 	if joined := strings.TrimSpace(strings.Join(w.pending, "")); joined != "" {
 		texts = append(texts, joined)
+		w.record(core.JobEvent{Kind: core.JobEventText, Text: joined})
 	}
 	w.pending = nil
 	for _, call := range calls {
-		texts = append(texts, "Running: "+call)
+		texts = append(texts, "Running: "+call.summary)
+		w.record(core.JobEvent{Kind: core.JobEventTool, Tool: call.name, Input: call.input, Summary: call.summary})
 	}
 	if len(texts) == 0 {
 		return nil
@@ -202,14 +268,14 @@ func (w *jsonlOutputWriter) skips(event any) bool {
 
 // toolCalls renders the event's tool calls the way Claude's decoder renders
 // its own, so a progress line reads the same whichever agent produced it.
-func (w *jsonlOutputWriter) toolCalls(event any, paths agents.JSONLEvent) []string {
+func (w *jsonlOutputWriter) toolCalls(event any, paths agents.JSONLEvent) []jsonlToolCall {
 	if paths.ToolName == "" {
 		return nil
 	}
 	// Name and input are read from the same block when their paths share a
 	// prefix, so a call is never rendered with another call's arguments.
 	prefix, name, input := splitJSONLPaths(paths.ToolName, paths.ToolInput)
-	var calls []string
+	var calls []jsonlToolCall
 	for _, block := range jsonlLookup(event, prefix) {
 		tool := firstJSONLString(jsonlLookup(block, name))
 		if tool == "" {
@@ -231,7 +297,7 @@ func (w *jsonlOutputWriter) toolCalls(event any, paths agents.JSONLEvent) []stri
 				arguments = encoded
 			}
 		}
-		calls = append(calls, claudeToolUseSummary(tool, arguments))
+		calls = append(calls, jsonlToolCall{name: tool, input: arguments, summary: claudeToolUseSummary(tool, arguments)})
 	}
 	return calls
 }
