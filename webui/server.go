@@ -62,6 +62,8 @@ type Server struct {
 	logs     []string
 	assets   http.Handler
 	action   func(context.Context, core.JobAction) error
+	// schedules backs /api/schedules (issue #848).
+	schedules func(context.Context, core.ScheduleRequest) (core.ScheduleResponse, error)
 	settings func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
 	agents   func(context.Context) ([]core.AgentStatus, error)
 	// listClones and clearClones back the settings dialog's clones section
@@ -125,6 +127,14 @@ func New(version string) (*Server, error) {
 func (ui *Server) SetJobActionHandler(handler func(context.Context, core.JobAction) error) {
 	ui.mu.Lock()
 	ui.action = handler
+	ui.mu.Unlock()
+}
+
+// SetScheduleHandler wires /api/schedules and the Schedules modal (issue #848)
+// to a function that performs schedule requests on the running watch.
+func (ui *Server) SetScheduleHandler(handler func(context.Context, core.ScheduleRequest) (core.ScheduleResponse, error)) {
+	ui.mu.Lock()
+	ui.schedules = handler
 	ui.mu.Unlock()
 }
 
@@ -299,6 +309,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/jobs/action" {
 		ui.serveJobAction(w, r)
+		return
+	}
+	if r.URL.Path == "/api/schedules" || strings.HasPrefix(r.URL.Path, "/api/schedules/") {
+		ui.serveSchedules(w, r)
 		return
 	}
 	if r.URL.Path == "/api/refresh" {
