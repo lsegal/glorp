@@ -135,6 +135,11 @@ func (a *activeAgents) pauseAll() []checkpointRun {
 		if run.cmd != nil {
 			_ = process.Pause(run.cmd)
 		}
+		// A scheduled run has no issue or pull request to push its work to,
+		// and is not resumed after the restart (issue #848).
+		if run.issue.ScheduleID != "" {
+			continue
+		}
 		runs = append(runs, checkpointRun{Target: run.issue.Target, Number: run.issue.Number, Checkout: run.checkout})
 	}
 	sort.Slice(runs, func(i, j int) bool {
@@ -475,6 +480,9 @@ func (a *activeAgents) checkouts() []checkpointRun {
 	defer a.mu.Unlock()
 	runs := make([]checkpointRun, 0, len(a.runs))
 	for run := range a.runs {
+		if run.issue.ScheduleID != "" {
+			continue
+		}
 		runs = append(runs, checkpointRun{Target: run.issue.Target, Number: run.issue.Number, Checkout: run.checkout})
 	}
 	return runs

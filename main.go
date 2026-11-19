@@ -74,6 +74,7 @@ func watchFlagSet(agentSpecs *agentFlag, agentBinaries *agentBinaryFlag, filter 
 	flags.Bool("auto-update", true, "apply an available glorp update and restart even while agents are busy, checkpointing their work first; false waits until no agents are active")
 	flags.Var(&tempDirFlag{}, "temp-dir", "directory new clones are placed in (repeatable, tried in order; the next one is used when one lacks space for a clone; default: the system temp directory)")
 	flags.String("state", ".glorp.json", "file used to remember handled issue numbers")
+	flags.String("schedules", "", "file the scheduled prompts are kept in, shared with \"glorp schedule\" (default: .schedules.json beside --state, such as .glorp.schedules.json)")
 	flags.String("config", agents.DefaultConfigPath, "agent definitions and default values for these switches; separate from --state, and rewritten only when the dashboard saves a setting")
 	flags.Var(filter, "filter", "GitHub issue search filter (repeatable); the default matches open issues you opened and assigned to yourself")
 	flags.Bool("all-issues", false, "disable the default issue filter")
@@ -102,6 +103,8 @@ func commandFlags(name string) *flag.FlagSet {
 		return agentsFlagSet(&agentsOptions{})
 	case "clones":
 		return clonesFlagSet(&tempDirFlag{})
+	case "schedule":
+		return scheduleFlagSet()
 	}
 	return nil
 }
@@ -385,7 +388,7 @@ func runWatch(args []string) (code int) {
 	if webUI != nil {
 		webUIURL = webui.URL(bind, webPort)
 	}
-	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, SelfLogin: selfLogin, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Active: activeRuns, Registry: registry, Out: wOut}
+	w := &Glorp{Repo: targets[0], Targets: targets, Interval: interval, UseWebhooks: !poll, WebUIURL: webUIURL, Events: events, Concurrency: limit, StatePath: statePath, ReadyState: gh.ReadyState, Issues: gh, Discussions: gh, Status: gh, Comments: gh, Mentions: gh, Projects: gh, Identity: identity, AllowedCommenters: allowedCommenters, SelfLogin: selfLogin, UI: combineUIReporters(terminalUIReporter(ui), webUI), Quota: quota, Runner: runner, Active: activeRuns, Registry: registry, Out: wOut, SchedulesPath: flagValue[string](flags, "schedules")}
 	checkpointer.SetLog(w.logf)
 	w.noMerge.Store(noMerge)
 	w.noChangelog.Store(noChangelog)
@@ -429,6 +432,7 @@ func runWatch(args []string) (code int) {
 		webUI.SetCreateIssueHandler(w.CreateIssue)
 		// Wired before the server starts, like every handler startWebUI sets.
 		webUI.SetClonesHandlers(w.ListClones, w.ClearClones)
+		webUI.SetScheduleHandler(w.HandleSchedule)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
@@ -2033,7 +2037,9 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		target = r.Repo
 	}
 	prompt := "continue"
-	if !session.Resume {
+	if !session.Resume && issue.Prompt != "" {
+		prompt = scheduledRunPrompt(r, issue, session)
+	} else if !session.Resume {
 		repo := issueRepository(target, issue)
 		if isDiscussionTarget(target) {
 			prompt = fmt.Sprintf("/gh-discuss %d", issue.Number)
@@ -2114,6 +2120,26 @@ func commandArgsForSession(r CommandRunner, issue Issue, session AgentSession) [
 		Settings:      remoteControlSettings,
 		SessionName:   remoteControlSessionName(target, issue),
 	})
+}
+
+// scheduledRunPrompt is what a scheduled run's agent is told in place of the
+// gh-fix invocation (issue #848): the schedule's own prompt, the repository it
+// targets, and where to clone it.
+func scheduledRunPrompt(r CommandRunner, issue Issue, session AgentSession) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(issue.Prompt))
+	fmt.Fprintf(&b, "\n\nThis is a scheduled prompt (schedule %q, %q) that glorp runs on a timer; it is not tied to an issue.", issue.ScheduleID, issue.Title)
+	if issue.Repository != "" {
+		b.WriteString("\n\nRepository: " + issue.Repository)
+	}
+	if r.Identity != "" {
+		b.WriteString("\n\nInstance identity: /glorp:" + string(r.Identity) + ". End the body of every issue you create with `**Created by Glorp:** /glorp:" + string(r.Identity) + "`.")
+	}
+	b.WriteString("\n\nKeep your responses concise. Finish with a one-line summary of what you did.")
+	if _, inCheckout := sessionRunDir(session); session.RunDir != "" && !inCheckout {
+		b.WriteString("\n\nIf you need a checkout, clone the repository into a new directory inside this clone directory and nowhere else, print GLORP_CHECKOUT_DIRECTORY=<absolute clone path> once it exists, and remove it before you finish: " + session.RunDir)
+	}
+	return b.String()
 }
 
 // definition resolves the agent a run is dispatching to. Runners built without

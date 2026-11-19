@@ -75,6 +75,7 @@ h1 .version {
 	gap: 10px;
 }
 .prompt-toggle,
+.schedules-button,
 .settings-button,
 .refresh-button,
 .restart-button {
@@ -90,6 +91,7 @@ h1 .version {
 	cursor: pointer;
 }
 .prompt-toggle:hover,
+.schedules-button:hover,
 .settings-button:hover,
 .refresh-button:hover:not(:disabled),
 .restart-button:hover:not(:disabled) {
@@ -102,6 +104,7 @@ h1 .version {
 	opacity: 0.7;
 }
 .prompt-toggle svg,
+.schedules-button svg,
 .settings-button svg,
 .refresh-button svg,
 .restart-button svg {
@@ -871,6 +874,7 @@ h1 .version {
 		gap: 8px;
 	}
 	.prompt-toggle,
+	.schedules-button,
 	.settings-button,
 	.refresh-button,
 	.restart-button {
@@ -878,6 +882,7 @@ h1 .version {
 		height: 40px;
 	}
 	.prompt-toggle svg,
+	.schedules-button svg,
 	.settings-button svg,
 	.refresh-button svg,
 	.restart-button svg {
@@ -1203,6 +1208,305 @@ h1 .version {
 	.prompt-drawer-sheet {
 		animation: none;
 		transition: none;
+	}
+}
+/* Scheduled prompts (issue #848). */
+.up-next {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--border);
+	font-size: 12px;
+	overflow-x: auto;
+}
+.up-next-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted);
+	white-space: nowrap;
+}
+.up-next-title svg {
+	width: 15px;
+	height: 15px;
+}
+.up-next ol {
+	display: flex;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.up-next button {
+	display: inline-flex;
+	gap: 6px;
+	align-items: baseline;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: #09090b;
+	color: #e4e4e7;
+	padding: 4px 10px;
+	cursor: pointer;
+	white-space: nowrap;
+	font-size: 12px;
+}
+.up-next button:hover {
+	border-color: #52525b;
+}
+.up-next button span {
+	color: var(--muted);
+}
+.scheduled-badge {
+	display: inline-block;
+	margin-right: 2px;
+	padding: 0 7px;
+	border-radius: 999px;
+	background: #3b0764;
+	color: #e9d5ff;
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 18px;
+	vertical-align: 1px;
+}
+.schedules-modal {
+	width: min(1040px, 100%);
+}
+.schedules-modal .modal-header h2 {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+.schedules-modal .modal-header h2 svg {
+	width: 17px;
+	height: 17px;
+}
+.schedules-layout {
+	display: grid;
+	grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+	gap: 16px;
+	min-height: 0;
+}
+.schedule-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	border-right: 1px solid var(--border);
+	padding-right: 12px;
+}
+.schedule-list ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.schedule-list ul > li {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px;
+	border-radius: 8px;
+	border: 1px solid transparent;
+}
+.schedule-list li.active {
+	background: #27272a;
+	border-color: #3f3f46;
+}
+.schedule-list li > button {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	min-width: 0;
+	flex: 1;
+	border: none;
+	background: none;
+	color: #fafafa;
+	padding: 0;
+	text-align: left;
+	cursor: pointer;
+	font-size: 13px;
+}
+.schedule-list li > button span {
+	color: var(--muted);
+	font-size: 11px;
+}
+.schedule-list li > button .schedule-last.ok {
+	color: var(--green);
+}
+.schedule-list li > button .schedule-last.failed {
+	color: #f87171;
+}
+.schedule-list li > button .schedule-last.running {
+	color: #60a5fa;
+}
+.schedule-new {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px dashed #3f3f46;
+	border-radius: 8px;
+	background: none;
+	color: #e4e4e7;
+	padding: 7px 10px;
+	cursor: pointer;
+	font-size: 13px;
+}
+.schedule-new.active,
+.schedule-new:hover {
+	border-color: var(--green);
+	color: var(--green);
+}
+.schedule-new svg,
+.modal-actions button svg {
+	width: 14px;
+	height: 14px;
+	vertical-align: -2px;
+}
+.schedule-toggle input {
+	appearance: none;
+	width: 30px;
+	height: 18px;
+	margin: 1px 0 0;
+	border-radius: 999px;
+	background: #3f3f46;
+	position: relative;
+	cursor: pointer;
+	transition: background 120ms ease-out;
+}
+.schedule-toggle input::before {
+	content: "";
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: #fafafa;
+	transition: transform 120ms ease-out;
+}
+.schedule-toggle input:checked {
+	background: var(--green);
+}
+.schedule-toggle input:checked::before {
+	transform: translateX(12px);
+}
+.schedule-toggle input:focus-visible {
+	outline: 2px solid #86efac;
+	outline-offset: 2px;
+}
+.schedule-editor-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 12px;
+	align-items: end;
+}
+.weekday-picker {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	border: none;
+	margin: 0;
+	padding: 0;
+}
+.weekday-picker legend {
+	font-size: 12px;
+	color: var(--muted);
+	margin-bottom: 5px;
+}
+.weekday-picker button {
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: #09090b;
+	color: var(--muted);
+	padding: 6px 8px;
+	cursor: pointer;
+	font-size: 12px;
+}
+.weekday-picker button.active {
+	border-color: var(--green);
+	color: var(--green);
+}
+.schedule-preview,
+.schedule-history {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	color: var(--muted);
+}
+.schedule-preview ol {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.schedule-preview ol > li {
+	color: #e4e4e7;
+	background: #27272a;
+	border-radius: 6px;
+	padding: 3px 8px;
+}
+.schedule-history ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.schedule-history ul > li {
+	display: grid;
+	grid-template-columns: 64px max-content 48px minmax(0, 1fr);
+	white-space: nowrap;
+	gap: 8px;
+	align-items: center;
+	color: #d4d4d8;
+}
+.run-status {
+	font-style: normal;
+	text-align: center;
+	border-radius: 999px;
+	padding: 1px 6px;
+	background: #27272a;
+	font-size: 11px;
+}
+.run-status.ok {
+	color: var(--green);
+}
+.run-status.failed {
+	color: #f87171;
+}
+.run-status.running {
+	color: #60a5fa;
+}
+.run-summary {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--muted);
+}
+.schedule-notice {
+	margin: 0;
+	font-size: 12px;
+	color: var(--green);
+}
+.modal-actions .schedule-delete {
+	margin-right: auto;
+	color: #f87171;
+}
+@media (max-width: 760px) {
+	.schedules-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.schedule-list {
+		border-right: none;
+		border-bottom: 1px solid var(--border);
+		padding: 0 0 12px;
 	}
 }
 @media (max-width: 760px) {

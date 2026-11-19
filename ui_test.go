@@ -1479,3 +1479,21 @@ func TestTruncateKeepsHyperlinkClosed(t *testing.T) {
 		t.Errorf("truncate(%q, 12) = %q", link, got)
 	}
 }
+
+func TestTerminalDashboardShowsScheduledJobsAndTheNextRun(t *testing.T) {
+	job := JobSnapshot{Kind: core.JobKindSchedule, ScheduleID: "nightly", Number: 1763460000, Repository: "o/r", Title: "Nightly sweep", Status: "active"}
+	if prefix := jobTitlePrefix("*", job, true); !strings.Contains(prefix, "[scheduled]") || strings.Contains(prefix, "#1763460000") {
+		t.Fatalf("scheduled job title prefix = %q", prefix)
+	}
+	if url := job.IssueURL(); url != "" {
+		t.Fatalf("scheduled job links to issue %q", url)
+	}
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	snapshot := GlorpSnapshot{Upcoming: []core.UpcomingRun{{ScheduleID: "nightly", Name: "Nightly sweep", At: now.Add(3*time.Hour + 20*time.Minute)}}}
+	if got := nextScheduledText(snapshot, now); !strings.Contains(got, "Nightly sweep") || !strings.Contains(got, "3h") {
+		t.Fatalf("next scheduled text = %q", got)
+	}
+	if got := nextScheduledText(GlorpSnapshot{}, now); got != "" {
+		t.Fatalf("next scheduled text without schedules = %q", got)
+	}
+}

@@ -54,3 +54,20 @@ describe("JobTitle (issue #767)", () => {
 		expect(html).toContain("#5 · PR #6 t");
 	});
 });
+
+describe("JobTitle for a scheduled run (issue #848)", () => {
+	it("badges the run instead of linking an issue number", () => {
+		const html = render({
+			Kind: "schedule",
+			ScheduleID: "nightly",
+			Number: 1763460000,
+			Target: "schedule:nightly",
+			Repository: "lsegal/glorp",
+			Title: "Nightly sweep",
+		});
+		expect(html).toContain('<span class="scheduled-badge">scheduled</span>');
+		expect(html).toContain("Nightly sweep");
+		expect(html).not.toContain("#1763460000");
+		expect(html).not.toContain("href");
+	});
+});

@@ -51,7 +51,18 @@ type JobSnapshot struct {
 	TasksDone  int
 	TasksTotal int
 	Progress   int
+	// Kind is JobKindIssue, JobKindDiscussion, or JobKindSchedule, and
+	// ScheduleID names the schedule a scheduled run fired from (issue #848).
+	Kind       string
+	ScheduleID string
 }
+
+// Job kinds.
+const (
+	JobKindIssue      = "issue"
+	JobKindDiscussion = "discussion"
+	JobKindSchedule   = "schedule"
+)
 
 // HasProgress reports whether the job has a plan checklist to measure its
 // progress against (issue #755).
@@ -107,7 +118,8 @@ func (j JobSnapshot) issueRepository() string {
 // is unknown (issue #767).
 func (j JobSnapshot) IssueURL() string {
 	repository := j.issueRepository()
-	if repository == "" || j.Number <= 0 {
+	// A scheduled run's Number is its fire time, not an issue.
+	if repository == "" || j.Number <= 0 || j.Kind == JobKindSchedule {
 		return ""
 	}
 	return fmt.Sprintf("https://github.com/%s/issues/%d", repository, j.Number)
@@ -190,6 +202,9 @@ type Snapshot struct {
 	// the jobs on the requested page (issue #739).
 	Jobs        []JobSnapshot
 	VisibleJobs int
+	// Upcoming lists the next runs of the enabled schedules, soonest first
+	// (issue #848).
+	Upcoming []UpcomingRun
 }
 
 // UIReporter receives the published state of a run.

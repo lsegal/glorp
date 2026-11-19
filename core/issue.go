@@ -28,6 +28,10 @@ type Issue struct {
 	// Fork is the OWNER/REPO of the user's fork the fix is pushed to when the
 	// user cannot write to Repository (issue #712). Empty pushes to Repository.
 	Fork string `json:"-"`
+	// Prompt replaces the gh-fix invocation for a scheduled run, which has no
+	// issue (issue #848), and ScheduleID names the schedule it fired from.
+	Prompt     string `json:"-"`
+	ScheduleID string `json:"-"`
 }
 
 // IssueLabel is one label on an issue.

@@ -127,6 +127,12 @@ Flags:`,
 			run:     runClonesCommand,
 		},
 		{
+			name:    "schedule",
+			summary: "Add, list, remove, and run scheduled prompts",
+			usage:   scheduleUsage,
+			run:     runScheduleCommand,
+		},
+		{
 			name:    "version",
 			summary: "Print the glorp version",
 			usage:   "Usage: glorp version",

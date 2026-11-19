@@ -8,3 +8,4 @@ public/
 resources/
 .hugo_build.lock
 .glorp.clones.json
+.glorp.schedules.json

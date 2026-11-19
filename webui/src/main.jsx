@@ -8,6 +8,7 @@ import {
 } from "@heroicons/react/24/outline";
 import {
 	Activity,
+	CalendarClock,
 	Check,
 	ChevronLeft,
 	ChevronRight,
@@ -54,6 +55,8 @@ import {
 import { JobTitle } from "./jobtitle";
 import { PromptDrawer, PromptPanel, usePromptPanel } from "./promptpanel";
 import { ReleaseLink } from "./releaselink";
+import { SchedulesModal, UpNextStrip } from "./schedules";
+import { isScheduledJob, scheduledJobActions } from "./scheduling";
 import { SummarizeButton, summarizeJob } from "./summarize";
 import "./index.css";
 
@@ -163,7 +166,11 @@ function JobProgress({ progress }) {
 function JobCard({ job, onSummarize }) {
 	const [pendingAction, setPendingAction] = useState("");
 	const [actionError, setActionError] = useState("");
-	const available = jobActionAvailability(job.Status);
+	const scheduled = isScheduledJob(job);
+	const available = scheduled
+		? scheduledJobActions(job.Status)
+		: jobActionAvailability(job.Status);
+	const verb = scheduled ? "the scheduled run" : "gh-fix";
 	const progress = jobProgress(job);
 	const runAction = async (action) => {
 		setPendingAction(action);
@@ -204,7 +211,7 @@ function JobCard({ job, onSummarize }) {
 						disabled={!available.retry || pendingAction !== ""}
 						onClick={() => runAction("retry")}
 						aria-label="Retry"
-						title={actionError || available.retryReason || "Retry gh-fix"}
+						title={actionError || available.retryReason || `Retry ${verb}`}
 					>
 						<ArrowPathIcon />{" "}
 						<span className="viewport-action-label">Retry</span>
@@ -218,7 +225,7 @@ function JobCard({ job, onSummarize }) {
 							actionError ||
 							(job.Status === "paused"
 								? "Clear the pause and release the issue"
-								: "Stop gh-fix")
+								: `Stop ${verb}`)
 						}
 					>
 						<StopIcon /> <span className="viewport-action-label">Stop</span>
@@ -228,7 +235,12 @@ function JobCard({ job, onSummarize }) {
 						disabled={!available.pause || pendingAction !== ""}
 						onClick={() => runAction("pause")}
 						aria-label="Pause"
-						title={actionError || "Pause until retried"}
+						title={
+							actionError ||
+							(scheduled
+								? "A scheduled run cannot be paused"
+								: "Pause until retried")
+						}
 					>
 						<PauseIcon /> <span className="viewport-action-label">Pause</span>
 					</button>
@@ -849,6 +861,9 @@ function App() {
 	const summarize = (job) =>
 		summarizeJob(job, { open: promptPanel.show, send: setQueuedPrompt });
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	// schedulesOpen is false, or true or the schedule ID the Schedules modal
+	// opens on (issue #848).
+	const [schedulesOpen, setSchedulesOpen] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
 	// restarting is "requested" (or "announced" when the daemon started it,
 	// issue #846) until the daemon drops off, then "down" until it answers
@@ -996,6 +1011,15 @@ function App() {
 						</button>
 						<button
 							type="button"
+							className="schedules-button"
+							onClick={() => setSchedulesOpen(true)}
+							aria-label="Open schedules"
+							title="Schedules"
+						>
+							<CalendarClock />
+						</button>
+						<button
+							type="button"
 							className="settings-button"
 							onClick={() => setSettingsOpen(true)}
 							aria-label="Open settings"
@@ -1011,6 +1035,17 @@ function App() {
 				</div>
 				{settingsOpen && (
 					<SettingsModal onClose={() => setSettingsOpen(false)} />
+				)}
+				{schedulesOpen && (
+					<SchedulesModal
+						onClose={() => setSchedulesOpen(false)}
+						initialId={schedulesOpen === true ? "" : schedulesOpen}
+						defaultRepository={
+							(snapshot.Targets || []).find((target) =>
+								/^[\w.-]+\/[\w.-]+$/.test(target),
+							) || ""
+						}
+					/>
 				)}
 				{state.update && (
 					<section className="update-notice" aria-label="Update available">
@@ -1033,6 +1068,7 @@ function App() {
 						onClose={() => setCheckpoints(null)}
 					/>
 				)}
+				<UpNextStrip upcoming={snapshot.Upcoming} onOpen={setSchedulesOpen} />
 				<JobPager page={shown.page} pages={shown.pages} onPage={setPage} />
 				<section className="job-grid" aria-label="Agent jobs">
 					{shown.jobs.length ? (
