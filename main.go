@@ -105,6 +105,8 @@ func commandFlags(name string) *flag.FlagSet {
 		return clonesFlagSet(&tempDirFlag{})
 	case "schedule":
 		return scheduleFlagSet()
+	case "upgrade-skills":
+		return upgradeSkillsFlagSet(&upgradeSkillsOptions{})
 	}
 	return nil
 }
