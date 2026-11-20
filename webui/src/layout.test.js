@@ -155,3 +155,31 @@ describe("prompt agent bottom drawer (issue #834)", () => {
 		);
 	});
 });
+
+describe("prompt agent pane wrapping (issue #869)", () => {
+	it("keeps an entry's column from growing past the pane", () => {
+		expect(rule(".prompt-entry")).toContain(
+			"grid-template-columns: minmax(0, 1fr)",
+		);
+	});
+
+	it("never scrolls the conversation sideways", () => {
+		const conversation = rule(".prompt-conversation");
+		expect(conversation).toContain("overflow-x: hidden");
+		expect(conversation).not.toContain("overflow: auto");
+	});
+
+	it("wraps tool lines in the pane but keeps them on one line in jobs", () => {
+		const summary = rule(".prompt-entry .transcript-tool-summary");
+		expect(summary).toContain("white-space: normal");
+		expect(summary).toContain("overflow-wrap: anywhere");
+		expect(rule(".transcript-tool-summary")).toContain("white-space: nowrap");
+	});
+
+	it("wraps code blocks in the pane instead of scrolling them", () => {
+		const pre = rule(".prompt-entry .markdown pre");
+		expect(pre).toContain("white-space: pre-wrap");
+		expect(pre).toContain("overflow-wrap: anywhere");
+		expect(rule(".markdown pre")).toContain("white-space: pre");
+	});
+});
