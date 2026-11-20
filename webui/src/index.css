@@ -1861,6 +1861,15 @@ h1 .version {
 }
 
 /* Rendered markdown in transcript prose and prompt answers (issue #863). */
+.prompt-entry .transcript {
+	color: #d4d4d8;
+	font:
+		11px / 17px ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+}
 .markdown > :first-child {
 	margin-top: 0;
 }

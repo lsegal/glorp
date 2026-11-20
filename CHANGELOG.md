@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Render the agent's messages as markdown in the web dashboard's job transcript, and draw the prompt agent's answers through the same transcript (issue #863). Bold and italic text, lists, headings, links, inline code, code blocks, quotes, and tables now read the way they do on GitHub instead of showing their `**` and `-` markers. The prompt agent's tool calls show as tool entries with their outcome, appearing while it works, instead of as raw log lines, and its replies are rendered markdown. Agent output stays inert: raw HTML in a message, such as a `<script>` tag, is shown as text, and links keep only `http`, `https`, and `mailto` URLs. The raw Output view is unchanged.
+
 ## v1.6.9 - 2026-11-20
 
 - Fix the web dashboard's job cards hiding their `agent:` line once the job's log or transcript was longer than the card (issue #861). Every meta line, including a waiting or paused job's wait line, now stays visible, and the log or transcript takes the rest of the card and scrolls.
