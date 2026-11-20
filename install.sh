@@ -7,7 +7,16 @@ bin_dir="${GLORP_BIN_DIR:-$HOME/.local/bin}"
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 mkdir -p "$bin_dir"
 if [[ "$version" == "latest" ]]; then
-  version="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p' | head -n 1)"
+  # Look the release up with gh first, which spends the authenticated rate
+  # limit, and with the unauthenticated API only when gh is not installed or
+  # its lookup fails, the same policy glorp's updater follows.
+  version=""
+  if command -v gh >/dev/null 2>&1; then
+    version="$(gh api "repos/$repo/releases/latest" --jq .tag_name </dev/null)" || version=""
+    [[ -n "$version" ]] || echo "gh could not look up the latest release; looking it up directly." >&2
+  fi
+  [[ -n "$version" ]] ||
+    version="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p' | head -n 1)"
   [[ -n "$version" ]] || { echo "could not resolve latest release" >&2; exit 1; }
 fi
 os_name="$(uname -s | tr '[:upper:]' '[:lower:]')"
