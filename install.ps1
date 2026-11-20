@@ -9,27 +9,24 @@ if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
 }
 
 if ($version -eq 'latest') {
-    # Look the release up with gh first, which spends the authenticated rate
-    # limit, and with the unauthenticated API only when gh is not installed or
-    # its lookup fails, the same policy glorp's updater follows.
-    $version = ''
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
-        try {
-            # A failing gh is caught here, as with the download below.
-            $ErrorActionPreference = 'Continue'
-            $found = & gh api "repos/$repo/releases/latest" --jq .tag_name
-            if ($LASTEXITCODE -eq 0) { $version = "$found".Trim() }
-        } catch {
-            $version = ''
-        } finally {
-            $ErrorActionPreference = 'Stop'
-        }
-        if (-not $version) { Write-Host 'gh could not look up the latest release; looking it up directly.' }
+    # github.com/<repo>/releases/latest redirects to the latest release's tag
+    # page, so the tag is read from where that redirect lands. It is an
+    # ordinary web request, not a GitHub API call, so the API rate limit does
+    # not apply and it works without gh.
+    $landed = $null
+    try {
+        $response = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -Method Head -UseBasicParsing
+        # Windows PowerShell reports the final address as ResponseUri,
+        # PowerShell 7 on the request that was finally sent.
+        $landed = $response.BaseResponse.ResponseUri
+        if (-not $landed) { $landed = $response.BaseResponse.RequestMessage.RequestUri }
+    } catch {
+        $landed = $null
     }
-    if (-not $version) {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest"
-        $version = $release.tag_name
+    if (-not $landed -or "$landed" -notmatch '/releases/tag/([^/?#]+)$') {
+        throw "could not resolve latest release from https://github.com/$repo/releases/latest"
     }
+    $version = [uri]::UnescapeDataString($Matches[1])
 }
 $tag = $version
 $version = $version.TrimStart('v')
