@@ -145,8 +145,14 @@ Flags:`,
 			usage: `Usage: glorp upgrade
 
 Re-run the published installer for this platform to replace glorp with the
-latest release.`,
+latest release. To reinstall only the skills, run "glorp upgrade-skills".`,
 			run: runUpgradeCommand,
+		},
+		{
+			name:    "upgrade-skills",
+			summary: "Reinstall glorp's skills without upgrading glorp",
+			usage:   upgradeSkillsUsage,
+			run:     runUpgradeSkillsCommand,
 		},
 		{
 			name:    "help",
