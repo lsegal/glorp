@@ -26,7 +26,7 @@ func TestRunCLIWithoutArgumentsPrintsUsage(t *testing.T) {
 	if code := runCLI(nil, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	for _, name := range []string{"watch", "ui", "version", "upgrade", "help"} {
+	for _, name := range []string{"watch", "ui", "version", "upgrade", "upgrade-skills", "help"} {
 		if !strings.Contains(stderr.String(), name) {
 			t.Fatalf("usage = %q, want it to list %q", stderr.String(), name)
 		}
@@ -52,7 +52,7 @@ func TestNormalizeCommandMapsLegacyFlags(t *testing.T) {
 }
 
 func TestEveryCommandIsRunnable(t *testing.T) {
-	for _, name := range []string{"watch", "ui", "version", "upgrade", "help"} {
+	for _, name := range []string{"watch", "ui", "version", "upgrade", "upgrade-skills", "help"} {
 		cmd, ok := lookupCommand(name)
 		if !ok {
 			t.Fatalf("command %q is missing", name)

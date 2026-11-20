@@ -296,6 +296,8 @@ The prompt agent, the MCP `ask` and `create_issue` tools, and the stuck-job watc
 
 The installers derive their `skills add --agent` list from the registry, so a built-in agent is covered without either installer script being edited. They cover the built-ins only: an agent you declare yourself installs its own skills with the same command, shown in the tutorial below.
 
+`glorp upgrade-skills` reinstalls glorp's skills for every target in the registry, including agents you declare yourself, without upgrading or restarting glorp. It installs them from the running glorp's release, so they match what glorp checks at startup, and takes the same `-config` flag as `glorp agents`. Use it when the installed skills are stale or damaged and you do not want a binary upgrade.
+
 The set of ids skills.sh knows grows without glorp, so the shape of the id is checked and its value is not — an id glorp has never heard of is yours to pass on.
 
 ### `doctor`
