@@ -386,14 +386,18 @@ type CheckpointResult struct {
 // agent call runs, then "done" or "failed". Actions lists the outcome of each
 // job action or unblock round the answer asked glorp to perform.
 type PromptEntry struct {
-	ID       int       `json:"id"`
-	Request  string    `json:"request"`
-	Status   string    `json:"status"`
-	Agent    string    `json:"agent,omitempty"`
-	Response string    `json:"response,omitempty"`
-	Actions  []string  `json:"actions,omitempty"`
-	Started  time.Time `json:"started"`
-	Finished time.Time `json:"finished,omitzero"`
+	ID       int      `json:"id"`
+	Request  string   `json:"request"`
+	Status   string   `json:"status"`
+	Agent    string   `json:"agent,omitempty"`
+	Response string   `json:"response,omitempty"`
+	Actions  []string `json:"actions,omitempty"`
+	// Events are the agent's typed events for this request, the same kinds
+	// a job's transcript draws, so the prompt area renders its tool calls and
+	// messages the way a job card does (issue #863).
+	Events   []JobEvent `json:"events,omitempty"`
+	Started  time.Time  `json:"started"`
+	Finished time.Time  `json:"finished,omitzero"`
 }
 
 // PromptReporter receives the prompt area's conversation whenever an entry is

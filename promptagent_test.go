@@ -344,3 +344,58 @@ type outputPausableRunner struct{ *pausableRunner }
 func (r outputPausableRunner) RunSessionWithOutput(ctx context.Context, issue Issue, session AgentSession, update func(AgentSession), _ io.Writer) error {
 	return r.RunSession(ctx, issue, session, update)
 }
+
+// The prompt agent's typed events land on its entry while it runs, so the
+// prompt area draws its tool calls and messages the way a job's transcript
+// does, with the answer's action lines left out of its messages and a failed
+// exit as an error event (issue #863).
+func TestPromptEntryCarriesTheAgentsTypedEvents(t *testing.T) {
+	release := make(chan struct{})
+	reporter := &promptReporter{updates: make(chan []core.PromptEntry, 64)}
+	w := &Glorp{Registry: agents.MustBuiltin(), Runner: CommandRunner{Agent: "claude/opus", Agents: []string{"claude/opus"}}, UI: reporter, Out: &syncBuffer{}}
+	w.promptRun = func(ctx context.Context, _ agentSpec, _ string) (string, error) {
+		events := promptEvents(ctx)
+		if events == nil {
+			t.Error("the prompt agent call carries no event recorder")
+			return "", nil
+		}
+		events.recordJobEvent(core.JobEvent{Kind: core.JobEventTool, Tool: "Bash", ToolID: "t1", Summary: "Running: gh pr view 460", Input: []byte(`{"command":"gh pr view 460"}`)})
+		<-release
+		events.recordJobEvent(core.JobEvent{Kind: core.JobEventToolResult, ToolID: "t1"})
+		events.recordJobEvent(core.JobEvent{Kind: core.JobEventText, Text: "**What the session changed**\n- one\nGLORP stop o/r#99"})
+		events.recordJobEvent(core.JobEvent{Kind: core.JobEventText, Text: "GLORP stop o/r#99"})
+		return "**What the session changed**\n- one\nGLORP stop o/r#99", errors.New("exit status 1")
+	}
+	entry, err := w.SubmitPrompt(context.Background(), "summarize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for live := false; !live; {
+		for _, reported := range <-reporter.updates {
+			if reported.ID == entry.ID && reported.Status == "pending" && len(reported.Events) == 1 {
+				live = true
+			}
+		}
+	}
+	close(release)
+	answered := awaitPrompt(t, w, entry.ID)
+	var kinds []string
+	for i, event := range answered.Events {
+		kinds = append(kinds, event.Kind)
+		if event.Seq != int64(i+1) {
+			t.Errorf("event %d seq = %d, want %d", i, event.Seq, i+1)
+		}
+	}
+	if got := strings.Join(kinds, ","); got != "tool,tool_result,text,error" {
+		t.Fatalf("event kinds = %s, want tool,tool_result,text,error", got)
+	}
+	if answered.Events[0].Input != nil || answered.Events[0].Summary != "Running: gh pr view 460" {
+		t.Errorf("tool event = %+v, want its summary without its input", answered.Events[0])
+	}
+	if text := answered.Events[2].Text; text != "**What the session changed**\n- one" {
+		t.Errorf("message = %q, want it without its action line", text)
+	}
+	if text := answered.Events[3].Text; !strings.Contains(text, "exit status 1") {
+		t.Errorf("error event = %q", text)
+	}
+}
