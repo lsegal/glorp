@@ -398,7 +398,7 @@ type updater struct {
 	Download func(ctx context.Context, tag string) (string, error)
 	// Install swaps the downloaded binary in for the running one.
 	Install func(staged string) error
-	// RefreshSkills reinstalls the gh-fix, gh-discuss, and gh-create skills
+	// RefreshSkills reinstalls the gh-fix, gh-discuss, gh-create, and gh-safe-merge skills
 	// for the release tag Install swapped in (issue #797), so binary and
 	// skills match after an update as they do after the installers run.
 	RefreshSkills func(ctx context.Context, tag string) error

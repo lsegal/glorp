@@ -83,12 +83,13 @@ try {
     }
     if ($agentFlags.Count -eq 0) {
         Write-Host "Installed glorp $tag to $installDir\glorp.exe."
-        throw "Could not read the agent list from glorp, so gh-fix/gh-discuss/gh-create were not installed. Install them with: npx skills add $repo@gh-fix --global --agent <agent> -y"
+        throw "Could not read the agent list from glorp, so gh-fix/gh-discuss/gh-create/gh-safe-merge were not installed. Install them with: npx skills add $repo@gh-fix --global --agent <agent> -y"
     }
     & npx --yes skills add "$repo@gh-fix" --global @agentFlags -y
     & npx --yes skills add "$repo@gh-discuss" --global @agentFlags -y
     & npx --yes skills add "$repo@gh-create" --global @agentFlags -y
-    Write-Host "Installed glorp $tag to $installDir\glorp.exe and gh-fix/gh-discuss/gh-create globally."
+    & npx --yes skills add "$repo@gh-safe-merge" --global @agentFlags -y
+    Write-Host "Installed glorp $tag to $installDir\glorp.exe and gh-fix/gh-discuss/gh-create/gh-safe-merge globally."
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
 }

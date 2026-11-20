@@ -17,8 +17,8 @@ import (
 	"github.com/lsegal/glorp/process"
 )
 
-// bundledSkills is the gh-fix, gh-discuss, and gh-create skill text this
-// binary was built with. The installed copies agents load are compared
+// bundledSkills is the gh-fix, gh-discuss, gh-create, and gh-safe-merge skill
+// text this binary was built with. The installed copies agents load are compared
 // against it, so a self-updated glorp notices skills it has outgrown (issue
 // #797).
 //
@@ -31,7 +31,7 @@ const bundledSkillsRoot = ".agents/skills"
 
 // glorpSkills are the skills the installers install and glorp keeps current,
 // in the order install.ps1 and install.sh add them.
-var glorpSkills = []string{"gh-fix", "gh-discuss", "gh-create"}
+var glorpSkills = []string{"gh-fix", "gh-discuss", "gh-create", "gh-safe-merge"}
 
 // installedSkillsDir is where `npx skills add --global` keeps the copy of
 // each skill that every agent's skills directory links to. The registry's

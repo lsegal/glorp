@@ -821,6 +821,7 @@ and install them, since the installers cover the built-ins only:
 npx --yes skills add lsegal/glorp@gh-fix --global --agent universal -y
 npx --yes skills add lsegal/glorp@gh-discuss --global --agent universal -y
 npx --yes skills add lsegal/glorp@gh-create --global --agent universal -y
+npx --yes skills add lsegal/glorp@gh-safe-merge --global --agent universal -y
 ```
 
 `glorp agents -skills` prints the targets in force, including this one.
