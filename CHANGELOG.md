@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the install scripts still depending on the GitHub API to find the latest release (issue #875). `install.sh` and `install.ps1` now read the latest release's tag from where `https://github.com/lsegal/glorp/releases/latest` redirects, an ordinary web request the API rate limit does not apply to, so a fresh install and `glorp upgrade` work with the API quota exhausted and without `gh`. A pinned `GLORP_VERSION` skips the lookup as before, and a redirect that names no release fails with "could not resolve latest release".
+
 ## v1.7.0 - 2026-11-20
 
 - Fix `glorp upgrade` and the install scripts failing with "API rate limit exceeded" when looking up the latest release (issue #871). `install.ps1` and `install.sh` now look the release up with `gh` first when it is installed, which uses its authenticated rate limit, and fall back to the unauthenticated GitHub API, with a message, only when `gh` is missing or its lookup fails. Installs without `gh` work as before.

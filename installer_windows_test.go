@@ -21,11 +21,22 @@ function npx {}
 function Invoke-RestMethod {
     param($Uri)
     Add-Content -Path $env:GLORP_TEST_LOOKUP_LOG -Value "Invoke-RestMethod $Uri"
-    if ($env:GLORP_TEST_DIRECT_LOOKUP -eq 'fail') { throw 'direct lookup failed' }
-    [pscustomobject]@{ tag_name = $env:GLORP_TEST_TAG }
+    throw 'the GitHub API is not available'
 }
 function Invoke-WebRequest {
-    param($Uri, $OutFile)
+    param($Uri, $OutFile, $Method, [switch]$UseBasicParsing)
+    if (-not $OutFile) {
+        # The release lookup. The response says where the redirect landed the
+        # way Windows PowerShell does, or PowerShell 7 does, as
+        # GLORP_TEST_RESPONSE_SHAPE says.
+        Add-Content -Path $env:GLORP_TEST_LOOKUP_LOG -Value "Invoke-WebRequest $Uri"
+        if ($env:GLORP_TEST_DIRECT_LOOKUP -eq 'fail') { throw 'The remote server returned an error: (404) Not Found.' }
+        $landed = [uri]$env:GLORP_TEST_REDIRECT
+        if ($env:GLORP_TEST_RESPONSE_SHAPE -eq 'pwsh') {
+            return [pscustomobject]@{ BaseResponse = [pscustomobject]@{ RequestMessage = [pscustomobject]@{ RequestUri = $landed } } }
+        }
+        return [pscustomobject]@{ BaseResponse = [pscustomobject]@{ ResponseUri = $landed } }
+    }
     Add-Content -Path $env:GLORP_TEST_LOG -Value "Invoke-WebRequest $Uri"
     if ($env:GLORP_TEST_DIRECT -eq 'fail') { throw 'direct download failed' }
     Copy-Item $env:GLORP_TEST_ARCHIVE $OutFile
@@ -44,11 +55,11 @@ try {
 `
 
 // fakeInstallGH stands in for gh as a real native command. For `gh api` it
-// logs its arguments to GLORP_TEST_LOOKUP_LOG, then either prints
-// GLORP_TEST_TAG or writes to stderr and exits 1, as GLORP_TEST_GH_LOOKUP
-// says. Otherwise it logs them to GLORP_TEST_LOG, then either copies the test
-// archive to --dir\--pattern the way `gh release download` would or writes to
-// stderr and exits 1, as GLORP_TEST_GH says.
+// logs its arguments to GLORP_TEST_LOOKUP_LOG and fails, so a test sees any
+// API lookup the script still makes. Otherwise it logs them to GLORP_TEST_LOG,
+// then either copies the test archive to --dir\--pattern the way
+// `gh release download` would or writes to stderr and exits 1, as
+// GLORP_TEST_GH says.
 const fakeInstallGH = `@echo off
 if "%~1"=="api" goto lookup
 >>"%GLORP_TEST_LOG%" echo gh %*
@@ -67,12 +78,8 @@ copy /y "%GLORP_TEST_ARCHIVE%" "%dir%\%pattern%" >nul
 exit /b %errorlevel%
 :lookup
 >>"%GLORP_TEST_LOOKUP_LOG%" echo gh %*
-if not "%GLORP_TEST_GH_LOOKUP%"=="ok" (
-  echo gh: lookup failed 1>&2
-  exit /b 1
-)
-echo %GLORP_TEST_TAG%
-exit /b 0
+echo gh: lookup failed 1>&2
+exit /b 1
 `
 
 // Windows will not overwrite a running glorp.exe, so the installer renames it
@@ -259,11 +266,12 @@ func TestInstallPowerShellDownloadsWithGHFirst(t *testing.T) {
 	}
 }
 
-// install.ps1 looks the latest release up with gh when gh is on Path and
-// falls back to the unauthenticated API when gh is missing or its lookup
-// fails, the same policy and the same requests as the updater, and fails only
-// when the direct lookup fails too. This is the lookup `glorp upgrade` hits.
-func TestInstallPowerShellLooksUpLatestWithGHFirst(t *testing.T) {
+// install.ps1 resolves the latest release from where
+// github.com/<repo>/releases/latest redirects, with one web request and no
+// GitHub API call, under both Windows PowerShell's and PowerShell 7's response
+// shapes. A pinned GLORP_VERSION skips the lookup, and a redirect that names
+// no release tag fails clearly.
+func TestInstallPowerShellResolvesLatestFromTheRedirect(t *testing.T) {
 	script, err := filepath.Abs("install.ps1")
 	if err != nil {
 		t.Fatal(err)
@@ -274,30 +282,35 @@ func TestInstallPowerShellLooksUpLatestWithGHFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	const repo, tag = "acme/glorp-fork", "v1.2.3"
-	updaterGH, updaterURL := updaterLookupRequests(t, repo)
 	archive, build := buildFakeGlorpArchive(t, work, "1.2.3")
+	tagPage := "https://github.com/" + repo + "/releases/tag/" + tag
 
 	for _, tc := range []struct {
-		name               string
-		gh                 string // "ok", "fail", or "" for no gh on Path
-		directFails        bool
-		wantGH, wantDirect bool
-		wantInstalled      bool
+		name          string
+		gh            bool
+		version       string
+		shape         string // "pwsh" for PowerShell 7's response shape
+		redirect      string
+		lookupFails   bool
+		wantLookup    bool
+		wantInstalled bool
 	}{
-		{name: "gh looks up", gh: "ok", wantGH: true, wantInstalled: true},
-		{name: "gh fails", gh: "fail", wantGH: true, wantDirect: true, wantInstalled: true},
-		{name: "gh missing", wantDirect: true, wantInstalled: true},
-		{name: "both fail", gh: "fail", directFails: true, wantGH: true, wantDirect: true},
+		{name: "redirect names the tag", gh: true, redirect: tagPage, wantLookup: true, wantInstalled: true},
+		{name: "PowerShell 7 response", shape: "pwsh", redirect: tagPage, wantLookup: true, wantInstalled: true},
+		{name: "explicit latest", version: "latest", redirect: tagPage, wantLookup: true, wantInstalled: true},
+		{name: "pinned version", gh: true, version: tag, wantInstalled: true},
+		{name: "lookup fails", lookupFails: true, wantLookup: true},
+		{name: "no release", redirect: "https://github.com/" + repo + "/releases", wantLookup: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			caseDir := t.TempDir()
 			installDir := filepath.Join(caseDir, "installed")
 			lookups := filepath.Join(caseDir, "lookups.log")
 			directLookup, bin := "ok", ""
-			if tc.directFails {
+			if tc.lookupFails {
 				directLookup = "fail"
 			}
-			if tc.gh != "" {
+			if tc.gh {
 				bin = filepath.Join(caseDir, "bin")
 				if err := os.MkdirAll(bin, 0o755); err != nil {
 					t.Fatal(err)
@@ -308,31 +321,31 @@ func TestInstallPowerShellLooksUpLatestWithGHFirst(t *testing.T) {
 			}
 			output, err := runInstallPowerShell(harness, script,
 				"GLORP_REPO="+repo,
-				"GLORP_VERSION=",
+				"GLORP_VERSION="+tc.version,
 				"GLORP_BIN_DIR="+installDir,
 				"GLORP_TEST_ARCHIVE="+archive,
 				"GLORP_TEST_LOG="+filepath.Join(caseDir, "downloads.log"),
 				"GLORP_TEST_LOOKUP_LOG="+lookups,
 				"GLORP_TEST_BIN="+bin,
-				"GLORP_TEST_TAG="+tag,
+				"GLORP_TEST_REDIRECT="+tc.redirect,
+				"GLORP_TEST_RESPONSE_SHAPE="+tc.shape,
 				"GLORP_TEST_GH=ok",
-				"GLORP_TEST_GH_LOOKUP="+tc.gh,
 				"GLORP_TEST_DIRECT_LOOKUP="+directLookup,
 			)
 			if tc.wantInstalled && err != nil {
 				t.Fatalf("install failed: %v\n%s", err, output)
 			}
 			if !tc.wantInstalled && err == nil {
-				t.Fatalf("install succeeded with every lookup failing:\n%s", output)
+				t.Fatalf("install succeeded without resolving a release:\n%s", output)
 			}
-			assertInstallerLookups(t, lookups, "Invoke-RestMethod", tc.wantGH, tc.wantDirect, updaterGH, updaterURL)
-			if got := strings.Contains(string(output), "looking it up directly"); got != (tc.gh == "fail") {
-				t.Errorf("output mentions the fallback = %v, want %v:\n%s", got, tc.gh == "fail", output)
-			}
+			assertRedirectLookups(t, lookups, "Invoke-WebRequest", repo, tc.wantLookup)
 			installed := filepath.Join(installDir, "glorp.exe")
 			if !tc.wantInstalled {
+				if !strings.Contains(string(output), "could not resolve latest release") {
+					t.Errorf("output does not say the release could not be resolved:\n%s", output)
+				}
 				if _, err := os.Stat(installed); err == nil {
-					t.Fatal("glorp.exe was installed although every lookup failed")
+					t.Fatal("glorp.exe was installed although no release was resolved")
 				}
 				return
 			}
