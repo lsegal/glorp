@@ -1862,36 +1862,6 @@ h1 .version {
 	white-space: pre-wrap;
 }
 
-/* The prompt agent pane wraps everything to its width instead of scrolling
-   sideways (issue #869): tool lines, output, and code blocks break anywhere
-   rather than stretching the pane. Job transcripts keep one-line tools. */
-.prompt-entry .transcript-tool {
-	align-items: flex-start;
-}
-.prompt-entry .transcript-tool svg {
-	margin-top: 2px;
-}
-.prompt-entry .transcript-tool-summary {
-	overflow: visible;
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-.prompt-entry .transcript-output,
-.prompt-entry .transcript-error,
-.prompt-entry .transcript-comment {
-	min-width: 0;
-	overflow-wrap: anywhere;
-}
-.prompt-entry .markdown pre {
-	overflow-x: visible;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-.prompt-entry .markdown th,
-.prompt-entry .markdown td {
-	overflow-wrap: anywhere;
-}
-
 /* Rendered markdown in transcript prose and prompt answers (issue #863). */
 .prompt-entry .transcript {
 	color: #d4d4d8;
@@ -1982,4 +1952,34 @@ h1 .version {
 	padding: 2px 6px;
 	border: 1px solid #3f3f46;
 	text-align: left;
+}
+
+/* The prompt agent pane wraps everything to its width instead of scrolling
+   sideways (issue #869): tool lines, output, and code blocks break anywhere
+   rather than stretching the pane. Job transcripts keep one-line tools. */
+.prompt-entry .transcript-tool {
+	align-items: flex-start;
+}
+.prompt-entry .transcript-tool svg {
+	margin-top: 2px;
+}
+.prompt-entry .transcript-tool-summary {
+	overflow: visible;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.prompt-entry .transcript-output,
+.prompt-entry .transcript-error,
+.prompt-entry .transcript-comment {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.prompt-entry .markdown pre {
+	overflow-x: visible;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.prompt-entry .markdown th,
+.prompt-entry .markdown td {
+	overflow-wrap: anywhere;
 }

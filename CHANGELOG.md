@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the web dashboard's prompt agent pane scrolling sideways and cutting off long lines (issue #869). Its answers now wrap to the pane's width at any size, including long shell commands in tool entries, paths, inline code, and code blocks. Job transcripts are unchanged.
+
 ## v1.6.10 - 2026-11-20
 
 - Add a `gh-safe-merge` guide to the documentation site, linked from the homepage's skills section and every page's navigation next to `gh-fix`, `gh-discuss`, and `gh-create` (issue #867). It covers the safety check that gates everything, the order the skill drives a pull request to a merge, what happens to malicious and merely incorrect pull requests, and why it is not a code review.
