@@ -1179,14 +1179,13 @@ h1 .version {
 	border-radius: 6px;
 	background: #09090b;
 	color: #d4d4d8;
-	white-space: pre-wrap;
+	white-space: normal;
 	overflow-wrap: anywhere;
 	font:
-		11px / 17px ui-monospace,
-		SFMono-Regular,
-		Menlo,
-		Consolas,
-		monospace;
+		12px / 17px Inter,
+		ui-sans-serif,
+		system-ui,
+		sans-serif;
 }
 .prompt-action {
 	color: var(--green);
@@ -1782,7 +1781,8 @@ h1 .version {
 	background: #18181b;
 	border-radius: 0 4px 4px 0;
 	color: #fafafa;
-	white-space: pre-wrap;
+	white-space: normal;
+	overflow-wrap: anywhere;
 	font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 	font-size: 12px;
 	line-height: 17px;
@@ -1858,4 +1858,87 @@ h1 .version {
 .transcript-output {
 	color: #71717a;
 	white-space: pre-wrap;
+}
+
+/* Rendered markdown in transcript prose and prompt answers (issue #863). */
+.markdown > :first-child {
+	margin-top: 0;
+}
+.markdown > :last-child {
+	margin-bottom: 0;
+}
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote,
+.markdown table {
+	margin: 0 0 6px;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+	margin: 8px 0 4px;
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 600;
+}
+.markdown h1,
+.markdown h2 {
+	font-size: 14px;
+}
+.markdown ul,
+.markdown ol {
+	padding-left: 18px;
+}
+.markdown li > ul,
+.markdown li > ol {
+	margin: 2px 0 0;
+}
+.markdown a {
+	color: var(--green);
+}
+.markdown code {
+	padding: 0 3px;
+	border-radius: 3px;
+	background: #27272a;
+	font:
+		11px / 16px ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+}
+.markdown pre {
+	padding: 6px 8px;
+	border-radius: 4px;
+	background: #09090b;
+	overflow-x: auto;
+	white-space: pre;
+}
+.markdown pre code {
+	padding: 0;
+	background: none;
+}
+.markdown blockquote {
+	padding-left: 8px;
+	border-left: 2px solid #3f3f46;
+	color: #a1a1aa;
+}
+.markdown hr {
+	border: 0;
+	border-top: 1px solid #3f3f46;
+	margin: 8px 0;
+}
+.markdown table {
+	border-collapse: collapse;
+}
+.markdown th,
+.markdown td {
+	padding: 2px 6px;
+	border: 1px solid #3f3f46;
+	text-align: left;
 }

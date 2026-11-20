@@ -61,7 +61,7 @@ import { ReleaseLink } from "./releaselink";
 import { SchedulesModal, UpNextStrip } from "./schedules";
 import { isScheduledJob, scheduledJobActions } from "./scheduling";
 import { SummarizeButton, summarizeJob } from "./summarize";
-import { Transcript, useJobEvents } from "./transcriptview";
+import { PromptResponse, Transcript, useJobEvents } from "./transcriptview";
 import "./index.css";
 
 const emptyState = {
@@ -328,8 +328,9 @@ function PromptArea({ entries, open, queued, onQueuedSent }) {
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState("");
 	const conversation = useRef(null);
-	const latest = entries.length
-		? `${entries[entries.length - 1].id}:${entries[entries.length - 1].status}`
+	const last = entries[entries.length - 1];
+	const latest = last
+		? `${last.id}:${last.status}:${(last.events || []).length}`
 		: "";
 	useEffect(() => {
 		const node = conversation.current;
@@ -376,9 +377,7 @@ function PromptArea({ entries, open, queued, onQueuedSent }) {
 					<div key={entry.id} className={`prompt-entry ${entry.status}`}>
 						<div className="prompt-request">{entry.request}</div>
 						<div className="prompt-agent">{promptAgentLabel(entry)}</div>
-						{entry.response && (
-							<pre className="prompt-response">{entry.response}</pre>
-						)}
+						<PromptResponse entry={entry} />
 						{(entry.actions || []).map((action) => (
 							<div key={action} className="prompt-action">
 								→ {action}
