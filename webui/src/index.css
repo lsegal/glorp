@@ -1140,7 +1140,8 @@ h1 .version {
 }
 .prompt-conversation {
 	min-height: 60px;
-	overflow: auto;
+	overflow-x: hidden;
+	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -1152,6 +1153,7 @@ h1 .version {
 }
 .prompt-entry {
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	gap: 4px;
 }
 .prompt-request {
@@ -1858,6 +1860,36 @@ h1 .version {
 .transcript-output {
 	color: #71717a;
 	white-space: pre-wrap;
+}
+
+/* The prompt agent pane wraps everything to its width instead of scrolling
+   sideways (issue #869): tool lines, output, and code blocks break anywhere
+   rather than stretching the pane. Job transcripts keep one-line tools. */
+.prompt-entry .transcript-tool {
+	align-items: flex-start;
+}
+.prompt-entry .transcript-tool svg {
+	margin-top: 2px;
+}
+.prompt-entry .transcript-tool-summary {
+	overflow: visible;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.prompt-entry .transcript-output,
+.prompt-entry .transcript-error,
+.prompt-entry .transcript-comment {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.prompt-entry .markdown pre {
+	overflow-x: visible;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.prompt-entry .markdown th,
+.prompt-entry .markdown td {
+	overflow-wrap: anywhere;
 }
 
 /* Rendered markdown in transcript prose and prompt answers (issue #863). */
