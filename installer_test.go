@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -208,25 +207,6 @@ func updaterReleaseRequests(t *testing.T, repo, tag, goos, goarch string) ([]str
 	return withoutDirFlag(ghArgs), url
 }
 
-// updaterLookupRequests reports the gh arguments and the direct URL the
-// updater looks repo's latest release up with, by running its lookup with
-// both failing.
-func updaterLookupRequests(t *testing.T, repo string) (ghArgs []string, url string) {
-	t.Helper()
-	gh := func(_ context.Context, args ...string) ([]byte, error) {
-		ghArgs = args
-		return nil, errors.New("gh lookup failed")
-	}
-	public := func(_ context.Context, requestURL string) ([]byte, http.Header, int, error) {
-		url = requestURL
-		return nil, nil, 0, errors.New("direct lookup failed")
-	}
-	if _, err := latestReleaseTagVia(context.Background(), gh, public, repo); err == nil {
-		t.Fatal("the updater's lookup succeeded with both gh and the direct lookup failing")
-	}
-	return ghArgs, url
-}
-
 // withoutDirFlag drops --dir and its value from gh arguments, since each
 // downloader picks its own directory.
 func withoutDirFlag(args []string) []string {
@@ -289,23 +269,26 @@ func assertInstallerDownloads(t *testing.T, log, direct string, wantGH, wantDire
 	}
 }
 
-// assertInstallerLookups checks that an install looked the latest release up
-// with gh and the updater's arguments only when wantGH is set, and fell back
-// to the updater's direct URL only when wantDirect is set.
-func assertInstallerLookups(t *testing.T, log, direct string, wantGH, wantDirect bool, updaterGH []string, updaterURL string) {
+// assertRedirectLookups checks that an install made no gh lookup and, when
+// want is set, exactly one direct lookup of repo's /releases/latest page, or
+// no lookup at all otherwise. The GitHub API is never asked.
+func assertRedirectLookups(t *testing.T, log, direct, repo string, want bool) {
 	t.Helper()
 	gh, urls := installerDownloads(t, log, direct)
-	switch {
-	case wantGH && (len(gh) != 1 || !reflect.DeepEqual(gh[0], updaterGH)):
-		t.Errorf("gh lookups = %q, want one with the updater's arguments %q", gh, updaterGH)
-	case !wantGH && len(gh) != 0:
+	if len(gh) != 0 {
 		t.Errorf("gh lookups = %q, want none", gh)
 	}
+	latest := "https://github.com/" + repo + "/releases/latest"
 	switch {
-	case wantDirect && (len(urls) != 1 || urls[0] != updaterURL):
-		t.Errorf("direct lookups = %q, want only the updater's %q", urls, updaterURL)
-	case !wantDirect && len(urls) != 0:
+	case want && (len(urls) != 1 || urls[0] != latest):
+		t.Errorf("direct lookups = %q, want only %q", urls, latest)
+	case !want && len(urls) != 0:
 		t.Errorf("direct lookups = %q, want none", urls)
+	}
+	for _, url := range urls {
+		if strings.Contains(url, "api.github.com") {
+			t.Errorf("looked the release up through the GitHub API: %s", url)
+		}
 	}
 }
 
