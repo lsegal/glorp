@@ -38,7 +38,7 @@ while read -r target; do
 done < <("$bin_dir/glorp" agents -skills 2>/dev/null || true)
 if [[ ${#agent_flags[@]} -eq 0 ]]; then
   echo "Installed glorp $version to $bin_dir/glorp." >&2
-  echo "Could not read the agent list from it, so gh-fix/gh-discuss/gh-create were not installed." >&2
+  echo "Could not read the agent list from it, so gh-fix/gh-discuss/gh-create/gh-safe-merge were not installed." >&2
   echo "Install them with: npx skills add $repo@gh-fix --global --agent <agent> -y" >&2
   exit 1
 fi
@@ -48,4 +48,5 @@ fi
 npx --yes skills add "$repo@gh-fix" --global "${agent_flags[@]}" -y </dev/null
 npx --yes skills add "$repo@gh-discuss" --global "${agent_flags[@]}" -y </dev/null
 npx --yes skills add "$repo@gh-create" --global "${agent_flags[@]}" -y </dev/null
-echo "Installed glorp $version to $bin_dir/glorp and gh-fix/gh-discuss/gh-create globally."
+npx --yes skills add "$repo@gh-safe-merge" --global "${agent_flags[@]}" -y </dev/null
+echo "Installed glorp $version to $bin_dir/glorp and gh-fix/gh-discuss/gh-create/gh-safe-merge globally."
