@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.6.9 - 2026-11-20
+
 - Fix the web dashboard's job cards hiding their `agent:` line once the job's log or transcript was longer than the card (issue #861). Every meta line, including a waiting or paused job's wait line, now stays visible, and the log or transcript takes the rest of the card and scrolls.
 - Fix `install.ps1` failing on current Windows images with `Expand-Archive : Cannot find an overload for "ExtractToDirectory"`. The installer now extracts the release archive with .NET's `ZipFile` directly.
 - Add a structured transcript to the web dashboard's job cards, and a `GET /api/jobs/{target}/{number}/events?since=SEQ` endpoint serving each job's typed agent events (issue #715). The transcript is now a job card's default view: the agent's messages are drawn as message blocks, tool calls as one-line entries showing whether they passed, failed, or are still running (file edits with their `+`/`−` line counts), comments sent to the job as cards naming who commented and whether on the issue or the pull request, and Claude runs' token usage and cost. The raw output is one click away with the card's Output toggle, and is still shown for a job that has no events yet. The endpoint returns only the events after the given cursor, each with a sequence number, a kind (`text`, `tool`, `tool_result`, `usage`, `error`, `output`, or `comment`), and the tool's name and input for tool calls, so clients can read a job's output incrementally instead of diffing its whole log. Events are kept in memory, up to 2000 per job.
