@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Mark draft pull requests ready for review in `gh-safe-merge` instead of holding them (issue #877). A draft is no longer a merge hold on its own: once the safety check passes, the skill runs `gh pr ready` and carries the pull request on through CI to the merge, and its report says when it did. A draft that fails the safety check stays a draft, and explicit holds (a hold label, hold wording, or `and do not merge`) still stop the merge as before.
 - Fix the install scripts still depending on the GitHub API to find the latest release (issue #875). `install.sh` and `install.ps1` now read the latest release's tag from where `https://github.com/lsegal/glorp/releases/latest` redirects, an ordinary web request the API rate limit does not apply to, so a fresh install and `glorp upgrade` work with the API quota exhausted and without `gh`. A pinned `GLORP_VERSION` skips the lookup as before, and a redirect that names no release fails with "could not resolve latest release".
 
 ## v1.7.0 - 2026-11-20

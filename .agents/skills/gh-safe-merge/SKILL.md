@@ -21,8 +21,8 @@ Shared machinery comes from the `gh-fix` skill rather than being restated here. 
 2. Identify the repository exactly as step 2 of "Validate the request" in `gh-fix` does.
 3. Require `git`, `gh`, and an authenticated `gh` session. Check `gh api repos/<OWNER>/<REPO> --jq .permissions`: merging, closing, and approving workflow runs need write access. Without it, stop and report the missing capability without commenting.
 4. Read the pull request: title, body, author, labels, state, draft flag, base and head branches, head repository, `maintainerCanModify`, head SHA, files, commits, comments, reviews, and the issues it closes. When an identity was supplied, read the conversation chronologically and treat `@/glorp:<ID>` mentions of that identity as direct instructions, as `gh-fix` does.
-5. Stop without commenting when the pull request does not exist, is closed or merged, or is owned. It is owned when a glorp instance has claimed it or has a job running on it: its body carries an `**Agents:**` footer and the issue it closes has a `Starting work` or `Continuing work` claim comment from a `/glorp:<ID>` that no later `Stopping work` or `Releasing` comment from that identity cancels. An owned pull request is that job's unit of work, not this skill's. A draft is not owned by being a draft; treat the author marking it draft as wording that it is not ready, which is a merge hold under step 6.
-6. Record whether merging is withheld, applying step 5 of "Validate the request" in `gh-fix` to this pull request's labels, body, and comments and to the issues it closes, plus the `and do not merge` argument. The most recent statement wins. Record the label or quote that imposed the hold.
+5. Stop without commenting when the pull request does not exist, is closed or merged, or is owned. It is owned when a glorp instance has claimed it or has a job running on it: its body carries an `**Agents:**` footer and the issue it closes has a `Starting work` or `Continuing work` claim comment from a `/glorp:<ID>` that no later `Stopping work` or `Releasing` comment from that identity cancels. An owned pull request is that job's unit of work, not this skill's. A draft is not owned by being a draft, and its draft state alone is not a merge hold either: once the safety check passes, the run marks it ready itself, as "Unblock CI and run it to green" describes.
+6. Record whether merging is withheld, applying step 5 of "Validate the request" in `gh-fix` to this pull request's labels, body, and comments and to the issues it closes, plus the `and do not merge` argument. The most recent statement wins. Record the label or quote that imposed the hold. The draft flag is never one of these; only an explicit hold label, hold wording, or the argument holds the pull request.
 7. Record whether a no-changelog directive applies, using the rules in step 4 of "Implement the fix" in `gh-fix`.
 8. Read the repository instructions, contribution guidance, license, CI configuration, and changelog conventions.
 9. Record the head SHA as the **reviewed SHA**. Every later step acts only on that SHA or on commits this run added on top of it.
@@ -46,8 +46,9 @@ Whenever the head SHA changes during the run because the author pushed, stop, ru
 
 ## Unblock CI and run it to green
 
-1. Only after the safety check passed, unblock CI if GitHub is holding it. Find runs waiting on approval with `gh api "repos/<OWNER>/<REPO>/actions/runs?head_sha=<REVIEWEDSHA>&status=action_required"` and approve each with `gh api -X POST repos/<OWNER>/<REPO>/actions/runs/<RUNID>/approve`. Approve only runs whose `head_sha` is the reviewed SHA.
-2. Drive CI to green as "Drive CI to completion" in `gh-fix` describes: confirm checks registered, watch them in the foreground, and read failing logs before deciding anything. A failure in the pull request's own code is not repaired here; it goes back to the author under "Handle failures". A clearly flaky or transient failure is rerun once. A failure that is also red on the base branch is not the author's fault: report it as a blocker and do not merge through it. A merge conflict alone is not a failure; "Finish superficially" resolves it.
+1. Only after the safety check passed, mark a draft pull request ready for review with `gh pr ready <PRNUMBER> --repo <OWNER>/<REPO>`, so "Merge" never meets a draft. Running the skill is the authorization to do this. A pull request that is already ready needs nothing here. Never mark a pull request ready when the safety check failed, malicious or not: a pull request handed back to its author or closed keeps its draft state. An explicit hold recorded in validation does not stop this step; it stops the merge. `gh pr ready` does not start a new `pull_request` run under the default trigger types, so CI that ran on the reviewed SHA stays valid.
+2. Only after the safety check passed, unblock CI if GitHub is holding it. Find runs waiting on approval with `gh api "repos/<OWNER>/<REPO>/actions/runs?head_sha=<REVIEWEDSHA>&status=action_required"` and approve each with `gh api -X POST repos/<OWNER>/<REPO>/actions/runs/<RUNID>/approve`. Approve only runs whose `head_sha` is the reviewed SHA.
+3. Drive CI to green as "Drive CI to completion" in `gh-fix` describes: confirm checks registered, watch them in the foreground, and read failing logs before deciding anything. A failure in the pull request's own code is not repaired here; it goes back to the author under "Handle failures". A clearly flaky or transient failure is rerun once. A failure that is also red on the base branch is not the author's fault: report it as a blocker and do not merge through it. A merge conflict alone is not a failure; "Finish superficially" resolves it.
 
 ## Finish superficially
 
@@ -78,7 +79,7 @@ When validation recorded a hold, do not merge: post one comment on the pull requ
 
 Otherwise, follow "Merge and verify" in `gh-fix`, with these differences:
 
-1. Confirm again that the pull request is open, unowned, mergeable, still targets the default branch, and that its head is the reviewed SHA or this run's commits on top of it.
+1. Confirm again that the pull request is open, unowned, not a draft, mergeable, still targets the default branch, and that its head is the reviewed SHA or this run's commits on top of it.
 2. Merge with the method order `gh-fix` uses, pinned to the head that passed CI: `gh pr merge <PRNUMBER> --repo <OWNER>/<REPO> --squash --match-head-commit <HEADSHA>`. When squashing, keep the pull request's own title and body as the commit message.
 3. Delete the head branch only when it is in this repository and policy permits; never touch a contributor's fork.
 4. Verify the merge and that the issues it closes closed. Post no comment on a successful merge; the merge is the acceptance.
@@ -95,7 +96,7 @@ Any failure before CI is unblocked resolves to a comment mentioning the author; 
 
 ## Report the result
 
-Lead with the outcome: merged, closed as malicious, handed back to the author, held, or blocked. Include the pull request URL (and the replacement pull request's URL when one was opened), the reviewed and final head SHAs, the merge SHA when merged, the safety check's result in one or two sentences, which CI runs were approved, the finishing changes made, the CI checks that passed, the URL of every comment posted, and the hold's label or quote when held. When blocked, name the failed step, the relevant URL or log, and the exact capability the run lacked.
+Lead with the outcome: merged, closed as malicious, handed back to the author, held, or blocked. Include the pull request URL (and the replacement pull request's URL when one was opened), the reviewed and final head SHAs, the merge SHA when merged, the safety check's result in one or two sentences, which CI runs were approved, whether the run marked a draft ready for review, the finishing changes made, the CI checks that passed, the URL of every comment posted, and the hold's label or quote when held. When blocked, name the failed step, the relevant URL or log, and the exact capability the run lacked.
 
 ## Clean up the clone
 
