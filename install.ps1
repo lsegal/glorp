@@ -9,8 +9,27 @@ if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
 }
 
 if ($version -eq 'latest') {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest"
-    $version = $release.tag_name
+    # Look the release up with gh first, which spends the authenticated rate
+    # limit, and with the unauthenticated API only when gh is not installed or
+    # its lookup fails, the same policy glorp's updater follows.
+    $version = ''
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        try {
+            # A failing gh is caught here, as with the download below.
+            $ErrorActionPreference = 'Continue'
+            $found = & gh api "repos/$repo/releases/latest" --jq .tag_name
+            if ($LASTEXITCODE -eq 0) { $version = "$found".Trim() }
+        } catch {
+            $version = ''
+        } finally {
+            $ErrorActionPreference = 'Stop'
+        }
+        if (-not $version) { Write-Host 'gh could not look up the latest release; looking it up directly.' }
+    }
+    if (-not $version) {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest"
+        $version = $release.tag_name
+    }
 }
 $tag = $version
 $version = $version.TrimStart('v')
