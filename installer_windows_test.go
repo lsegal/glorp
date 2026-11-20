@@ -18,6 +18,12 @@ import (
 // so no installed gh is found either.
 const installerHarness = `$ErrorActionPreference = 'Stop'
 function npx {}
+function Invoke-RestMethod {
+    param($Uri)
+    Add-Content -Path $env:GLORP_TEST_LOOKUP_LOG -Value "Invoke-RestMethod $Uri"
+    if ($env:GLORP_TEST_DIRECT_LOOKUP -eq 'fail') { throw 'direct lookup failed' }
+    [pscustomobject]@{ tag_name = $env:GLORP_TEST_TAG }
+}
 function Invoke-WebRequest {
     param($Uri, $OutFile)
     Add-Content -Path $env:GLORP_TEST_LOG -Value "Invoke-WebRequest $Uri"
@@ -37,11 +43,14 @@ try {
 }
 `
 
-// fakeInstallGH stands in for gh as a real native command: it logs its
-// arguments, then either copies the test archive to --dir\--pattern the way
-// `gh release download` would or writes to stderr and exits 1, as
-// GLORP_TEST_GH says.
+// fakeInstallGH stands in for gh as a real native command. For `gh api` it
+// logs its arguments to GLORP_TEST_LOOKUP_LOG, then either prints
+// GLORP_TEST_TAG or writes to stderr and exits 1, as GLORP_TEST_GH_LOOKUP
+// says. Otherwise it logs them to GLORP_TEST_LOG, then either copies the test
+// archive to --dir\--pattern the way `gh release download` would or writes to
+// stderr and exits 1, as GLORP_TEST_GH says.
 const fakeInstallGH = `@echo off
+if "%~1"=="api" goto lookup
 >>"%GLORP_TEST_LOG%" echo gh %*
 if not "%GLORP_TEST_GH%"=="ok" (
   echo gh: download failed 1>&2
@@ -55,6 +64,15 @@ shift
 goto next
 :done
 copy /y "%GLORP_TEST_ARCHIVE%" "%dir%\%pattern%" >nul
+exit /b %errorlevel%
+:lookup
+>>"%GLORP_TEST_LOOKUP_LOG%" echo gh %*
+if not "%GLORP_TEST_GH_LOOKUP%"=="ok" (
+  echo gh: lookup failed 1>&2
+  exit /b 1
+)
+echo %GLORP_TEST_TAG%
+exit /b 0
 `
 
 // Windows will not overwrite a running glorp.exe, so the installer renames it
@@ -230,6 +248,91 @@ func TestInstallPowerShellDownloadsWithGHFirst(t *testing.T) {
 			if !tc.wantInstalled {
 				if _, err := os.Stat(installed); err == nil {
 					t.Fatal("glorp.exe was installed although every download failed")
+				}
+				return
+			}
+			assertFileBytes(t, installed, build)
+			if want := "Installed glorp " + tag; !strings.Contains(string(output), want) {
+				t.Fatalf("output does not report %q:\n%s", want, output)
+			}
+		})
+	}
+}
+
+// install.ps1 looks the latest release up with gh when gh is on Path and
+// falls back to the unauthenticated API when gh is missing or its lookup
+// fails, the same policy and the same requests as the updater, and fails only
+// when the direct lookup fails too. This is the lookup `glorp upgrade` hits.
+func TestInstallPowerShellLooksUpLatestWithGHFirst(t *testing.T) {
+	script, err := filepath.Abs("install.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	harness := filepath.Join(work, "harness.ps1")
+	if err := os.WriteFile(harness, []byte(installerHarness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const repo, tag = "acme/glorp-fork", "v1.2.3"
+	updaterGH, updaterURL := updaterLookupRequests(t, repo)
+	archive, build := buildFakeGlorpArchive(t, work, "1.2.3")
+
+	for _, tc := range []struct {
+		name               string
+		gh                 string // "ok", "fail", or "" for no gh on Path
+		directFails        bool
+		wantGH, wantDirect bool
+		wantInstalled      bool
+	}{
+		{name: "gh looks up", gh: "ok", wantGH: true, wantInstalled: true},
+		{name: "gh fails", gh: "fail", wantGH: true, wantDirect: true, wantInstalled: true},
+		{name: "gh missing", wantDirect: true, wantInstalled: true},
+		{name: "both fail", gh: "fail", directFails: true, wantGH: true, wantDirect: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseDir := t.TempDir()
+			installDir := filepath.Join(caseDir, "installed")
+			lookups := filepath.Join(caseDir, "lookups.log")
+			directLookup, bin := "ok", ""
+			if tc.directFails {
+				directLookup = "fail"
+			}
+			if tc.gh != "" {
+				bin = filepath.Join(caseDir, "bin")
+				if err := os.MkdirAll(bin, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(bin, "gh.cmd"), []byte(fakeInstallGH), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			output, err := runInstallPowerShell(harness, script,
+				"GLORP_REPO="+repo,
+				"GLORP_VERSION=",
+				"GLORP_BIN_DIR="+installDir,
+				"GLORP_TEST_ARCHIVE="+archive,
+				"GLORP_TEST_LOG="+filepath.Join(caseDir, "downloads.log"),
+				"GLORP_TEST_LOOKUP_LOG="+lookups,
+				"GLORP_TEST_BIN="+bin,
+				"GLORP_TEST_TAG="+tag,
+				"GLORP_TEST_GH=ok",
+				"GLORP_TEST_GH_LOOKUP="+tc.gh,
+				"GLORP_TEST_DIRECT_LOOKUP="+directLookup,
+			)
+			if tc.wantInstalled && err != nil {
+				t.Fatalf("install failed: %v\n%s", err, output)
+			}
+			if !tc.wantInstalled && err == nil {
+				t.Fatalf("install succeeded with every lookup failing:\n%s", output)
+			}
+			assertInstallerLookups(t, lookups, "Invoke-RestMethod", tc.wantGH, tc.wantDirect, updaterGH, updaterURL)
+			if got := strings.Contains(string(output), "looking it up directly"); got != (tc.gh == "fail") {
+				t.Errorf("output mentions the fallback = %v, want %v:\n%s", got, tc.gh == "fail", output)
+			}
+			installed := filepath.Join(installDir, "glorp.exe")
+			if !tc.wantInstalled {
+				if _, err := os.Stat(installed); err == nil {
+					t.Fatal("glorp.exe was installed although every lookup failed")
 				}
 				return
 			}

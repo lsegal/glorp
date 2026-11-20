@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix `glorp upgrade` and the install scripts failing with "API rate limit exceeded" when looking up the latest release (issue #871). `install.ps1` and `install.sh` now look the release up with `gh` first when it is installed, which uses its authenticated rate limit, and fall back to the unauthenticated GitHub API, with a message, only when `gh` is missing or its lookup fails. Installs without `gh` work as before.
 - Fix the web dashboard's prompt agent pane scrolling sideways and cutting off long lines (issue #869). Its answers now wrap to the pane's width at any size, including long shell commands in tool entries, paths, inline code, and code blocks. Job transcripts are unchanged.
 
 ## v1.6.10 - 2026-11-20
