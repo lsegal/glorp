@@ -225,20 +225,22 @@ function JobCard({ job, onSummarize }) {
 				<JobTitle job={job} />
 				{progress && <JobProgress progress={progress} />}
 			</header>
-			<div className="meta" title={job.CheckoutDirectory}>
-				<FolderGit2 /> checkout: {job.CheckoutDirectory || "pending"}
-			</div>
-			<div className="meta" title={job.SessionID}>
-				<Terminal /> session: {job.SessionID || "pending"}
-			</div>
-			<div className="meta" title={jobAgentSummary(job)}>
-				<Cpu /> agent: {jobAgentSummary(job)}
-			</div>
-			{(job.Status === "waiting" || job.Status === "paused") && (
-				<div className="meta" title={jobWaitLabel(job)}>
-					<Clock /> {jobWaitLabel(job)}
+			<div className="card-meta">
+				<div className="meta" title={job.CheckoutDirectory}>
+					<FolderGit2 /> checkout: {job.CheckoutDirectory || "pending"}
 				</div>
-			)}
+				<div className="meta" title={job.SessionID}>
+					<Terminal /> session: {job.SessionID || "pending"}
+				</div>
+				<div className="meta" title={jobAgentSummary(job)}>
+					<Cpu /> agent: {jobAgentSummary(job)}
+				</div>
+				{(job.Status === "waiting" || job.Status === "paused") && (
+					<div className="meta" title={jobWaitLabel(job)}>
+						<Clock /> {jobWaitLabel(job)}
+					</div>
+				)}
+			</div>
 			<div className="job-viewport">
 				<ScrollViewport
 					value={job.Log}

@@ -75,6 +75,38 @@ describe("job card actions (issue #850)", () => {
 	});
 });
 
+describe("job card rows (issue #861)", () => {
+	const main = readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
+	const card = main.slice(
+		main.indexOf('<article className="card">'),
+		main.indexOf("</article>"),
+	);
+
+	it("gives the card one row each for the header, meta lines, and log", () => {
+		// With a row per meta line, the log fell into an implicit auto row and
+		// long output squeezed the agent line's 1fr row to nothing.
+		expect(rule(".card")).toContain(
+			"grid-template-rows: auto auto minmax(0, 1fr)",
+		);
+	});
+
+	it("groups every meta line, including the wait line, into one row", () => {
+		const meta = card.indexOf('<div className="card-meta">');
+		const viewport = card.indexOf('<div className="job-viewport">');
+		expect(meta).toBeGreaterThan(card.indexOf("</header>"));
+		expect(viewport).toBeGreaterThan(meta);
+		expect(card.slice(0, meta)).not.toContain('className="meta"');
+		expect(card.slice(viewport)).not.toContain('className="meta"');
+		expect(card.slice(meta, viewport)).toContain("jobWaitLabel(job)");
+	});
+
+	it("keeps the meta lines from widening the card", () => {
+		expect(rule(".card-meta")).toContain(
+			"grid-template-columns: minmax(0, 1fr)",
+		);
+	});
+});
+
 describe("prompt agent panel (issue #828)", () => {
 	const panelMobile = css.lastIndexOf("@media (max-width: 760px)");
 

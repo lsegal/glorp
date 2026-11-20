@@ -292,7 +292,15 @@ h1 .version {
 	padding: 16px;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
-	grid-template-rows: auto auto auto 1fr;
+	/* Header, meta lines, then the log. The meta lines share one row so a
+	   waiting job's extra line cannot push the log out of the 1fr row, and the
+	   log's minmax(0, 1fr) row cannot squeeze them out (issue #861). */
+	grid-template-rows: auto auto minmax(0, 1fr);
+	gap: 8px;
+}
+.card-meta {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	gap: 8px;
 }
 .card-header {
