@@ -152,7 +152,7 @@ describe("transcriptEntries (issue #715)", () => {
 				]}
 			/>,
 		);
-		expect(markup).toContain('class="transcript-message"');
+		expect(markup).toContain('class="transcript-message markdown"');
 		expect(markup).toContain("Reading the issue.");
 		expect(markup).toContain("FAIL");
 		expect(markup).toContain("+2");

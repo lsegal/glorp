@@ -9,6 +9,7 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Markdown } from "./markdown";
 import {
 	commentLabel,
 	fetchJobEvents,
@@ -70,7 +71,7 @@ function ToolOutcome({ outcome }) {
 function TranscriptEntry({ entry }) {
 	switch (entry.kind) {
 		case "text":
-			return <div className="transcript-message">{entry.text}</div>;
+			return <Markdown className="transcript-message" text={entry.text} />;
 		case "tool":
 			return (
 				<div
@@ -128,4 +129,20 @@ export function Transcript({ events }) {
 			))}
 		</div>
 	);
+}
+
+// hasTranscript reports whether events hold more than plain output lines, so
+// the transcript has tool calls or messages to draw.
+export function hasTranscript(events) {
+	return (events || []).some((event) => event.kind !== "output");
+}
+
+// PromptResponse draws a prompt agent's answer through the same transcript as
+// a job's output: its tool calls as tool entries and its messages as rendered
+// markdown (issue #863). An answer without typed events, such as one from an
+// agent whose output has none, or a failure to start, is drawn as markdown.
+export function PromptResponse({ entry }) {
+	if (hasTranscript(entry.events)) return <Transcript events={entry.events} />;
+	if (!entry.response) return null;
+	return <Markdown className="prompt-response" text={entry.response} />;
 }

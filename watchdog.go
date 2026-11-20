@@ -516,7 +516,9 @@ func indentLines(text, indent string) string {
 }
 
 // runUnblock runs the unblock call as a one-shot agent invocation outside any
-// checkout, and returns the readable text it wrote.
+// checkout, and returns the readable text it wrote. When ctx carries an event
+// recorder (see withPromptEvents), the typed events the agent's output
+// decoder reads go to it too.
 func (r CommandRunner) runUnblock(ctx context.Context, spec agentSpec, prompt string) (string, error) {
 	definition, ok := r.definition(spec.Name)
 	if !ok {
@@ -543,6 +545,9 @@ func (r CommandRunner) runUnblock(ctx context.Context, spec agentSpec, prompt st
 	output := io.Writer(&text)
 	decoder := newOutputDecoder(definition.Output, output)
 	if decoder != nil {
+		if events := promptEvents(ctx); events != nil {
+			decoder.recordEventsTo(events)
+		}
 		output = decoder
 	}
 	cmd.Stdout, cmd.Stderr = output, output

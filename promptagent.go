@@ -42,6 +42,10 @@ const (
 // maxPromptRequest is the longest request the prompt area accepts.
 const maxPromptRequest = 4000
 
+// maxPromptEvents bounds how many typed events one prompt entry keeps; the
+// oldest are dropped first, the way a job's events are.
+const maxPromptEvents = 500
+
 // maxPromptResponse is how much of the agent's output an answer keeps: its
 // end, where the agent's reply is.
 const maxPromptResponse = 8000
@@ -90,6 +94,7 @@ func clonePrompts(entries []core.PromptEntry) []core.PromptEntry {
 	list := make([]core.PromptEntry, len(entries))
 	for i, entry := range entries {
 		entry.Actions = append([]string(nil), entry.Actions...)
+		entry.Events = append([]core.JobEvent(nil), entry.Events...)
 		list[i] = entry
 	}
 	return list
@@ -154,12 +159,14 @@ func (w *Glorp) startPrompt(request string) (core.PromptEntry, []core.PromptEntr
 	return entry, earlier, nil
 }
 
-// finishPrompt records an entry's answer, shows it, and returns it.
+// finishPrompt records an entry's answer, shows it, and returns it. The
+// events recorded for the entry while the agent ran are kept on it.
 func (w *Glorp) finishPrompt(entry core.PromptEntry) core.PromptEntry {
 	entry.Finished = time.Now()
 	w.promptMu.Lock()
 	for i := range w.prompts {
 		if w.prompts[i].ID == entry.ID {
+			entry.Events = append(w.prompts[i].Events, entry.Events...)
 			w.prompts[i] = entry
 		}
 	}
@@ -200,6 +207,7 @@ func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlie
 	w.logf("prompt agent (%s) answering request %d: %s", spec, entry.ID, truncate(entry.Request, 120))
 	callCtx, cancel := context.WithTimeout(ctx, promptCallTimeout)
 	defer cancel()
+	callCtx = withPromptEvents(callCtx, promptEventRecorder{w: w, id: entry.ID})
 	output, err := run(callCtx, spec, w.promptText(ctx, entry.Request, earlier, route))
 	if ctx.Err() != nil {
 		entry.Status, entry.Response = "failed", "glorp stopped before the prompt agent answered"
@@ -215,12 +223,93 @@ func (w *Glorp) answerPrompt(ctx context.Context, entry core.PromptEntry, earlie
 		} else {
 			entry.Response += fmt.Sprintf("\n\n(the prompt agent exited with %v)", err)
 		}
+		entry.Events = append(entry.Events, core.JobEvent{Kind: core.JobEventError, Seq: w.nextPromptSeq(entry.ID), Time: time.Now(), Text: fmt.Sprintf("the prompt agent exited with %v", err)})
 	}
 	for _, action := range actions {
 		entry.Actions = append(entry.Actions, w.applyPromptAction(ctx, action, entry.Response, route))
 	}
 	w.logf("prompt agent answered request %d (%s)", entry.ID, entry.Status)
 	return w.finishPrompt(entry)
+}
+
+// promptEventsKey is the context key carrying a prompt agent call's event
+// recorder.
+type promptEventsKey struct{}
+
+// withPromptEvents makes a one-shot agent call made with ctx send the typed
+// events its output decoder reads to events (issue #863).
+func withPromptEvents(ctx context.Context, events jobEventRecorder) context.Context {
+	return context.WithValue(ctx, promptEventsKey{}, events)
+}
+
+// promptEvents is the event recorder ctx carries, or nil.
+func promptEvents(ctx context.Context) jobEventRecorder {
+	events, _ := ctx.Value(promptEventsKey{}).(jobEventRecorder)
+	return events
+}
+
+// promptEventRecorder adds the typed events of the prompt agent's run to its
+// entry while it runs, and shows them, so the prompt area draws the agent's
+// tool calls and messages as they arrive (issue #863).
+type promptEventRecorder struct {
+	w  *Glorp
+	id int
+}
+
+func (r promptEventRecorder) recordJobEvent(event core.JobEvent) {
+	if event.Kind == core.JobEventText {
+		// The answer's action lines are reported as actions instead, the way
+		// its response leaves them out.
+		event.Text = strings.TrimSpace(promptActionPattern.ReplaceAllString(strings.ReplaceAll(event.Text, "\r\n", "\n"), ""))
+		if event.Text == "" {
+			return
+		}
+	}
+	// The prompt agent edits no files, so a tool call's input, which only
+	// the transcript's edit counts read, would only grow every report.
+	event.Input = nil
+	if event.Time.IsZero() {
+		event.Time = time.Now()
+	}
+	w := r.w
+	w.promptMu.Lock()
+	found := false
+	for i := range w.prompts {
+		entry := &w.prompts[i]
+		if entry.ID != r.id {
+			continue
+		}
+		found = true
+		event.Seq = promptSeq(entry.Events)
+		entry.Events = append(entry.Events, event)
+		if over := len(entry.Events) - maxPromptEvents; over > 0 {
+			entry.Events = append(entry.Events[:0:0], entry.Events[over:]...)
+		}
+	}
+	w.promptMu.Unlock()
+	if found {
+		w.reportPrompts()
+	}
+}
+
+// promptSeq is the Seq the next of an entry's events gets.
+func promptSeq(events []core.JobEvent) int64 {
+	if len(events) == 0 {
+		return 1
+	}
+	return events[len(events)-1].Seq + 1
+}
+
+// nextPromptSeq is the Seq the next event recorded for entry id gets.
+func (w *Glorp) nextPromptSeq(id int) int64 {
+	w.promptMu.Lock()
+	defer w.promptMu.Unlock()
+	for _, entry := range w.prompts {
+		if entry.ID == id {
+			return promptSeq(entry.Events)
+		}
+	}
+	return 1
 }
 
 // applyPromptAction performs one action from the prompt agent's answer with
