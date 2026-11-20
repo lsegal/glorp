@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.7.0 - 2026-11-20
+
 - Fix `glorp upgrade` and the install scripts failing with "API rate limit exceeded" when looking up the latest release (issue #871). `install.ps1` and `install.sh` now look the release up with `gh` first when it is installed, which uses its authenticated rate limit, and fall back to the unauthenticated GitHub API, with a message, only when `gh` is missing or its lookup fails. Installs without `gh` work as before.
 - Add `glorp upgrade-skills`, which reinstalls the gh-fix, gh-discuss, gh-create, and gh-safe-merge skills for every agent's skills target without upgrading or restarting glorp (issue #872). It installs the skills from the running glorp's own release, the copies the startup check expects (a development build installs the latest release's), reports which skills it reinstalled for which targets, and exits non-zero when the reinstall fails. It takes the same `-config` flag as `glorp agents` and works whether or not an upgrade is available.
 - Fix the web dashboard's prompt agent pane scrolling sideways and cutting off long lines (issue #869). Its answers now wrap to the pane's width at any size, including long shell commands in tool entries, paths, inline code, and code blocks. Job transcripts are unchanged.
