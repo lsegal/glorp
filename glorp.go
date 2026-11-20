@@ -194,7 +194,10 @@ type Glorp struct {
 	// clones keeps the temp directories new clones go in and the record of
 	// every clone this instance has made (issue #830).
 	clones cloneState
-	Issues IssueSource
+	// jobEvents keeps each job's typed agent events for the dashboard's
+	// events endpoint (issue #715).
+	jobEvents jobEventLog
+	Issues    IssueSource
 	// Discussions lists unanswered top-level Discussion threads for
 	// Discussions-board targets. When nil, Discussions-board targets are
 	// never polled.
@@ -1874,6 +1877,15 @@ type taskState struct {
 
 type jobOutputWriter struct {
 	write func(string)
+	// event records the typed events the output decoder reads out of the
+	// agent's stream (issue #715). Nil drops them.
+	event func(core.JobEvent)
+}
+
+func (w jobOutputWriter) recordJobEvent(event core.JobEvent) {
+	if w.event != nil {
+		w.event(event)
+	}
 }
 
 func (w jobOutputWriter) Write(p []byte) (int, error) {
@@ -2360,6 +2372,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				jobs[key] = job
 			} else {
 				delete(jobs, key)
+				w.jobEvents.remove(key)
 			}
 			jobMu.Unlock()
 			if ran {
@@ -2394,6 +2407,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				pauseJob(issue, key, pauseReason, own)
 			}
 			route := commentRoute{JobKey: key, Repository: issueRepository(issue.Target, issue), Number: issue.Number, Comment: comment, StaysPaused: staysPaused}
+			w.jobEvents.record(key, route.jobEvent())
 			w.logf("issue #%d comment %s goes to the prompt agent to decide on, instead of restarting the job", issue.Number, comment.URL())
 			go w.routeCommentToPrompt(ctx, route)
 			return true
@@ -2754,6 +2768,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 			jobMu.Lock()
 			jobs[key] = JobSnapshot{Kind: core.JobKindIssue, Number: issue.Number, Target: issue.Target, Repository: issueRepository(issue.Target, issue), Title: issue.Title, Status: "queued", CheckoutDirectory: session.CheckoutDirectory, SessionID: session.ID, Agent: spec.Name, Model: spec.Model, Effort: spec.Level, Started: time.Now()}
 			jobMu.Unlock()
+			w.jobEvents.startRun(key)
 			work[key] = workState{Status: "active", SessionID: session.ID, Agent: session.Agent, CheckoutDirectory: session.CheckoutDirectory, Owner: string(w.Identity)}
 			err = saveScopedWorkState(w.StatePath, work, targets)
 			workMu.Unlock()
@@ -2831,6 +2846,8 @@ func (w *Glorp) Run(ctx context.Context) error {
 					jobs[issueKey(i)] = job
 					jobMu.Unlock()
 					publish()
+				}, event: func(event core.JobEvent) {
+					w.jobEvents.record(key, event)
 				}}
 				updateSession := func(update AgentSession) {
 					if update.ID == "" && update.CheckoutDirectory == "" {
@@ -2934,7 +2951,9 @@ func (w *Glorp) Run(ctx context.Context) error {
 						wakeup = nil
 						delay := w.wakeupDelay(*pending)
 						setWaiting("active", "waiting", pending.Reason, time.Now().Add(delay))
-						fmt.Fprintf(jobOutput, "Waiting %s for the scheduled wakeup before resuming the session.\n", formatWakeupDelay(delay))
+						waitingNote := fmt.Sprintf("Waiting %s for the scheduled wakeup before resuming the session.", formatWakeupDelay(delay))
+						fmt.Fprintln(jobOutput, waitingNote)
+						jobOutput.recordJobEvent(core.JobEvent{Kind: core.JobEventOutput, Text: waitingNote})
 						jobMu.Lock()
 						waitingCheckout := jobs[key].CheckoutDirectory
 						jobMu.Unlock()
@@ -3118,6 +3137,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 					job.Log += runErr.Error()
 					jobs[key] = job
 					jobMu.Unlock()
+					w.jobEvents.record(key, core.JobEvent{Kind: core.JobEventError, Text: runErr.Error()})
 					state := work[key]
 					state.Status = "failed"
 					work[key] = state
@@ -3352,6 +3372,7 @@ func (w *Glorp) Run(ctx context.Context) error {
 				jobMu.Lock()
 				delete(jobs, key)
 				jobMu.Unlock()
+				w.jobEvents.remove(key)
 				publish()
 				issue := Issue{Number: job.Number, Target: job.Target, Repository: job.Repository, Title: job.Title}
 				if w.Status != nil {

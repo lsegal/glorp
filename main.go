@@ -436,6 +436,7 @@ func runWatch(args []string) (code int) {
 		// Wired before the server starts, like every handler startWebUI sets.
 		webUI.SetClonesHandlers(w.ListClones, w.ClearClones)
 		webUI.SetScheduleHandler(w.HandleSchedule)
+		webUI.SetJobEventsHandler(w.JobEvents)
 		startWebUI(webUI, webServer, webListener, bind, webPort, output, w.handleJobAction, persistingSettingsHandler(w.ApplySettings, configPath, w.logf), agentsHandler, refreshHandler, restartHandler)
 	}
 	if ui != nil {
@@ -2421,6 +2422,8 @@ type claudeJSONOutputWriter struct {
 	// again (issue #671).
 	wakeup   *scheduledWakeup
 	wakeupID string
+	// events receives each decoded event as a typed job event (issue #715).
+	events jobEventRecorder
 }
 
 type claudeStreamEvent struct {
@@ -2434,14 +2437,36 @@ type claudeStreamEvent struct {
 			Input     json.RawMessage `json:"input"`
 			ToolUseID string          `json:"tool_use_id"`
 			IsError   bool            `json:"is_error"`
+			Content   json.RawMessage `json:"content"`
 		} `json:"content"`
 	} `json:"message"`
 	IsError bool   `json:"is_error"`
 	Result  string `json:"result"`
+	// Usage and TotalCostUSD are what the run spent, reported on its result
+	// event (issue #715).
+	Usage *struct {
+		InputTokens              int64 `json:"input_tokens"`
+		OutputTokens             int64 `json:"output_tokens"`
+		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
 }
 
 func newClaudeJSONOutputWriter(output io.Writer) *claudeJSONOutputWriter {
 	return &claudeJSONOutputWriter{output: output}
+}
+
+func (w *claudeJSONOutputWriter) recordEventsTo(events jobEventRecorder) {
+	w.mu.Lock()
+	w.events = events
+	w.mu.Unlock()
+}
+
+func (w *claudeJSONOutputWriter) record(event core.JobEvent) {
+	if w.events != nil {
+		w.events.recordJobEvent(event)
+	}
 }
 
 func (w *claudeJSONOutputWriter) Write(p []byte) (int, error) {
@@ -2480,6 +2505,7 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 	}
 	var event claudeStreamEvent
 	if err := json.Unmarshal(line, &event); err != nil {
+		w.record(core.JobEvent{Kind: core.JobEventOutput, Text: string(line)})
 		_, err = fmt.Fprintln(w.output, string(line))
 		return err
 	}
@@ -2491,9 +2517,12 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 			case "text":
 				if text := strings.TrimSpace(block.Text); text != "" {
 					texts = append(texts, text)
+					w.record(core.JobEvent{Kind: core.JobEventText, Text: text})
 				}
 			case "tool_use":
-				texts = append(texts, "Running: "+claudeToolUseSummary(block.Name, block.Input))
+				summary := claudeToolUseSummary(block.Name, block.Input)
+				texts = append(texts, "Running: "+summary)
+				w.record(core.JobEvent{Kind: core.JobEventTool, Tool: block.Name, ToolID: block.ID, Input: block.Input, Summary: summary})
 				if block.Name == scheduleWakeupTool {
 					w.wakeup, w.wakeupID = parseScheduledWakeup(block.Input), block.ID
 				}
@@ -2501,13 +2530,25 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 		}
 	case event.Type == "user":
 		for _, block := range event.Message.Content {
-			if block.Type == "tool_result" && block.IsError && w.wakeupID != "" && block.ToolUseID == w.wakeupID {
+			if block.Type != "tool_result" {
+				continue
+			}
+			w.record(core.JobEvent{Kind: core.JobEventToolResult, ToolID: block.ToolUseID, IsError: block.IsError, Text: toolResultExcerpt(block.Content)})
+			if block.IsError && w.wakeupID != "" && block.ToolUseID == w.wakeupID {
 				w.wakeup, w.wakeupID = nil, ""
 			}
 		}
-	case event.Type == "result" && event.IsError:
-		if text := strings.TrimSpace(event.Result); text != "" {
+	case event.Type == "result":
+		if event.Usage != nil {
+			w.record(core.JobEvent{Kind: core.JobEventUsage, Usage: &core.TokenUsage{
+				InputTokens: event.Usage.InputTokens, OutputTokens: event.Usage.OutputTokens,
+				CacheReadTokens: event.Usage.CacheReadInputTokens, CacheCreationTokens: event.Usage.CacheCreationInputTokens,
+				CostUSD: event.TotalCostUSD,
+			}})
+		}
+		if text := strings.TrimSpace(event.Result); event.IsError && text != "" {
 			texts = append(texts, "Agent error: "+text)
+			w.record(core.JobEvent{Kind: core.JobEventError, Text: text})
 		}
 	}
 	if len(texts) == 0 {
@@ -2515,6 +2556,37 @@ func (w *claudeJSONOutputWriter) writeLine(line []byte) error {
 	}
 	_, err := fmt.Fprintln(w.output, strings.Join(texts, "\n"))
 	return err
+}
+
+// toolResultExcerptLimit bounds the tool output a tool result event carries;
+// the result's outcome is what the transcript shows, not the whole output.
+const toolResultExcerptLimit = 500
+
+// toolResultExcerpt returns the start of a tool result's text, which Claude
+// sends either as a string or as a list of content blocks.
+func toolResultExcerpt(content json.RawMessage) string {
+	var text string
+	if err := json.Unmarshal(content, &text); err != nil {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(content, &blocks) != nil {
+			return ""
+		}
+		var parts []string
+		for _, block := range blocks {
+			if block.Type == "text" {
+				parts = append(parts, block.Text)
+			}
+		}
+		text = strings.Join(parts, "\n")
+	}
+	text = strings.TrimSpace(text)
+	if runes := []rune(text); len(runes) > toolResultExcerptLimit {
+		text = string(runes[:toolResultExcerptLimit]) + "…"
+	}
+	return text
 }
 
 // PendingWakeup reports the ScheduleWakeup the agent left pending when its
@@ -2766,6 +2838,14 @@ func (r CommandRunner) runOnce(ctx context.Context, issue Issue, session AgentSe
 	// through, decoded as Claude's event envelope, or decoded by the generic
 	// JSONL decoder the definition configured with its own field paths.
 	decoder := newOutputDecoder(definition.Output, agentOutput)
+	if events, ok := jobOutput.(jobEventRecorder); ok {
+		// The job's typed events come from the decoder, or are the agent's
+		// lines themselves when its output is passed through (issue #715).
+		if decoder == nil {
+			decoder = newPassthroughEventWriter(agentOutput)
+		}
+		decoder.recordEventsTo(events)
+	}
 	if decoder != nil {
 		agentOutput = decoder
 	}

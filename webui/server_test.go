@@ -857,3 +857,58 @@ func TestServeClonesListsAndClears(t *testing.T) {
 		t.Fatalf("DELETE /api/clones = %d", response.Code)
 	}
 }
+
+// TestServerServesJobEventsAfterACursor checks the events endpoint (issue
+// #715): the target keeps its slash, since is the cursor, and an unknown job
+// or a malformed request is refused.
+func TestServerServesJobEventsAfterACursor(t *testing.T) {
+	ui, err := New("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type call struct {
+		target string
+		number int
+		since  int64
+	}
+	var got call
+	ui.SetJobEventsHandler(func(target string, number int, since int64) (core.JobEvents, bool) {
+		got = call{target, number, since}
+		if number != 7 {
+			return core.JobEvents{}, false
+		}
+		return core.JobEvents{Run: 1, Latest: 5, Events: []core.JobEvent{{Seq: 5, Kind: core.JobEventTool, Tool: "Bash"}}}, true
+	})
+	response := httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/jobs/o/r/7/events?since=4", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET events = %d, body = %q", response.Code, response.Body.String())
+	}
+	if got != (call{"o/r", 7, 4}) {
+		t.Fatalf("handler called with %+v", got)
+	}
+	var events core.JobEvents
+	if err := json.Unmarshal(response.Body.Bytes(), &events); err != nil {
+		t.Fatal(err)
+	}
+	if events.Latest != 5 || len(events.Events) != 1 || events.Events[0].Kind != "tool" || events.Events[0].Tool != "Bash" {
+		t.Fatalf("events = %+v", events)
+	}
+	for path, want := range map[string]int{
+		"/api/jobs/o/r/8/events":          http.StatusNotFound,
+		"/api/jobs/o/r/x/events":          http.StatusBadRequest,
+		"/api/jobs/7/events":              http.StatusBadRequest,
+		"/api/jobs/o/r/7/events?since=-1": http.StatusBadRequest,
+	} {
+		response := httptest.NewRecorder()
+		ui.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, response.Code, want)
+		}
+	}
+	response = httptest.NewRecorder()
+	ui.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/jobs/o/r/7/events", nil))
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST events = %d", response.Code)
+	}
+}

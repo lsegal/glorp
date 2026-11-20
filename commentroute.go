@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/lsegal/glorp/core"
 )
 
 // promptReplyMarker ends every comment glorp posts for the prompt agent in
@@ -71,6 +73,14 @@ type commentRoute struct {
 	// StaysPaused marks a job paused on its dependencies or by its owner:
 	// only the prompt agent's own decision may restart it (issue #844).
 	StaysPaused bool
+}
+
+// jobEvent is the routed comment as the job's events show it (issue #715).
+func (r commentRoute) jobEvent() core.JobEvent {
+	return core.JobEvent{Kind: core.JobEventComment, Comment: &core.JobComment{
+		Author: r.Comment.Author, URL: r.Comment.URL(), Repository: r.Comment.Repository,
+		Number: r.Comment.Number, PullRequest: r.Comment.Number != r.Number || r.Comment.Kind != ConversationComment,
+	}}
 }
 
 // request is what the prompt area shows for a routed comment.

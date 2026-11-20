@@ -43,7 +43,11 @@ try {
     if (-not $downloaded) {
         Invoke-WebRequest -Uri $url -OutFile $zip
     }
-    Expand-Archive -Path $zip -DestinationPath $temp -Force
+    # Expand-Archive -Force fails on current Windows images ("Cannot find an
+    # overload for ExtractToDirectory"), and $temp is a fresh directory, so
+    # the two-argument .NET call extracts without needing to overwrite.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $temp)
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
     $installedExe = Join-Path $installDir 'glorp.exe'
     if (Test-Path $installedExe) {

@@ -17,6 +17,7 @@ import {
 	Clock,
 	Cpu,
 	FolderGit2,
+	ListTree,
 	MessageSquare,
 	Radio,
 	Search,
@@ -60,6 +61,7 @@ import { ReleaseLink } from "./releaselink";
 import { SchedulesModal, UpNextStrip } from "./schedules";
 import { isScheduledJob, scheduledJobActions } from "./scheduling";
 import { SummarizeButton, summarizeJob } from "./summarize";
+import { Transcript, useJobEvents } from "./transcriptview";
 import "./index.css";
 
 const emptyState = {
@@ -103,12 +105,14 @@ function useDashboardState(page, search) {
 }
 
 // ScrollViewport shows a log that follows new output. Its status row lays any
-// actions out beside the status text, never on top of it (issue #850).
+// actions out beside the status text, never on top of it (issue #850). Given
+// children, it scrolls them in place of the plain-text value (issue #715).
 function ScrollViewport({
 	value,
 	empty = "waiting for output...",
 	status,
 	actions,
+	children,
 }) {
 	const viewport = useRef(null);
 	const follow = useRef(true);
@@ -132,9 +136,15 @@ function ScrollViewport({
 					{actions}
 				</div>
 			)}
-			<pre ref={viewport} onScroll={onScroll} className="viewport">
-				{value || empty}
-			</pre>
+			{children ? (
+				<div ref={viewport} onScroll={onScroll} className="viewport">
+					{children}
+				</div>
+			) : (
+				<pre ref={viewport} onScroll={onScroll} className="viewport">
+					{value || empty}
+				</pre>
+			)}
 			{showMore && (
 				<button
 					type="button"
@@ -191,6 +201,12 @@ function JobCard({ job, onSummarize }) {
 		: jobActionAvailability(job.Status);
 	const verb = scheduled ? "the scheduled run" : "gh-fix";
 	const progress = jobProgress(job);
+	// The structured transcript is the primary view of a job's output, with
+	// the raw output one toggle away (issue #715). A job with no typed events
+	// yet shows its raw output.
+	const events = useJobEvents(job);
+	const [view, setView] = useState("transcript");
+	const showTranscript = view === "transcript" && events.length > 0;
 	const runAction = async (action) => {
 		setPendingAction(action);
 		setActionError("");
@@ -229,6 +245,26 @@ function JobCard({ job, onSummarize }) {
 					status={`clone: ${job.CheckoutDirectory || "pending"}`}
 					actions={
 						<div className="viewport-actions">
+							<fieldset className="view-toggle" aria-label="Output view">
+								<button
+									type="button"
+									aria-pressed={view === "transcript"}
+									aria-label="Transcript"
+									onClick={() => setView("transcript")}
+									title="Show the job's activity as a structured transcript"
+								>
+									<ListTree />
+								</button>
+								<button
+									type="button"
+									aria-pressed={view === "output"}
+									aria-label="Output"
+									onClick={() => setView("output")}
+									title="Show the job's raw output"
+								>
+									<Terminal />
+								</button>
+							</fieldset>
 							<button
 								type="button"
 								disabled={!available.retry || pendingAction !== ""}
@@ -271,7 +307,9 @@ function JobCard({ job, onSummarize }) {
 							<SummarizeButton job={job} onSummarize={onSummarize} />
 						</div>
 					}
-				/>
+				>
+					{showTranscript && <Transcript events={events} />}
+				</ScrollViewport>
 			</div>
 		</article>
 	);

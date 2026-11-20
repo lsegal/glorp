@@ -68,6 +68,8 @@ type Server struct {
 	logs     []string
 	assets   http.Handler
 	action   func(context.Context, core.JobAction) error
+	// jobEvents backs /api/jobs/{target}/{number}/events (issue #715).
+	jobEvents func(target string, number int, since int64) (core.JobEvents, bool)
 	// schedules backs /api/schedules (issue #848).
 	schedules func(context.Context, core.ScheduleRequest) (core.ScheduleResponse, error)
 	settings  func(context.Context, core.SettingsUpdate) (core.SettingsSnapshot, error)
@@ -133,6 +135,14 @@ func New(version string) (*Server, error) {
 func (ui *Server) SetJobActionHandler(handler func(context.Context, core.JobAction) error) {
 	ui.mu.Lock()
 	ui.action = handler
+	ui.mu.Unlock()
+}
+
+// SetJobEventsHandler wires GET /api/jobs/{target}/{number}/events (issue
+// #715) to a function that returns a job's typed events after a cursor.
+func (ui *Server) SetJobEventsHandler(handler func(target string, number int, since int64) (core.JobEvents, bool)) {
+	ui.mu.Lock()
+	ui.jobEvents = handler
 	ui.mu.Unlock()
 }
 
@@ -317,6 +327,10 @@ func (ui *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ui.serveJobAction(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/jobs/") && strings.HasSuffix(r.URL.Path, "/events") {
+		ui.serveJobEvents(w, r)
+		return
+	}
 	if r.URL.Path == "/api/schedules" || strings.HasPrefix(r.URL.Path, "/api/schedules/") {
 		ui.serveSchedules(w, r)
 		return
@@ -389,6 +403,51 @@ func (ui *Server) serveJobAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// serveJobEvents answers GET /api/jobs/{target}/{number}/events?since=seq with
+// the job's typed events after seq (issue #715). The target is the job's
+// configured target, which for a repository is OWNER/REPO, so it is
+// everything between the prefix and the number.
+func (ui *Server) serveJobEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/jobs/"), "/events")
+	slash := strings.LastIndex(path, "/")
+	if slash <= 0 {
+		http.Error(w, "invalid job", http.StatusBadRequest)
+		return
+	}
+	target := path[:slash]
+	number, err := strconv.Atoi(path[slash+1:])
+	if err != nil || number <= 0 {
+		http.Error(w, "invalid job", http.StatusBadRequest)
+		return
+	}
+	var since int64
+	if value := r.URL.Query().Get("since"); value != "" {
+		if since, err = strconv.ParseInt(value, 10, 64); err != nil || since < 0 {
+			http.Error(w, "invalid since", http.StatusBadRequest)
+			return
+		}
+	}
+	ui.mu.RLock()
+	handler := ui.jobEvents
+	ui.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "job events unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	events, ok := handler(target, number, since)
+	if !ok {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(events)
 }
 
 // servePrompt backs the prompt area (issue #801). It only starts the agent
